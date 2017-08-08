@@ -22,12 +22,46 @@ function core(){
 	}
 }
 
-function calExp(tokens){
+var matches = [
+		['(','[','{'],
+		[')',']','}']
+	];
+	
+function getMatch(tokens, i){
 	var matches = [
 		['(','[','{'],
 		[')',']','}']
 	];
 	
+	var operation = new Map([
+		['+', function(){
+			console.log('+');
+		}]
+	]);
+	
+	var matchStack = [];
+	while (i < tokens.length){
+		var t = tokens[i];
+	var uindex = matches[0].indexOf(t);
+	var oindex = matches[1].indexOf(t);
+		if(uindex != -1){
+			var u = matches[0][uindex];
+			matchStack.push({t, i});
+		} else if(oindex != -1){
+			var o = matches[1][oindex];
+			if(t === o){
+				matchStack.pop();
+			}
+			if( matchStack.length === 0 ){
+				return i;
+			}
+		}
+	i++;
+	}
+	console.log(matchStack);
+}
+
+function calExp(tokens){
 	var operation = new Map([
 		['+', function(a, b){
 			return a + b;
@@ -47,7 +81,8 @@ function calExp(tokens){
 	//var oindex = matches[1].indexOf(t);
 		if(uindex != -1){
 			var u = matches[0][uindex];
-			var oindex = tokens.indexOf(matches[1][uindex]);
+			//var oindex = tokens.indexOf(matches[1][uindex]);
+			var oindex = getMatch(tokens, i);
 			tmpResult = calExp(tokens.slice(i + 1, oindex));
 			tokens.splice(i, oindex - i + 1 , tmpResult );
 			lastValue = tmpResult;
