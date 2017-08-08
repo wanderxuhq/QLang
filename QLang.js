@@ -31,72 +31,59 @@ function calExp(tokens){
 	var operation = new Map([
 		['+', function(a, b){
 			return a + b;
-		}]
+		}],
+		['-', function(a, b){
+			return a - b;
+		}],
 	]);
 	
 	var matchStack = [];
 	var operationMark = undefined;
 	var laseValue = undefined;
-	for(var i in tokens){
+	var laseValueIndex = undefined;
+	for(var i = 0; i < tokens.length;){
 		var t = tokens[i];
 	var uindex = matches[0].indexOf(t);
-	var oindex = matches[1].indexOf(t);
+	//var oindex = matches[1].indexOf(t);
 		if(uindex != -1){
 			var u = matches[0][uindex];
+			var oindex = tokens.indexOf(matches[1][uindex]);
+			tmpResult = calExp(tokens.slice(i + 1, oindex));
+			tokens.splice(i, oindex - i + 1 , tmpResult );
+			lastValue = tmpResult;
 			matchStack.push({t, i});
-		} else if(oindex != -1){
+		} 
+		/*
+		else if(oindex != -1){
 			var o = matches[1][oindex];
 			if(t === o){
 				tokens = tokens.splice(matchStack[matches[0][oindex]].i,i,calExp(tokens.slice(matchStack[matches[0][oindex]].i,i)));
 				matchStack.pop();
 			}
-		} else if(operation.has(t)) {
+		} 
+		*/
+		else if(operation.has(t)) {
 			operationMark = t;
-			
+			i++;
 		} else {
 			if(operationMark != undefined){
 				r = operation.get(operationMark)(getValue(laseValue),  getValue(t));
+				laseValue = r;
 				log(r);
+				tokens.splice(laseValueIndex, i - laseValueIndex + 1 , r );
+				i = laseValueIndex + 1;
+				if( tokens.length === 1 )
+					return r;
 			}
 			else{
+				laseValueIndex = i;
 				laseValue = t;
+				i++;
 			}
-			//tokens[i] = getValue(t);
-		}
-	}
-//	console.log(matchStack);
-}
-
-
-/*
-var matches = [
-	['(','[','{'],
-	[')',']','}']
-];
-	
-function calExp(tokens){
-	var tokenStack = [];
-	for(var i in tokens){
-		var t = tokens[i];
-	var uindex = matches[0].indexOf(t);
-	var oindex = matches[1].indexOf(t);
-		if(uindex != -1){
-			var u = matches[0][uindex];
-			matchStack.push({t, i});
-		} else if(oindex != -1){
-			var o = matches[1][oindex];
-			if(t === o){
-				tokens = tokens.splice(matchStack[matches[0][oindex]].i,i,calExp(tokens.slice(matchStack[matches[0][oindex]].i,i)));
-				matchStack.pop();
-			}
-		} else if(operation.has(t)) {
 			
-		} else {
-			tokens[i] = getValue(t);
 		}
 	}
 }
-*/
 
 function execute(originStatement){
 	var statement = originStatement.replace(/\s/g,'');
@@ -151,23 +138,13 @@ function constVal(variable){
 }
 
 function getValue(v){
-	if(constVal(v) === 1){
+	if(constVal(v) === TYPE.NUMBER){
 		return parseInt(v);
-	} else if(constVal(v) === 2){
+	} else if(constVal(v) === TYPE.STRING){
 		return v;
 	}
 	else {
-		var value = variables.get(v);
-		if (value != undefined){
-			valueType = constVal(value);
-			if(valueType  === TYPE.NUMBER){
-				return parseInt(value);
-			} else if(valueType === TYPE.STRING){
-				return value;
-			} else {
-				return getValue(value);
-			}
-		}
+		return getValue(variables.get(v));
 	} 
 }
 
