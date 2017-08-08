@@ -151,9 +151,9 @@ function constVal(variable){
 }
 
 function getValue(v){
-	if(constVal(v) === 1){
+	if(constVal(v) === TYPE.NUMBER){
 		return parseInt(v);
-	} else if(constVal(v) === 2){
+	} else if(constVal(v) === TYPE.STRING){
 		return v;
 	}
 	else {
