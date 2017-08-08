@@ -29,12 +29,14 @@ function calExp(tokens){
 	];
 	
 	var operation = new Map([
-		['+', function(){
-			console.log('+');
+		['+', function(a, b){
+			return a + b;
 		}]
 	]);
 	
 	var matchStack = [];
+	var operationMark = undefined;
+	var laseValue = undefined;
 	for(var i in tokens){
 		var t = tokens[i];
 	var uindex = matches[0].indexOf(t);
@@ -48,12 +50,53 @@ function calExp(tokens){
 				tokens = tokens.splice(matchStack[matches[0][oindex]].i,i,calExp(tokens.slice(matchStack[matches[0][oindex]].i,i)));
 				matchStack.pop();
 			}
+		} else if(operation.has(t)) {
+			operationMark = t;
+			
+		} else {
+			if(operationMark != undefined){
+				r = operation.get(operationMark)(getValue(laseValue),  getValue(t));
+				log(r);
+			}
+			else{
+				laseValue = t;
+			}
+			//tokens[i] = getValue(t);
+		}
+	}
+//	console.log(matchStack);
+}
+
+
+/*
+var matches = [
+	['(','[','{'],
+	[')',']','}']
+];
+	
+function calExp(tokens){
+	var tokenStack = [];
+	for(var i in tokens){
+		var t = tokens[i];
+	var uindex = matches[0].indexOf(t);
+	var oindex = matches[1].indexOf(t);
+		if(uindex != -1){
+			var u = matches[0][uindex];
+			matchStack.push({t, i});
+		} else if(oindex != -1){
+			var o = matches[1][oindex];
+			if(t === o){
+				tokens = tokens.splice(matchStack[matches[0][oindex]].i,i,calExp(tokens.slice(matchStack[matches[0][oindex]].i,i)));
+				matchStack.pop();
+			}
+		} else if(operation.has(t)) {
+			
 		} else {
 			tokens[i] = getValue(t);
 		}
 	}
-	console.log(matchStack);
 }
+*/
 
 function execute(originStatement){
 	var statement = originStatement.replace(/\s/g,'');
@@ -108,12 +151,18 @@ function constVal(variable){
 }
 
 function getValue(v){
-	if(constVal(v)>0){
+	if(constVal(v) === 1){
+		return parseInt(v);
+	} else if(constVal(v) === 2){
 		return v;
-	} else{
+	}
+	else {
 		var value = variables.get(v);
 		if (value != undefined){
-			if(constVal(value) > 0){
+			valueType = constVal(value);
+			if(valueType  === TYPE.NUMBER){
+				return parseInt(value);
+			} else if(valueType === TYPE.STRING){
 				return value;
 			} else {
 				return getValue(value);
