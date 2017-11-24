@@ -118,12 +118,14 @@ function calExp(tokens){
 			
 		}
 	}
+	
 }
 
 function execute(originStatement){
 	var statement = originStatement.replace(/\s/g,'');
-	var tokens = statement.split(/\b/);
-	//log(tokens.length);
+	//var tokens = statement.split(/\b/);
+	var tokens = statement.match(/\s*((&&|\|\||[.,/#!$%^&\*;:{}+-=_`~()])|(\/\/.*)|([0-9]+)|(\"(\\\"|\\\\|\\n|[^\"])*\")|[A-Za-z][A-Za-z0-9]*|==|<=|>=)?/g)
+	//log(tokens);
 	if(tokens.length === 1)
 		variables.set(tokens[0], undefined)
 	else if(tokens[1] === "="){
@@ -185,7 +187,7 @@ function getValue(v){
 
 function command(cmd, parameters){
 	if(cmd === 'print'){
-		debug(" result: " + calExp(parameters));
+		log(" result: " + calExp(parameters));
 	} else if (cmd === 'add'){
 		var sum = 0;
 		for(var num of parameters){
