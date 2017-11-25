@@ -6,10 +6,11 @@ logger=logging.getLogger("QLang")
 logger.setLevel(10)
 #print(logger.getEffectiveLevel())
 #input="42/21+3+-8/(5-(2*1+2))"
-inputs=["a = 1","b=a","c=42/21+3+-8/(5-(2+a*2))"]
+#inputs=["a = 1","b=a","b=b+1","c=42/21+3+-8/(5-(2+b*2))"]
+inputs=["a=1","b=a+1","c=b>a&&false"]
 #f=open('D:\\\\out.txt','w')
 pattern = re.compile(
-    r"\s*((?P<var>[_$A-Za-z][_\$A-Za-z0-9]*)|(?P<num>((?<=[+-])[+-][0-9]+(\.[0-9]+)?)|([0-9]+)(\.[0-9]+)?)|(?P<alp>[A-Za-z][A-Za-z0-9]*)|(?P<str>\"(\\\\|\\\"|\\n|[^\"])*\")|(?P<dob>==|<=|>=|&&|\|\|)|(?P<pnt>[.,/#!$%^&\*;:{}+-=_`~()])|(?P<cmt>\/\/.*))?"
+    r"\s*((?P<var>[_$A-Za-z][_\$A-Za-z0-9]*)|(?P<num>((?<=[+-])[+-][0-9]+(\.[0-9]+)?)|([0-9]+)(\.[0-9]+)?)|(?P<alp>[A-Za-z][A-Za-z0-9]*)|(?P<str>\"(\\\\|\\\"|\\n|[^\"])*\")|(?P<dob>==|!=|<=|>=|&&|\|\|)|(?P<pnt>[.,/#!$%^&\*;:{}+-=_`~()><])|(?P<cmt>\/\/.*))?"
 )
 print(inputs)
 #pattern="\s*((?P<num>[0-9]+)|([A-Za-z][A-Za-z0-9]*)|(\"(\\\\|\\\"|\\n|[^\"])*\")|(==|<=|>=|&&|\|\|)|([.,/#!$%^&\*;:{}+-=_`~()])|(\/\/.*))?"
@@ -17,6 +18,7 @@ print(inputs)
 #0, a, "a0", ==, +, //
 #m = pattern.match(input)
 lexer = {'var':0, 'num':1, 'alp':2, 'str':3, 'dob':4, 'pnt':5, 'cmt':6}
+keywords = ["true", "false"]
 tokens=[]
 cutlength = 0
 variables = {}
@@ -26,16 +28,24 @@ def cut(tokens, i):
     del(tokens[i])
     cutlength = cutlength + 1
 
+def boolvalue(token):
+    return token.value == "true"
+
 def getvalue(token):
-    if(token.type == lexer['var']):
+    if token.type == lexer['var'] and token.value not in keywords:
         return getvalue(variables[token.value])
     else:
         return token
 
+def reset(tokens):
+    tokens.clear()
+    global cutlength
+    cutlength = 0
+
 def execute(tokens, start, end):
     stack=[]
     global cutlength
-    i = start        
+    i = start
     while i < end - cutlength:
         token = tokens[i]
         if token.value == "(":
@@ -110,9 +120,105 @@ def execute(tokens, start, end):
             tokens[i].value=str(val)
         else:
             i = i + 1
-        
-    i=start
+    
+    i = start
+    while i < end - cutlength:
+        token = tokens[i]
+        if token.value == "==":
+            val = getvalue(tokens[i-1]).value == getvalue(tokens[i+1]).value
+            cut(tokens, i+1)
+            cut(tokens, i-1)
+            #end = end - 2
+            i = i - 1
+            if val:
+                tokens[i].value = "true"
+            else:
+                tokens[i].value = "false"
+        elif token.value == "!=":
+            val = getvalue(tokens[i-1]).value != getvalue(tokens[i+1]).value
+            cut(tokens, i+1)
+            cut(tokens, i-1)
+            #end = end - 2
+            i = i - 1
+            if val:
+                tokens[i].value = "true"
+            else:
+                tokens[i].value = "false"
+        elif token.value == ">":
+            val = getvalue(tokens[i-1]).value > getvalue(tokens[i+1]).value
+            cut(tokens, i+1)
+            cut(tokens, i-1)
+            #end = end - 2
+            i = i - 1
+            if val:
+                tokens[i].value = "true"
+            else:
+                tokens[i].value = "false"
+        elif token.value == "<":
+            val = getvalue(tokens[i-1]).value < getvalue(tokens[i+1]).value
+            cut(tokens, i+1)
+            cut(tokens, i-1)
+            #end = end - 2
+            i = i - 1
+            if val:
+                tokens[i].value = "true"
+            else:
+                tokens[i].value = "false"
+        elif token.value == ">=":
+            val = getvalue(tokens[i-1]).value >= getvalue(tokens[i+1]).value
+            cut(tokens, i+1)
+            cut(tokens, i-1)
+            #end = end - 2
+            i = i - 1
+            if val:
+                tokens[i].value = "true"
+            else:
+                tokens[i].value = "false"
+        elif token.value == "<=":
+            val = getvalue(tokens[i-1]).value <= getvalue(tokens[i+1]).value
+            cut(tokens, i+1)
+            cut(tokens, i-1)
+            #end = end - 2
+            i = i - 1
+            if val:
+                tokens[i].value = "true"
+            else:
+                tokens[i].value = "false"
+        else:
+            i = i + 1
 
+    i=start
+    while i < end - cutlength:
+        token = tokens[i]
+        if token.value == "&&":
+            val = boolvalue(getvalue(tokens[i-1])) and boolvalue(getvalue(tokens[i+1]))
+            cut(tokens, i+1)
+            cut(tokens, i-1)
+            #end = end - 2
+            i = i - 1
+            if val:
+                tokens[i].value = "true"
+            else:
+                tokens[i].value = "false"
+        else:
+            i = i + 1
+    i=start
+    while i < end - cutlength:
+        token = tokens[i]
+        if token.value == "||":
+            val = boolvalue(getvalue(tokens[i-1])) or boolvalue(getvalue(tokens[i+1]))
+            cut(tokens, i+1)
+            cut(tokens, i-1)
+            #end = end - 2
+            i = i - 1
+            if val:
+                tokens[i].value = "true"
+            else:
+                tokens[i].value = "false"
+        else:
+            i = i + 1
+
+    i=start
     while i < end - cutlength:
         token = tokens[i]
         if token.value == "=":
@@ -139,8 +245,9 @@ for input in inputs:
             tokens.append(QNode(lexer['cmt'], m.group('cmt')))
         #else:
             #print("error")
+    print(tokens)
     execute(tokens, 0, len(tokens))
-    tokens.clear()
+    reset(tokens)
     #calc = copy.deepcopy(tokens)
 print(tokens)
 
