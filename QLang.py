@@ -6,8 +6,8 @@ logger=logging.getLogger("QLang")
 logger.setLevel(10)
 #print(logger.getEffectiveLevel())
 #input="42/21+3+-8/(5-(2*1+2))"
-#inputs=["a = 1","b=a","b=b+1","c=42/21+3+-8/(5-(2+b*2))"]
-inputs=["a=1","b=a+1","c=b>a&&false"]
+inputs=["a = 1","b=a","b=b+1","if(a<b)","c=42/21+3+-8/(5-(2+b*2))"]
+#inputs=["a=1","b=a+1","c=b>a&&false"]
 #f=open('D:\\\\out.txt','w')
 pattern = re.compile(
     r"\s*((?P<var>[_$A-Za-z][_\$A-Za-z0-9]*)|(?P<num>((?<=[+-])[+-][0-9]+(\.[0-9]+)?)|([0-9]+)(\.[0-9]+)?)|(?P<alp>[A-Za-z][A-Za-z0-9]*)|(?P<str>\"(\\\\|\\\"|\\n|[^\"])*\")|(?P<dob>==|!=|<=|>=|&&|\|\|)|(?P<pnt>[.,/#!$%^&\*;:{}+-=_`~()><])|(?P<cmt>\/\/.*))?"
@@ -227,7 +227,10 @@ def execute(tokens, start, end):
 
     return i
     
-for input in inputs:
+i = 0
+stack = []
+while i < len(inputs):
+    input = inputs[i]
     for m in pattern.finditer(input):
         if m.group('var') != None:
             tokens.append(QNode(lexer['var'], m.group('var')))
@@ -245,9 +248,14 @@ for input in inputs:
             tokens.append(QNode(lexer['cmt'], m.group('cmt')))
         #else:
             #print("error")
-    print(tokens)
-    execute(tokens, 0, len(tokens))
+    if tokens[0].value == "if":
+        execute(tokens, 1, len(tokens))
+        if tokens[1].value != "true":
+            i = i + 1
+    else:
+        execute(tokens, 0, len(tokens))
     reset(tokens)
+    i = i + 1
     #calc = copy.deepcopy(tokens)
 print(tokens)
 
