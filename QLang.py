@@ -6,7 +6,7 @@ logger=logging.getLogger("QLang")
 logger.setLevel(10)
 #print(logger.getEffectiveLevel())
 #input="42/21+3+-8/(5-(2*1+2))"
-inputs=["a = 1","b=a","b=b+1","if(a<b)","c=42/21+3+-8/(5-(2+b*2))"]
+inputs=["a = 1","b=a","b=b+1","if(a>b){","c=42/21+3+-8/(5-(2+b*2))","d=5" ,"}"]
 #inputs=["a=1","b=a+1","c=b>a&&false"]
 #f=open('D:\\\\out.txt','w')
 pattern = re.compile(
@@ -19,7 +19,6 @@ print(inputs)
 #m = pattern.match(input)
 lexer = {'var':0, 'num':1, 'alp':2, 'str':3, 'dob':4, 'pnt':5, 'cmt':6}
 keywords = ["true", "false"]
-tokens=[]
 cutlength = 0
 variables = {}
 
@@ -227,46 +226,60 @@ def execute(tokens, start, end):
 
     return i
     
-i = 0
-stack = []
-while i < len(inputs):
-    input = inputs[i]
+
+def parse(input):
+    tokens = []
     for m in pattern.finditer(input):
-        if m.group('var') != None:
-            tokens.append(QNode(lexer['var'], m.group('var')))
-        elif m.group('num') != None:
-            tokens.append(QNode(lexer['num'], m.group('num')))
-        elif m.group('alp') != None:
-            tokens.append(QNode(lexer['alp'], m.group('alp')))
-        elif m.group('str') != None:
-            tokens.append(QNode(lexer['str'], m.group('str')))
-        elif m.group('dob') != None:
-            tokens.append(QNode(lexer['dob'], m.group('dob')))
-        elif m.group('pnt') != None:
-            tokens.append(QNode(lexer['pnt'], m.group('pnt')))
-        elif m.group('cmt') != None:
-            tokens.append(QNode(lexer['cmt'], m.group('cmt')))
-        #else:
-            #print("error")
-    if tokens[0].value == "if":
-        execute(tokens, 1, len(tokens))
-        if tokens[1].value != "true":
-            i = i + 1
-    else:
-        execute(tokens, 0, len(tokens))
-    reset(tokens)
-    i = i + 1
-    #calc = copy.deepcopy(tokens)
-print(tokens)
+            if m.group('var') != None:
+                tokens.append(QNode(lexer['var'], m.group('var')))
+            elif m.group('num') != None:
+                tokens.append(QNode(lexer['num'], m.group('num')))
+            elif m.group('alp') != None:
+                tokens.append(QNode(lexer['alp'], m.group('alp')))
+            elif m.group('str') != None:
+                tokens.append(QNode(lexer['str'], m.group('str')))
+            elif m.group('dob') != None:
+                tokens.append(QNode(lexer['dob'], m.group('dob')))
+            elif m.group('pnt') != None:
+                tokens.append(QNode(lexer['pnt'], m.group('pnt')))
+            elif m.group('cmt') != None:
+                tokens.append(QNode(lexer['cmt'], m.group('cmt')))
+            #else:
+                #print("error")
+    return tokens
 
+def run(context, start, end):
+    i = start
+    stack = []
+    while i < end:
+        input = context[i]
+        tokens = parse(input)
+        if tokens[0].value == "if":
+            stack.append(i)
+            execute(tokens, 1, len(tokens))
+            if tokens[1].value == "true":
+                #while len(stack) > 0:
+                    #i = i + 1
+                if tokens[0].value == "}":
+                    run(context, stack.pop(), i)
+            else:#TODO else clause
+                while len(stack) > 0:
+                    i = i + 1
+                    if parse(context[i])[0].value == "}":
+                        stack.pop()
+                    
+        else:
+            execute(tokens, 0, len(tokens))
+        reset(tokens)
+        i = i + 1
+        #calc = copy.deepcopy(tokens)
 
+run(inputs, 0, len(inputs))
 
 #def execute end
 #while len(tokens) > 1:
 #execute(tokens, 0, len(tokens))
 #print(len(tokens))
-for token in tokens:
-    print(token.value)
 print(variables)
         
     #m = pattern.match(input)
