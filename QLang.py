@@ -1,16 +1,20 @@
 #import string
 import re
 import logging
+import copy
 from QNode import *
+import traceback
 logger=logging.getLogger("QLang")
 logger.setLevel(10)
 #print(logger.getEffectiveLevel())
 #input="42/21+3+-8/(5-(2*1+2))"
-inputs=["a = 1","b=a","b=b+1","if(a>b){","c=42/21+3+-8/(5-(2+b*2))","d=5" ,"}"]
+#inputs=["a = 1","b=a","b=b+1","while(a<b){","c=42/21+3+-8/(5-(2+b*2))","d=5" ,"}"]
+inputs=["a=0","b=5","c=0","k=0","d=0","while(a<=b){","i=0","while(i<20){","d=d+i","while(k<3){","k=k+1","}","i=i+1","}","c=c+a","a=a+1","}"]
+#inputs=["a = 1","a=a+1"]
 #inputs=["a=1","b=a+1","c=b>a&&false"]
 #f=open('D:\\\\out.txt','w')
 pattern = re.compile(
-    r"\s*((?P<var>[_$A-Za-z][_\$A-Za-z0-9]*)|(?P<num>((?<=[+-])[+-][0-9]+(\.[0-9]+)?)|([0-9]+)(\.[0-9]+)?)|(?P<alp>[A-Za-z][A-Za-z0-9]*)|(?P<str>\"(\\\\|\\\"|\\n|[^\"])*\")|(?P<dob>==|!=|<=|>=|&&|\|\|)|(?P<pnt>[.,/#!$%^&\*;:{}+-=_`~()><])|(?P<cmt>\/\/.*))?"
+    r"\s*((?P<cmt>\/\/.*)|(?P<var>[_$A-Za-z][_\$A-Za-z0-9]*)|(?P<num>((?<=[+-])[+-][0-9]+(\.[0-9]+)?)|([0-9]+)(\.[0-9]+)?)|(?P<alp>[A-Za-z][A-Za-z0-9]*)|(?P<str>\"(\\\\|\\\"|\\n|[^\"])*\")|(?P<dob>==|!=|<=|>=|&&|\|\|)|(?P<pnt>[.,/#!$%^&\*;:{}+-=_`~()><]))?"
 )
 print(inputs)
 #pattern="\s*((?P<num>[0-9]+)|([A-Za-z][A-Za-z0-9]*)|(\"(\\\\|\\\"|\\n|[^\"])*\")|(==|<=|>=|&&|\|\|)|([.,/#!$%^&\*;:{}+-=_`~()])|(\/\/.*))?"
@@ -222,6 +226,9 @@ def execute(tokens, start, end):
         token = tokens[i]
         if token.value == "=":
             variables[tokens[i-1].value] = getvalue(tokens[i+1])
+            print(variables)
+            #for line in traceback.format_stack():
+            #    print(line.strip())
         i = i + 1
 
     return i
@@ -246,13 +253,15 @@ def parse(input):
                 tokens.append(QNode(lexer['cmt'], m.group('cmt')))
             #else:
                 #print("error")
+    #print(tokens)
     return tokens
 
 def run(context, start, end):
     i = start
     stack = []
     while i < end:
-        input = context[i]
+        input = copy.deepcopy(context[i])
+        curcontext = context[i]
         tokens = parse(input)
         if tokens[0].value == "if":
             stack.append(i)
@@ -261,6 +270,7 @@ def run(context, start, end):
                 #while len(stack) > 0:
                     #i = i + 1
                 if tokens[0].value == "}":
+                    reset(tokens)
                     run(context, stack.pop(), i)
             else:#TODO else clause
                 while len(stack) > 0:
@@ -268,10 +278,36 @@ def run(context, start, end):
                     if parse(context[i])[0].value == "}":
                         stack.pop()
                     
-        else:
+        elif tokens[0].value == "while":
+            stack.append(('wh',i))
+                #while len(stack) > 0:
+            tokens = parse(copy.deepcopy(context[i]))
+        elif tokens[0].value == "}":
+            mark = stack[len(stack) - 1]
+            if mark[0] == "wh":
+                subend = i
+                i = mark[1]
+                tokens = parse(copy.deepcopy(context[mark[1]]))
+                execute(tokens, 1, len(tokens))
+                ctokens = copy.deepcopy(tokens)
+                reset(tokens)
+                substart = stack[len(stack) - 1][1] + 1
+                if ctokens[1].value == "true":
+                    run(context, substart, subend)
+                else:
+                    stack.pop()
+                    i = subend
+            #elif mark[0] == "if":
+                #TODO
+            
+        #else:
+        #    stack.pop()
+        #    i = subend
+
+        elif tokens[0].type != 6:
             execute(tokens, 0, len(tokens))
-        reset(tokens)
         i = i + 1
+        reset(tokens)
         #calc = copy.deepcopy(tokens)
 
 run(inputs, 0, len(inputs))
@@ -280,6 +316,7 @@ run(inputs, 0, len(inputs))
 #while len(tokens) > 1:
 #execute(tokens, 0, len(tokens))
 #print(len(tokens))
+print("END!")
 print(variables)
         
     #m = pattern.match(input)
