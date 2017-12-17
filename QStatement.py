@@ -165,7 +165,7 @@ class QStatement:
                 else:
                     self.nodes[i].value = "false"
             elif node.value == "<":
-                val = self.getvalue(self.nodes[i-1]).value < self.getvalue(self.nodes[i+1]).value
+                val = float(self.getvalue(self.nodes[i-1]).value) < float(self.getvalue(self.nodes[i+1]).value)
                 self.cut(i+1)
                 self.cut(i-1)
                 #end = end - 2
@@ -234,8 +234,13 @@ class QStatement:
             if node.value == "=":
                 self.variables[self.nodes[i-1].value] = self.getvalue(self.nodes[i+1])
                 print(self.inputs)
+                print(self.variables)
                 #for line in traceback.format_stack():
                 #    print(line.strip())
             i = i + 1
 
         return i
+
+    def bool_true(self):
+        self.execute(0, len(self.nodes))
+        return len(self.nodes) == 1 and self.nodes[0].bool_true()
