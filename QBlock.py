@@ -16,8 +16,8 @@ class QBlock:
         self.variables = variables
         self.meta = meta
     
-
-    def run(self):
+        
+    def compile(self):
         i = 0
         stack = []
         while i < len(self.inputs):
@@ -81,11 +81,12 @@ class QBlock:
 
             else:
                 stmt = QStatement(self.inputs[i], self.variables)
-                #self.sub_blocks.append((0,stmt))
+                self.sub_blocks.append((0,stmt))
                 #execute?
-                stmt.execute(0, len(stmt.nodes))
+                #stmt.execute(0, len(stmt.nodes))
             i = i + 1
             #calc = copy.deepcopy(tokens)
+    def run(self):
         i = 0
         while i < len(self.sub_blocks):
             sub_block = copy.deepcopy(self.sub_blocks[i])
@@ -103,6 +104,8 @@ class QBlock:
                     sub_block.run()
                     stmt = copy.deepcopy(sub_block.meta[1])
                     stmt.variables = self.variables
+            else:
+                sub_block.execute()
                 #stmt = sub_block[1]
                 #if stmt.nodes[0].value == "if":
                 #    stmt.execute(1, len(stmt.nodes))
