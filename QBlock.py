@@ -101,22 +101,22 @@ class QBlock:
                     if stmt.bool_true():
                         sub_block.run(variables)
                 elif sub_block.meta[0].value == "while":
-                    print("while check start")
+                    #print("while check start")
                     stmt = copy.deepcopy(sub_block.meta[1])
-                    print("stmt")
+                    #print("stmt")
                     stmt.variables = variables
                     while stmt.bool_true():
-                        print(sub_block.sub_blocks)
+                        #print(sub_block.sub_blocks)
                         sub_block.run(variables)
                         stmt = copy.deepcopy(sub_block.meta[1])
-                        print(stmt.nodes)
+                        #print(stmt.nodes)
                         stmt.variables = variables
-                        print(stmt.variables)
-                        print("while check")
-                    print("while check end")
+                        #print(stmt.variables)
+                        #print("while check")
+                    #print("while check end")
                         
             else:
-                print("execute check")
+                #print("execute check")
                 sub_block.execute(0, len(sub_block.nodes), variables)
                 #stmt = sub_block[1]
                 #if stmt.nodes[0].value == "if":
@@ -135,5 +135,5 @@ class QBlock:
                 #        stmt = sub_block[1]
                 #        stmt.execute(1, len(stmt.nodes))
                 #    i = i + 1
-            print(i)
+            #print(i)
             i = i + 1
