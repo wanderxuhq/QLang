@@ -13,6 +13,11 @@ class QStatement:
         self.parse()
         self.variables = variables
     
+    def __str__(self):
+        return str(self.inputs)
+    def __repr__(self):
+        return str(self.inputs)
+
     def cut(self, i):
         del(self.nodes[i])
         self.cutlength = self.cutlength + 1
@@ -167,6 +172,7 @@ class QStatement:
                     self.nodes[i].value = "false"
             elif node.value == "<":
                 val = float(self.getvalue(self.nodes[i-1]).value) < float(self.getvalue(self.nodes[i+1]).value)
+                print(self.variables)
                 self.cut(i+1)
                 self.cut(i-1)
                 #end = end - 2

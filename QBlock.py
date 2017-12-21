@@ -33,6 +33,7 @@ class QBlock:
                 infos = stack.pop()
                 if len(stack) == 0:
                     sub_block = QBlock([infos[1], QStatement(infos[2], self.variables)], self.inputs[ infos[0]: i ], self.variables)
+                    sub_block.compile()
                     self.sub_blocks.append(sub_block)
                     #sub_block.run()
                 
@@ -79,7 +80,7 @@ class QBlock:
             #        stack.pop()
             #        i = subend
 
-            else:
+            elif len(stack) == 0:
                 stmt = QStatement(self.inputs[i], self.variables)
                 self.sub_blocks.append(stmt)
                 #execute?
@@ -100,6 +101,7 @@ class QBlock:
                     if stmt.bool_true():
                         sub_block.run(variables)
                 elif sub_block.meta[0].value == "while":
+                    print("while check start")
                     stmt = copy.deepcopy(sub_block.meta[1])
                     print("stmt")
                     stmt.variables = variables
@@ -111,6 +113,7 @@ class QBlock:
                         stmt.variables = variables
                         print(stmt.variables)
                         print("while check")
+                    print("while check end")
                         
             else:
                 print("execute check")
