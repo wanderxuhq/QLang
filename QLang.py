@@ -22,6 +22,7 @@ print(inputs)
 cutlength = 0
 
 a = QBlock(None, inputs, {})
+a.compile()
 a.run()
 
 
