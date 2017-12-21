@@ -34,7 +34,6 @@ class QBlock:
                 if len(stack) == 0:
                     sub_block = QBlock([infos[1], QStatement(infos[2], self.variables)], self.inputs[ infos[0]: i ], self.variables)
                     self.sub_blocks.append(sub_block)
-                    sub_block.compile()
                     #sub_block.run()
                 
             #if stmt.nodes[0].value == "if":
@@ -87,7 +86,8 @@ class QBlock:
                 #stmt.execute(0, len(stmt.nodes))
             i = i + 1
             #calc = copy.deepcopy(tokens)
-    def run(self):
+    def run(self, variables):
+        self.variables = variables
         i = 0
         while i < len(self.sub_blocks):
             sub_block = copy.deepcopy(self.sub_blocks[i])
@@ -98,17 +98,23 @@ class QBlock:
                     stmt = copy.deepcopy(sub_block.meta[1])
                     stmt.variables = self.variables
                     if stmt.bool_true():
-                        sub_block.run()
+                        sub_block.run(variables)
                 elif sub_block.meta[0].value == "while":
                     stmt = copy.deepcopy(sub_block.meta[1])
+                    print("stmt")
+                    stmt.variables = variables
                     while stmt.bool_true():
-                        sub_block.run()
+                        print(sub_block.sub_blocks)
+                        sub_block.run(variables)
                         stmt = copy.deepcopy(sub_block.meta[1])
-                        stmt.variables = self.variables
+                        print(stmt.nodes)
+                        stmt.variables = variables
                         print(stmt.variables)
                         print("while check")
+                        
             else:
-                sub_block.execute(0, len(sub_block.nodes), self.variables)
+                print("execute check")
+                sub_block.execute(0, len(sub_block.nodes), variables)
                 #stmt = sub_block[1]
                 #if stmt.nodes[0].value == "if":
                 #    stmt.execute(1, len(stmt.nodes))
@@ -126,4 +132,5 @@ class QBlock:
                 #        stmt = sub_block[1]
                 #        stmt.execute(1, len(stmt.nodes))
                 #    i = i + 1
+            print(i)
             i = i + 1
