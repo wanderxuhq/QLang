@@ -6,9 +6,9 @@ class QNode:
         self.type = type
         self.value = value
     def __str__(self):
-        return str(self.value) + " " + str(self.type)
+        return str(self.value)
     def __repr__(self):
-        return str(self.value) + " " + str(self.type)
+        return str(self.value)
     lexer = {'var':0, 'num':1, 'alp':2, 'str':3, 'dob':4, 'pnt':5, 'cmt':6}
 
     def bool_true(self):

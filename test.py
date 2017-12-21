@@ -3,7 +3,7 @@ b=5
 c=0
 k=0
 d=0
-while a<=b:
+while a<b:
 	i=0
 	while i<2:
 		d=d+i
