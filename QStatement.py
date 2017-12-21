@@ -99,6 +99,7 @@ class QStatement:
                 if val == int(val):
                     val = int(val)
                 self.nodes[i].value=str(val)
+                #print(str(val) +" " + str(self.variables["i"].value) + " " + str(self.variables["j"].value))
             elif node.value == "/":
                 val = float(self.getvalue(self.nodes[i-1]).value) / float(self.getvalue(self.nodes[i+1]).value)
                 self.cut(i+1)
@@ -172,7 +173,7 @@ class QStatement:
                     self.nodes[i].value = "false"
             elif node.value == "<":
                 val = float(self.getvalue(self.nodes[i-1]).value) < float(self.getvalue(self.nodes[i+1]).value)
-                print(self.variables)
+                #print(self.variables)
                 self.cut(i+1)
                 self.cut(i-1)
                 #end = end - 2
@@ -240,8 +241,8 @@ class QStatement:
             node = self.nodes[i]
             if node.value == "=":
                 self.variables[self.nodes[i-1].value] = self.getvalue(self.nodes[i+1])
-                print(self.inputs)
-                print(self.variables)
+                #print(self.inputs)
+                #print(self.variables)
                 #for line in traceback.format_stack():
                 #    print(line.strip())
             i = i + 1
