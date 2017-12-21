@@ -23,7 +23,7 @@ cutlength = 0
 
 a = QBlock(None, inputs, {})
 a.compile()
-a.run()
+a.run({})
 
 
 #def execute end

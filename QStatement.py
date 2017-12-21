@@ -53,7 +53,8 @@ class QStatement:
             self.nodes = nodes
             return nodes
 
-    def execute(self, start, end):
+    def execute(self, start, end, variables):
+        self.variables = variables
         stack=[]
         i = start
         while i < end - self.cutlength:
@@ -66,7 +67,7 @@ class QStatement:
                 #print(startpos, i)
                 if len(stack) == 0:
                     #print("call!")
-                    k = self.execute(startpos, i)
+                    k = self.execute(startpos, i, variables)
                     self.cut(k)
                     self.cut(k - 2)
                     #end = end - 2
@@ -242,5 +243,5 @@ class QStatement:
         return i
 
     def bool_true(self):
-        self.execute(0, len(self.nodes))
+        self.execute(0, len(self.nodes), self.variables)
         return len(self.nodes) == 1 and self.nodes[0].bool_true()
