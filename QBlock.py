@@ -34,6 +34,7 @@ class QBlock:
                 if len(stack) == 0:
                     sub_block = QBlock([infos[1], QStatement(infos[2], self.variables)], self.inputs[ infos[0]: i ], self.variables)
                     self.sub_blocks.append(sub_block)
+                    sub_block.compile()
                     #sub_block.run()
                 
             #if stmt.nodes[0].value == "if":
@@ -81,7 +82,7 @@ class QBlock:
 
             else:
                 stmt = QStatement(self.inputs[i], self.variables)
-                self.sub_blocks.append((0,stmt))
+                self.sub_blocks.append(stmt)
                 #execute?
                 #stmt.execute(0, len(stmt.nodes))
             i = i + 1
@@ -92,20 +93,22 @@ class QBlock:
             sub_block = copy.deepcopy(self.sub_blocks[i])
             #if sub_block[0] == 0:
             #    sub_block[1].execute(0, len(sub_block[1].nodes))
-            #if isinstance(sub_block, QBlock):
-            if sub_block.meta[0].value == "if":
-                stmt = copy.deepcopy(sub_block.meta[1])
-                stmt.variables = self.variables
-                if stmt.bool_true():
-                    sub_block.run()
-            elif sub_block.meta[0].value == "while":
-                stmt = copy.deepcopy(sub_block.meta[1])
-                while stmt.bool_true():
-                    sub_block.run()
+            if isinstance(sub_block, QBlock):
+                if sub_block.meta[0].value == "if":
                     stmt = copy.deepcopy(sub_block.meta[1])
                     stmt.variables = self.variables
+                    if stmt.bool_true():
+                        sub_block.run()
+                elif sub_block.meta[0].value == "while":
+                    stmt = copy.deepcopy(sub_block.meta[1])
+                    while stmt.bool_true():
+                        sub_block.run()
+                        stmt = copy.deepcopy(sub_block.meta[1])
+                        stmt.variables = self.variables
+                        print(stmt.variables)
+                        print("while check")
             else:
-                sub_block.execute()
+                sub_block.execute(0, len(sub_block.nodes), self.variables)
                 #stmt = sub_block[1]
                 #if stmt.nodes[0].value == "if":
                 #    stmt.execute(1, len(stmt.nodes))
