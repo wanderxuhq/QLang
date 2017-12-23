@@ -62,192 +62,207 @@ class QStatement:
         self.variables = variables
         stack=[]
         i = start
-        while i < end - self.cutlength:
-            node = self.nodes[i]
-            if node.value == "(":
-                i = i + 1
-                stack.append(i)
-            elif node.value == ")":
-                startpos = stack.pop()
-                #print(startpos, i)
-                if len(stack) == 0:
-                    #print("call!")
-                    k = self.execute(startpos, i, variables)
-                    self.cut(k)
-                    self.cut(k - 2)
-                    #end = end - 2
-                    i = i - 1
+        if i == 0 and self.nodes[0].value == "print":
+           self.execute(1, len(self.nodes), self.variables)
+           print(self.nodes[1].getstrval(), end="")
+        else:
+            
+            while i < end - self.cutlength:
+                node = self.nodes[i]
+                if node.value == "(":
+                    i = i + 1
+                    stack.append(i)
+                elif node.value == ")":
+                    startpos = stack.pop()
+                    #print(startpos, i)
+                    if len(stack) == 0:
+                        #print("call!")
+                        k = self.execute(startpos, i, variables)
+                        self.cut(k)
+                        self.cut(k - 2)
+                        #end = end - 2
+                        i = i - 1
+                    else:
+                        i = i + 1
                 else:
                     i = i + 1
-            else:
-                i = i + 1
-        i = start
-        #for token in tokens:
-        #    print(token.value)
-        while i < end - self.cutlength:
-            #print(i, end)
+            i = start
             #for token in tokens:
             #    print(token.value)
-            node = self.nodes[i]
-            #print(str(token.value)+" "+str(token.type))
-            if node.value == "*":
-                val = float(self.getvalue(self.nodes[i-1]).value) * float(self.getvalue(self.nodes[i+1]).value)
-                self.cut(i+1)
-                self.cut(i-1)
-                #end = end - 2
-                i = i - 1
-                if val == int(val):
-                    val = int(val)
-                self.nodes[i].value=str(val)
-                #print(str(val) +" " + str(self.variables["i"].value) + " " + str(self.variables["j"].value))
-            elif node.value == "/":
-                val = float(self.getvalue(self.nodes[i-1]).value) / float(self.getvalue(self.nodes[i+1]).value)
-                self.cut(i+1)
-                self.cut(i-1)
-                #end = end - 2
-                i = i - 1
-                if val == int(val):
-                    val = int(val)
-                self.nodes[i].value=str(val)
-            else:
+            while i < end - self.cutlength:
+                #print(i, end)
+                #for token in tokens:
+                #    print(token.value)
+                node = self.nodes[i]
+                #print(str(token.value)+" "+str(token.type))
+                if node.value == "*":
+                    val = float(self.getvalue(self.nodes[i-1]).value) * float(self.getvalue(self.nodes[i+1]).value)
+                    self.cut(i+1)
+                    self.cut(i-1)
+                    #end = end - 2
+                    i = i - 1
+                    if val == int(val):
+                        val = int(val)
+                    self.nodes[i]=QNode(QNode.lexer['num'], str(val))
+                    #print(str(val) +" " + str(self.variables["i"].value) + " " + str(self.variables["j"].value))
+                elif node.value == "/":
+                    val = float(self.getvalue(self.nodes[i-1]).value) / float(self.getvalue(self.nodes[i+1]).value)
+                    self.cut(i+1)
+                    self.cut(i-1)
+                    #end = end - 2
+                    i = i - 1
+                    if val == int(val):
+                        val = int(val)
+                    self.nodes[i]=QNode(QNode.lexer['num'], str(val))
+                else:
+                    i = i + 1
+
+            i=start
+
+            while i < end - self.cutlength:
+                node = self.nodes[i]
+                #print(str(token.value)+" "+str(token.type))
+                if node.value == "+":
+                    if self.getvalue(self.nodes[i-1]).type == QNode.lexer['num'] and self.getvalue(self.nodes[i+1]).type == QNode.lexer['num']:
+                        val = float(self.getvalue(self.nodes[i-1]).value) + float(self.getvalue(self.nodes[i+1]).value)
+                        self.cut(i+1)
+                        self.cut(i-1)
+                        #end = end - 2
+                        i = i - 1
+                        if val == int(val):
+                            val = int(val)
+                        self.nodes[i]=QNode(QNode.lexer['num'], str(val))
+                    elif self.getvalue(self.nodes[i-1]).type == QNode.lexer['str'] or self.getvalue(self.nodes[i+1]).type == QNode.lexer['str']:
+                        val = str(self.getvalue(self.nodes[i-1]).getstrval()) + str(self.getvalue(self.nodes[i+1]).getstrval())
+                        self.cut(i+1)
+                        self.cut(i-1)
+                        #end = end - 2
+                        i = i - 1
+                        self.nodes[i]=QNode(QNode.lexer['str'], str("\""+val+"\""))
+                        
+                elif node.value == "-":
+                    val = float(self.getvalue(self.nodes[i-1]).value) - float(self.getvalue(self.nodes[i+1]).value)
+                    self.cut(i+1)
+                    self.cut(i-1)
+                    #end = end - 2
+                    i = i - 1
+                    if val == int(val):
+                        val = int(val)
+                    self.nodes[i]=QNode(QNode.lexer['num'], str(val))
+                else:
+                    i = i + 1
+            
+            i = start
+            while i < end - self.cutlength:
+                node = self.nodes[i]
+                if node.value == "==":
+                    val = self.getvalue(self.nodes[i-1]).value == self.getvalue(self.nodes[i+1]).value
+                    self.cut(i+1)
+                    self.cut(i-1)
+                    #end = end - 2
+                    i = i - 1
+                    if val:
+                        self.nodes[i].value = "true"
+                    else:
+                        self.nodes[i].value = "false"
+                elif node.value == "!=":
+                    val = self.getvalue(self.nodes[i-1]).value != self.getvalue(self.nodes[i+1]).value
+                    self.cut(i+1)
+                    self.cut(i-1)
+                    #end = end - 2
+                    i = i - 1
+                    if val:
+                        self.nodes[i].value = "true"
+                    else:
+                        self.nodes[i].value = "false"
+                elif node.value == ">":
+                    val = self.getvalue(self.nodes[i-1]).value > self.getvalue(self.nodes[i+1]).value
+                    self.cut(i+1)
+                    self.cut(i-1)
+                    #end = end - 2
+                    i = i - 1
+                    if val:
+                        self.nodes[i].value = "true"
+                    else:
+                        self.nodes[i].value = "false"
+                elif node.value == "<":
+                    val = float(self.getvalue(self.nodes[i-1]).value) < float(self.getvalue(self.nodes[i+1]).value)
+                    #print(self.variables)
+                    self.cut(i+1)
+                    self.cut(i-1)
+                    #end = end - 2
+                    i = i - 1
+                    if val:
+                        self.nodes[i].value = "true"
+                    else:
+                        self.nodes[i].value = "false"
+                elif node.value == ">=":
+                    val = self.getvalue(self.nodes[i-1]).value >= self.getvalue(self.nodes[i+1]).value
+                    self.cut(i+1)
+                    self.cut(i-1)
+                    #end = end - 2
+                    i = i - 1
+                    if val:
+                        self.nodes[i].value = "true"
+                    else:
+                        self.nodes[i].value = "false"
+                elif node.value == "<=":
+                    val = self.getvalue(self.nodes[i-1]).value <= self.getvalue(self.nodes[i+1]).value
+                    self.cut(i+1)
+                    self.cut(i-1)
+                    #end = end - 2
+                    i = i - 1
+                    if val:
+                        self.nodes[i].value = "true"
+                    else:
+                        self.nodes[i].value = "false"
+                else:
+                    i = i + 1
+
+            i=start
+            while i < end - self.cutlength:
+                node = self.nodes[i]
+                if node.value == "&&":
+                    val = self.boolvalue(self.getvalue(self.nodes[i-1])) and self.boolvalue(self.getvalue(self.nodes[i+1]))
+                    self.cut(i+1)
+                    self.cut(i-1)
+                    #end = end - 2
+                    i = i - 1
+                    if val:
+                        self.nodes[i].value = "true"
+                    else:
+                        self.nodes[i].value = "false"
+                else:
+                    i = i + 1
+            i=start
+            while i < end - self.cutlength:
+                node = self.nodes[i]
+                if node.value == "||":
+                    val = self.boolvalue(self.getvalue(self.nodes[i-1])) or self.boolvalue(self.getvalue(self.nodes[i+1]))
+                    self.cut(i+1)
+                    self.cut(i-1)
+                    #end = end - 2
+                    i = i - 1
+                    if val:
+                        self.nodes[i].value = "true"
+                    else:
+                        self.nodes[i].value = "false"
+                else:
+                    i = i + 1
+
+            i=start
+            while i < end - self.cutlength:
+                node = self.nodes[i]
+                if node.value == "=":
+                    self.variables[self.nodes[i-1].value] = self.getvalue(self.nodes[i+1])
+                    #print(self.inputs)
+                    #print(self.variables)
+                    #for line in traceback.format_stack():
+                    #    print(line.strip())
                 i = i + 1
 
-        i=start
-
-        while i < end - self.cutlength:
-            node = self.nodes[i]
-            #print(str(token.value)+" "+str(token.type))
-            if node.value == "+":
-                val = float(self.getvalue(self.nodes[i-1]).value) + float(self.getvalue(self.nodes[i+1]).value)
-                self.cut(i+1)
-                self.cut(i-1)
-                #end = end - 2
-                i = i - 1
-                if val == int(val):
-                    val = int(val)
-                self.nodes[i].value=str(val)
-            elif node.value == "-":
-                val = float(self.getvalue(self.nodes[i-1]).value) - float(self.getvalue(self.nodes[i+1]).value)
-                self.cut(i+1)
-                self.cut(i-1)
-                #end = end - 2
-                i = i - 1
-                if val == int(val):
-                    val = int(val)
-                self.nodes[i].value=str(val)
-            else:
-                i = i + 1
         
-        i = start
-        while i < end - self.cutlength:
-            node = self.nodes[i]
-            if node.value == "==":
-                val = self.getvalue(self.nodes[i-1]).value == self.getvalue(self.nodes[i+1]).value
-                self.cut(i+1)
-                self.cut(i-1)
-                #end = end - 2
-                i = i - 1
-                if val:
-                    self.nodes[i].value = "true"
-                else:
-                    self.nodes[i].value = "false"
-            elif node.value == "!=":
-                val = self.getvalue(self.nodes[i-1]).value != self.getvalue(self.nodes[i+1]).value
-                self.cut(i+1)
-                self.cut(i-1)
-                #end = end - 2
-                i = i - 1
-                if val:
-                    self.nodes[i].value = "true"
-                else:
-                    self.nodes[i].value = "false"
-            elif node.value == ">":
-                val = self.getvalue(self.nodes[i-1]).value > self.getvalue(self.nodes[i+1]).value
-                self.cut(i+1)
-                self.cut(i-1)
-                #end = end - 2
-                i = i - 1
-                if val:
-                    self.nodes[i].value = "true"
-                else:
-                    self.nodes[i].value = "false"
-            elif node.value == "<":
-                val = float(self.getvalue(self.nodes[i-1]).value) < float(self.getvalue(self.nodes[i+1]).value)
-                #print(self.variables)
-                self.cut(i+1)
-                self.cut(i-1)
-                #end = end - 2
-                i = i - 1
-                if val:
-                    self.nodes[i].value = "true"
-                else:
-                    self.nodes[i].value = "false"
-            elif node.value == ">=":
-                val = self.getvalue(self.nodes[i-1]).value >= self.getvalue(self.nodes[i+1]).value
-                self.cut(i+1)
-                self.cut(i-1)
-                #end = end - 2
-                i = i - 1
-                if val:
-                    self.nodes[i].value = "true"
-                else:
-                    self.nodes[i].value = "false"
-            elif node.value == "<=":
-                val = self.getvalue(self.nodes[i-1]).value <= self.getvalue(self.nodes[i+1]).value
-                self.cut(i+1)
-                self.cut(i-1)
-                #end = end - 2
-                i = i - 1
-                if val:
-                    self.nodes[i].value = "true"
-                else:
-                    self.nodes[i].value = "false"
-            else:
-                i = i + 1
-
-        i=start
-        while i < end - self.cutlength:
-            node = self.nodes[i]
-            if node.value == "&&":
-                val = self.boolvalue(self.getvalue(self.nodes[i-1])) and self.boolvalue(self.getvalue(self.nodes[i+1]))
-                self.cut(i+1)
-                self.cut(i-1)
-                #end = end - 2
-                i = i - 1
-                if val:
-                    self.nodes[i].value = "true"
-                else:
-                    self.nodes[i].value = "false"
-            else:
-                i = i + 1
-        i=start
-        while i < end - self.cutlength:
-            node = self.nodes[i]
-            if node.value == "||":
-                val = self.boolvalue(self.getvalue(self.nodes[i-1])) or self.boolvalue(self.getvalue(self.nodes[i+1]))
-                self.cut(i+1)
-                self.cut(i-1)
-                #end = end - 2
-                i = i - 1
-                if val:
-                    self.nodes[i].value = "true"
-                else:
-                    self.nodes[i].value = "false"
-            else:
-                i = i + 1
-
-        i=start
-        while i < end - self.cutlength:
-            node = self.nodes[i]
-            if node.value == "=":
-                self.variables[self.nodes[i-1].value] = self.getvalue(self.nodes[i+1])
-                #print(self.inputs)
-                #print(self.variables)
-                #for line in traceback.format_stack():
-                #    print(line.strip())
-            i = i + 1
-
-        return i
+            return i
 
     def bool_true(self):
         self.execute(0, len(self.nodes), self.variables)
