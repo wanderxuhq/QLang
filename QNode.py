@@ -13,5 +13,14 @@ class QNode:
 
     def bool_true(self):
         return self.value == "true"
+
+    def getstrval(self):
+        if self.type == QNode.lexer['str']:
+            result = self.value[1: len(self.value) - 1]
+            result = result.replace("\\n", "\n")
+            result = result.replace("\\t", "\t")
+            return result
+        else:
+            return self.value
 class NumQNode(QNode):{}
 class AlpQNode(QNode):{}

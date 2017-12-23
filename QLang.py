@@ -8,7 +8,8 @@ logger.setLevel(10)
 #inputs=["a = 1","b=a","b=b+1","while(a<b){","c=42/21+3+-8/(5-(2+b*2))","d=5" ,"}"]
 #inputs=["a=0","b=5","c=3","d=7","k=a+b*(c+d)"]
 #inputs=["a=0","b=5","c=0","k=0","d=0","while(a<b){","i=0","while(i<2){","d=d+i","while(k<3){","k=k+1","}","i=i+1","}","c=c+a","a=a+1","}"]
-inputs=["i=1","while(i<10){","j=1","while(j<10){","k=i*j","j=j+1","}","j=1","i=i+1","}"]
+inputs=["i=1","while(i<10){","j=1","while(j<i+1){","k=i*j", "print(j+\"*\"+i+\"=\"+k+\"\\t\") ","j=j+1","}", "print(\"\\n\")","j=1","i=i+1","}"]
+#inputs=["print(\"\\n\")"]
 #inputs=["a = 1","a=a+1"]
 #inputs=["a=1","b=a+1","c=b>a&&false"]
 #f=open('D:\\\\out.txt','w')
