@@ -62,7 +62,7 @@ class QStatement:
         self.variables = variables
         stack=[]
         i = start
-        if i == 0 and self.nodes[0].value == "print":
+        if i == 0 and len(self.nodes) > 0 and self.nodes[0].value == "print":
            self.execute(1, len(self.nodes), self.variables)
            print(self.nodes[1].getstrval(), end="")
         else:
