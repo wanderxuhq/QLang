@@ -14,7 +14,7 @@ logger.setLevel(10)
 #inputs=["a=1","b=a+1","c=b>a&&false"]
 #f=open('ql/99.ql','r')
 inputs = []
-with open('demo/butterfly.ql') as f:
+with open('demo/iftest.ql') as f:
     for line in f:
         inputs.append(line)
 f.closed
