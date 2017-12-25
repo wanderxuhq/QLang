@@ -6,7 +6,7 @@ class QStatement:
     cutlength = 0
     variables = None
     pattern = re.compile(
-        r"\s*((?P<cmt>\/\/.*)|(?P<var>[_$A-Za-z][_\$A-Za-z0-9]*)|(?P<num>((?<=[+-])[+-][0-9]+(\.[0-9]+)?)|([0-9]+)(\.[0-9]+)?)|(?P<alp>[A-Za-z][A-Za-z0-9]*)|(?P<str>\"(\\\\|\\\"|\\n|[^\"])*\")|(?P<dob>==|!=|<=|>=|&&|\|\|)|(?P<pnt>[.,/#!$%^&\*;:{}+-=_`~()><]))?"
+        r"\s*((?P<cmt>\/\/.*)|(?P<var>[_$A-Za-z][_\$A-Za-z0-9]*)|(?P<num>((?<=[+-])?[+-][0-9]+(\.[0-9]+)?)|([0-9]+)(\.[0-9]+)?)|(?P<alp>[A-Za-z][A-Za-z0-9]*)|(?P<str>\"(\\\\|\\\"|\\n|[^\"])*\")|(?P<dob>==|!=|<=|>=|&&|\|\|)|(?P<pnt>[.,/#!$%^&\*;:{}+-=_`~()><]))?"
     )
     def __init__(self, inputs, variables):
         self.inputs = inputs
@@ -141,11 +141,17 @@ class QStatement:
                         self.nodes[i]=QNode(QNode.lexer['str'], str("\""+val+"\""))
                         
                 elif node.value == "-":
-                    val = float(self.getvalue(self.nodes[i-1]).value) - float(self.getvalue(self.nodes[i+1]).value)
-                    self.cut(i+1)
-                    self.cut(i-1)
+                    left = self.getvalue(self.nodes[i-1])
+                    if left.type != QNode.lexer['num']:
+                        val = -float(self.getvalue(self.nodes[i+1]).value)
+                        self.cut(i+1)
+                    else:
+                        val = float(left.value) -float(self.getvalue(self.nodes[i+1]).value)
+                        self.cut(i+1)
+                        self.cut(i-1)
+                        i = i - 1
                     #end = end - 2
-                    i = i - 1
+                    
                     if val == int(val):
                         val = int(val)
                     self.nodes[i]=QNode(QNode.lexer['num'], str(val))
