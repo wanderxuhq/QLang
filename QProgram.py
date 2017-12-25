@@ -1,0 +1,2 @@
+class QProgram:
+    variables = {}

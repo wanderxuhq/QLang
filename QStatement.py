@@ -4,14 +4,12 @@ class QStatement:
     inputs = None
     nodes = None
     cutlength = 0
-    variables = None
     pattern = re.compile(
-        r"\s*((?P<cmt>\/\/.*)|(?P<var>[_$A-Za-z][_\$A-Za-z0-9]*)|(?P<num>((?<=[+-])?[+-][0-9]+(\.[0-9]+)?)|([0-9]+)(\.[0-9]+)?)|(?P<alp>[A-Za-z][A-Za-z0-9]*)|(?P<str>\"(\\\\|\\\"|\\n|[^\"])*\")|(?P<dob>==|!=|<=|>=|&&|\|\|)|(?P<pnt>[.,/#!$%^&\*;:{}+-=_`~()><]))?"
+        r"\s*((?P<cmt>\/\/.*)|(?P<var>[_$A-Za-z][_\$A-Za-z0-9]*)|(?P<num>((?<=[+-])[+-][0-9]+(\.[0-9]+)?)|([0-9]+)(\.[0-9]+)?)|(?P<alp>[A-Za-z][A-Za-z0-9]*)|(?P<str>\"(\\\\|\\\"|\\n|[^\"])*\")|(?P<dob>==|!=|<=|>=|&&|\|\|)|(?P<pnt>[.,/#!$%^&\*;:{}+-=_`~()><]))?"
     )
-    def __init__(self, inputs, variables):
+    def __init__(self, inputs):
         self.inputs = inputs
         self.parse()
-        self.variables = variables
     
     def __str__(self):
         return str(self.inputs)
@@ -25,12 +23,6 @@ class QStatement:
     def boolvalue(self, node):
         return node.value == "true"
 
-    def getvalue(self, node):
-        if node.type == QNode.lexer['var'] and node.value not in QNode.keywords:
-            return self.getvalue(self.variables[node.value])
-        else:
-            return node
-
     def reset(self, tokens):
         tokens.clear()
         self.cutlength = 0
@@ -39,19 +31,19 @@ class QStatement:
             nodes = []
             for m in self.pattern.finditer(self.inputs):
                     if m.group('var') != None:
-                        nodes.append(QNode(QNode.lexer['var'], m.group('var')))
+                        nodes.append(QNode(QUtil.lexer['var'], m.group('var')))
                     elif m.group('num') != None:
-                        nodes.append(QNode(QNode.lexer['num'], m.group('num')))
+                        nodes.append(QNode(QUtil.lexer['num'], m.group('num')))
                     elif m.group('alp') != None:
-                        nodes.append(QNode(QNode.lexer['alp'], m.group('alp')))
+                        nodes.append(QNode(QUtil.lexer['alp'], m.group('alp')))
                     elif m.group('str') != None:
-                        nodes.append(QNode(QNode.lexer['str'], m.group('str')))
+                        nodes.append(QNode(QUtil.lexer['str'], m.group('str')))
                     elif m.group('dob') != None:
-                        nodes.append(QNode(QNode.lexer['dob'], m.group('dob')))
+                        nodes.append(QNode(QUtil.lexer['dob'], m.group('dob')))
                     elif m.group('pnt') != None:
-                        nodes.append(QNode(QNode.lexer['pnt'], m.group('pnt')))
+                        nodes.append(QNode(QUtil.lexer['pnt'], m.group('pnt')))
                     elif m.group('cmt') != None:
-                        nodes.append(QNode(QNode.lexer['cmt'], m.group('cmt')))
+                        nodes.append(QNode(QUtil.lexer['cmt'], m.group('cmt')))
                     #else:
                         #print("error")
             #print(tokens)
@@ -59,12 +51,11 @@ class QStatement:
             return nodes
 
     def execute(self, start, end, variables):
-        self.variables = variables
         stack=[]
         i = start
         if i == 0 and len(self.nodes) > 0 and self.nodes[0].value == "print":
-           self.execute(1, len(self.nodes), self.variables)
-           print(self.nodes[1].getstrval(), end="")
+           self.execute(1, len(self.nodes), variables)
+           print(self.nodes[1].getstrval(variables), end="")
         else:
             
             while i < end - self.cutlength:
@@ -96,24 +87,23 @@ class QStatement:
                 node = self.nodes[i]
                 #print(str(token.value)+" "+str(token.type))
                 if node.value == "*":
-                    val = float(self.getvalue(self.nodes[i-1]).value) * float(self.getvalue(self.nodes[i+1]).value)
+                    val = float(self.nodes[i-1].getvalue(variables).value) * float(self.nodes[i+1].getvalue(variables).value)
                     self.cut(i+1)
                     self.cut(i-1)
                     #end = end - 2
                     i = i - 1
                     if val == int(val):
                         val = int(val)
-                    self.nodes[i]=QNode(QNode.lexer['num'], str(val))
-                    #print(str(val) +" " + str(self.variables["i"].value) + " " + str(self.variables["j"].value))
+                    self.nodes[i]=QNode(QUtil.lexer['num'], str(val))
                 elif node.value == "/":
-                    val = float(self.getvalue(self.nodes[i-1]).value) / float(self.getvalue(self.nodes[i+1]).value)
+                    val = float(self.nodes[i-1].getvalue(variables).value) / float(self.nodes[i+1].getvalue(variables).value)
                     self.cut(i+1)
                     self.cut(i-1)
                     #end = end - 2
                     i = i - 1
                     if val == int(val):
                         val = int(val)
-                    self.nodes[i]=QNode(QNode.lexer['num'], str(val))
+                    self.nodes[i]=QNode(QUtil.lexer['num'], str(val))
                 else:
                     i = i + 1
 
@@ -123,30 +113,30 @@ class QStatement:
                 node = self.nodes[i]
                 #print(str(token.value)+" "+str(token.type))
                 if node.value == "+":
-                    if self.getvalue(self.nodes[i-1]).type == QNode.lexer['num'] and self.getvalue(self.nodes[i+1]).type == QNode.lexer['num']:
-                        val = float(self.getvalue(self.nodes[i-1]).value) + float(self.getvalue(self.nodes[i+1]).value)
+                    if self.nodes[i-1].getvalue(variables).type == QUtil.lexer['num'] and self.nodes[i+1].getvalue(variables).type == QUtil.lexer['num']:
+                        val = float(self.nodes[i-1].getvalue(variables).value) + float(self.nodes[i+1].getvalue(variables).value)
                         self.cut(i+1)
                         self.cut(i-1)
                         #end = end - 2
                         i = i - 1
                         if val == int(val):
                             val = int(val)
-                        self.nodes[i]=QNode(QNode.lexer['num'], str(val))
-                    elif self.getvalue(self.nodes[i-1]).type == QNode.lexer['str'] or self.getvalue(self.nodes[i+1]).type == QNode.lexer['str']:
-                        val = str(self.getvalue(self.nodes[i-1]).getstrval()) + str(self.getvalue(self.nodes[i+1]).getstrval())
+                        self.nodes[i]=QNode(QUtil.lexer['num'], str(val))
+                    elif self.nodes[i-1].getvalue(variables).type == QUtil.lexer['str'] or self.nodes[i+1].getvalue(variables).type == QUtil.lexer['str']:
+                        val = str(self.nodes[i-1].getvalue(variables).getstrval(variables)) + str(self.nodes[i+1].getvalue(variables).getstrval(variables))
                         self.cut(i+1)
                         self.cut(i-1)
                         #end = end - 2
                         i = i - 1
-                        self.nodes[i]=QNode(QNode.lexer['str'], str("\""+val+"\""))
+                        self.nodes[i]=QNode(QUtil.lexer['str'], str("\""+val+"\""))
                         
                 elif node.value == "-":
-                    left = self.getvalue(self.nodes[i-1])
-                    if left.type != QNode.lexer['num']:
-                        val = -float(self.getvalue(self.nodes[i+1]).value)
+                    left = self.nodes[i-1].getvalue(variables)
+                    if left.type != QUtil.lexer['num']:
+                        val = -float(self.nodes[i+1].getvalue(variables).value)
                         self.cut(i+1)
                     else:
-                        val = float(left.value) -float(self.getvalue(self.nodes[i+1]).value)
+                        val = float(left.value) -float(self.nodes[i+1].getvalue(variables).value)
                         self.cut(i+1)
                         self.cut(i-1)
                         i = i - 1
@@ -154,7 +144,7 @@ class QStatement:
                     
                     if val == int(val):
                         val = int(val)
-                    self.nodes[i]=QNode(QNode.lexer['num'], str(val))
+                    self.nodes[i]=QNode(QUtil.lexer['num'], str(val))
                 else:
                     i = i + 1
             
@@ -162,7 +152,7 @@ class QStatement:
             while i < end - self.cutlength:
                 node = self.nodes[i]
                 if node.value == "==":
-                    val = self.getvalue(self.nodes[i-1]).value == self.getvalue(self.nodes[i+1]).value
+                    val = self.nodes[i-1].getvalue(variables).value == self.nodes[i+1].getvalue(variables).value
                     self.cut(i+1)
                     self.cut(i-1)
                     #end = end - 2
@@ -172,7 +162,7 @@ class QStatement:
                     else:
                         self.nodes[i].value = "false"
                 elif node.value == "!=":
-                    val = self.getvalue(self.nodes[i-1]).value != self.getvalue(self.nodes[i+1]).value
+                    val = self.nodes[i-1].getvalue(variables).value != self.nodes[i+1].getvalue(variables).value
                     self.cut(i+1)
                     self.cut(i-1)
                     #end = end - 2
@@ -182,7 +172,7 @@ class QStatement:
                     else:
                         self.nodes[i].value = "false"
                 elif node.value == ">":
-                    val = float(self.getvalue(self.nodes[i-1]).value) > float(self.getvalue(self.nodes[i+1]).value)
+                    val = float(self.nodes[i-1].getvalue(variables).value) > float(self.nodes[i+1].getvalue(variables).value)
                     self.cut(i+1)
                     self.cut(i-1)
                     #end = end - 2
@@ -192,18 +182,16 @@ class QStatement:
                     else:
                         self.nodes[i].value = "false"
                 elif node.value == "<":
-                    val = float(self.getvalue(self.nodes[i-1]).value) < float(self.getvalue(self.nodes[i+1]).value)
-                    #print(self.variables)
+                    val = float(self.nodes[i-1].getvalue(variables).value) < float(self.nodes[i+1].getvalue(variables).value)
                     self.cut(i+1)
                     self.cut(i-1)
-                    #end = end - 2
                     i = i - 1
                     if val:
                         self.nodes[i].value = "true"
                     else:
                         self.nodes[i].value = "false"
                 elif node.value == ">=":
-                    val = float(self.getvalue(self.nodes[i-1]).value) >= float(self.getvalue(self.nodes[i+1]).value)
+                    val = float(self.nodes[i-1].getvalue(variables).value) >= float(self.nodes[i+1].getvalue(variables).value)
                     self.cut(i+1)
                     self.cut(i-1)
                     #end = end - 2
@@ -213,7 +201,7 @@ class QStatement:
                     else:
                         self.nodes[i].value = "false"
                 elif node.value == "<=":
-                    val = float(self.getvalue(self.nodes[i-1]).value) <= float(self.getvalue(self.nodes[i+1]).value)
+                    val = float(self.nodes[i-1].getvalue(variables).value) <= float(self.nodes[i+1].getvalue(variables).value)
                     self.cut(i+1)
                     self.cut(i-1)
                     #end = end - 2
@@ -229,7 +217,7 @@ class QStatement:
             while i < end - self.cutlength:
                 node = self.nodes[i]
                 if node.value == "&&":
-                    val = self.boolvalue(self.getvalue(self.nodes[i-1])) and self.boolvalue(self.getvalue(self.nodes[i+1]))
+                    val = self.boolvalue(self.nodes[i-1].getvalue(variables)) and self.boolvalue(self.nodes[i+1].getvalue(variables))
                     self.cut(i+1)
                     self.cut(i-1)
                     #end = end - 2
@@ -244,7 +232,7 @@ class QStatement:
             while i < end - self.cutlength:
                 node = self.nodes[i]
                 if node.value == "||":
-                    val = self.boolvalue(self.getvalue(self.nodes[i-1])) or self.boolvalue(self.getvalue(self.nodes[i+1]))
+                    val = self.boolvalue(self.nodes[i-1].getvalue(variables)) or self.boolvalue(self.nodes[i+1].getvalue(variables))
                     self.cut(i+1)
                     self.cut(i-1)
                     #end = end - 2
@@ -260,16 +248,12 @@ class QStatement:
             while i < end - self.cutlength:
                 node = self.nodes[i]
                 if node.value == "=":
-                    self.variables[self.nodes[i-1].value] = self.getvalue(self.nodes[i+1])
-                    #print(self.inputs)
-                    #print(self.variables)
-                    #for line in traceback.format_stack():
-                    #    print(line.strip())
+                    variables[self.nodes[i-1].value] = self.nodes[i+1].getvalue(variables)
                 i = i + 1
 
         
             return i
 
-    def bool_true(self):
-        self.execute(0, len(self.nodes), self.variables)
+    def bool_true(self, variables):
+        self.execute(0, len(self.nodes), variables)
         return len(self.nodes) == 1 and self.nodes[0].bool_true()

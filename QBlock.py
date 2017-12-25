@@ -7,12 +7,9 @@ class QBlock:
     meta = None
     sub_blocks = []
 
-    variables = {}
-    
-    def __init__(self, meta, inputs, variables):
+    def __init__(self, meta, inputs):
         self.inputs = inputs
         self.sub_blocks = []
-        self.variables = variables
         self.meta = meta
     
         
@@ -22,9 +19,9 @@ class QBlock:
         while i < len(self.inputs):
             input = copy.deepcopy(self.inputs[i])
             
-            stmt = QStatement(self.inputs[i], self.variables)
+            stmt = QStatement(self.inputs[i])
             if "{" in input:
-                stmt = QStatement(input[0: len(input) - 1], self.variables)
+                stmt = QStatement(input[0: len(input) - 1])
                 try:
                     cond = input[input.index("("): input.rindex(")") + 1 ]
                 except ValueError:
@@ -35,23 +32,21 @@ class QBlock:
             elif "}" in input:
                 infos = stack.pop()
                 if len(stack) == 0:
-                    sub_block = QBlock([infos[1], QStatement(infos[2], self.variables)], self.inputs[ infos[0]: i ], self.variables)
+                    sub_block = QBlock([infos[1], QStatement(infos[2])], self.inputs[ infos[0]: i ])
                     sub_block.compile()
                     self.sub_blocks.append(sub_block)
             elif len(stack) == 0:
-                stmt = QStatement(self.inputs[i], self.variables)
+                stmt = QStatement(self.inputs[i])
                 self.sub_blocks.append(stmt)
             i = i + 1
     def run(self, variables):
-        self.variables = variables
         i = 0
         while i < len(self.sub_blocks):
             sub_block = copy.deepcopy(self.sub_blocks[i])
             if isinstance(sub_block, QBlock):
                 if sub_block.meta[0].value == "if":
                     stmt = copy.deepcopy(sub_block.meta[1])
-                    stmt.variables = self.variables
-                    if stmt.bool_true():
+                    if stmt.bool_true(variables):
                         sub_block.run(variables)
                     else:
                         flag = False
@@ -60,8 +55,7 @@ class QBlock:
                             sub_block = copy.deepcopy(self.sub_blocks[i])
                             if(sub_block.meta[0].value == "elif"):
                                 stmt = copy.deepcopy(sub_block.meta[1])
-                                stmt.variables = self.variables
-                                flag = stmt.bool_true()
+                                flag = stmt.bool_true(variables)
                                 if flag:
                                     sub_block.run(variables)
                                     break
@@ -72,11 +66,9 @@ class QBlock:
                             sub_block.run(variables)
                 elif sub_block.meta[0].value == "while":
                     stmt = copy.deepcopy(sub_block.meta[1])
-                    stmt.variables = variables
-                    while stmt.bool_true():
+                    while stmt.bool_true(variables):
                         sub_block.run(variables)
                         stmt = copy.deepcopy(sub_block.meta[1])
-                        stmt.variables = variables
             else:
                 sub_block.execute(0, len(sub_block.nodes), variables)
             i = i + 1
