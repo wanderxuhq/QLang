@@ -1,7 +1,12 @@
-a=-100.5
-if(a<0){
-	print(-a)
+a=9
+b=a
+c=a
+if(c<3){
+	print("case 1")
 }
-else{
-	print(a)
+elif(c<10){
+	print("case 2")
+	print("case 3")
 }
+print("\n")
+print("end\n")
