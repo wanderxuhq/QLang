@@ -1,15 +1,14 @@
+from QUtil import *
 class QNode:
     type = None
     value = None
+    
     def __init__(self, type, value):
         self.type = type
         self.value = value
     def __str__(self):
-        return str(self.value) + " " + str(self.type)
+        return str(self.value)
     def __repr__(self):
-<<<<<<< Updated upstream
-        return str(self.value) + " " + str(self.type)
-=======
         return str(self.value)
     def bool_true(self):
         return self.value == "true"
@@ -30,6 +29,5 @@ class QNode:
             return self.getvalue(variables)
         else:
             return self.value
->>>>>>> Stashed changes
 class NumQNode(QNode):{}
 class AlpQNode(QNode):{}
