@@ -1,6 +1,7 @@
 #import string
 import re
 import logging
+<<<<<<< Updated upstream
 from QNode import *
 logger=logging.getLogger("QLang")
 logger.setLevel(10)
@@ -22,6 +23,15 @@ keywords = ["true", "false"]
 tokens=[]
 cutlength = 0
 variables = {}
+=======
+from QBlock import *
+logging.basicConfig(format='[%(asctime)s, line %(lineno)d]: %(message)s',level=logging.DEBUG)
+inputs = []
+with open('demo/function.ql') as f:
+    for line in f:
+        inputs.append(line)
+f.closed
+>>>>>>> Stashed changes
 
 def cut(tokens, i):
     global cutlength
