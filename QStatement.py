@@ -5,7 +5,7 @@ class QStatement:
     nodes = None
     cutlength = 0
     pattern = re.compile(
-        r"\s*((?P<cmt>\/\/.*)|(?P<var>[_$A-Za-z][_\$A-Za-z0-9]*)|(?P<num>((?<=[+-])[+-][0-9]+(\.[0-9]+)?)|([0-9]+)(\.[0-9]+)?)|(?P<alp>[A-Za-z][A-Za-z0-9]*)|(?P<str>\"(\\\\|\\\"|\\n|[^\"])*\")|(?P<dob>==|!=|<=|>=|&&|\|\|)|(?P<pnt>[.,/#!$%^&\*;:{}+-=_`~()><]))?"
+        r"\s*((?P<cmt>\/\/.*)|(?P<var>[_$A-Za-z][_\$A-Za-z0-9]*)|(?P<num>((?!\d)[+-][0-9]+(\.[0-9]+)?)|([0-9]+)(\.[0-9]+)?)|(?P<alp>[A-Za-z][A-Za-z0-9]*)|(?P<str>\"(\\\\|\\\"|\\n|[^\"])*\")|(?P<dob>==|!=|<=|>=|&&|\|\|)|(?P<pnt>[.,/#!$%^&\*;:{}+-=_`~()><]))?"
     )
     def __init__(self, inputs):
         self.inputs = inputs
@@ -53,12 +53,17 @@ class QStatement:
             self.nodes = nodes
             return nodes
 
-    def execute(self, start, end, variables):
+    def execute(self, start, end, variables, functions):
         stack=[]
         i = start
-        if i == 0 and len(self.nodes) > 0 and self.nodes[0].value == "print":
-           self.execute(1, len(self.nodes), variables)
-           print(self.nodes[1].getstrval(variables), end="")
+        if i == 0 and len(self.nodes) > 0 and self.nodes[0].type == QUtil.TokenType.VAR and self.nodes[0].value not in QUtil.keywords:
+            if self.nodes[0].value == "print":
+                self.execute(1, len(self.nodes), variables, functions)
+                print(self.nodes[1].getstrval(variables), end="")
+            else:
+                #call function
+                function = functions[self.nodes[0].value]
+                function.call(self, functions)
         else:
             
             while i < end - self.cutlength:
@@ -71,7 +76,7 @@ class QStatement:
                     #print(startpos, i)
                     if len(stack) == 0:
                         #print("call!")
-                        k = self.execute(startpos, i, variables)
+                        k = self.execute(startpos, i, variables, functions)
                         self.cut(k)
                         self.cut(k - 2)
                         #end = end - 2
@@ -257,6 +262,6 @@ class QStatement:
         
             return i
 
-    def bool_true(self, variables):
-        self.execute(0, len(self.nodes), variables)
+    def bool_true(self, variables, functions):
+        self.execute(0, len(self.nodes), variables, functions)
         return len(self.nodes) == 1 and self.nodes[0].bool_true()

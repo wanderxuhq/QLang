@@ -1,33 +1,22 @@
 #import string
 import logging
-from QBlock import *
+from QProgram import *
 logging.basicConfig(format='[%(asctime)s, line %(lineno)d]: %(message)s',level=logging.DEBUG)
 inputs = []
-with open('demo/butterfly.ql') as f:
+with open('demo/function.ql') as f:
     for line in f:
         inputs.append(line)
 f.closed
 
-logging.debug(inputs)
+#for input in inputs:
+#    logging.debug(input)
 
-a = QBlock(None, inputs)
-a.compile()
-a.run({})
-
-
-#def execute end
-#while len(tokens) > 1:
-#execute(tokens, 0, len(tokens))
-#print(len(tokens))
-#print("END!")
-#print(a.variables)
+#a = QBlock(None, inputs)
+#a.compile()
+##a.run({})
 #print(a)
-#print(a.sub_blocks)
-        
-    #m = pattern.match(input)
-    
-#for m in re.match(pattern, input):
-#    print(m.group('num'))
-    #f.write(token[0]+"\n")
-#f.close()
-#if __name__ == "main":
+
+p = QProgram(inputs)
+p.compile()
+logging.debug(p.functions)
+p.run()

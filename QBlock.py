@@ -36,18 +36,19 @@ class QBlock:
                     sub_block.compile()
                     self.sub_blocks.append(sub_block)
             elif len(stack) == 0:
-                stmt = QStatement(self.inputs[i])
+                #stmt = QStatement(self.inputs[i])
                 self.sub_blocks.append(stmt)
             i = i + 1
-    def run(self, variables):
+
+    def run(self, variables, functions):
         i = 0
         while i < len(self.sub_blocks):
             sub_block = copy.deepcopy(self.sub_blocks[i])
             if isinstance(sub_block, QBlock):
                 if sub_block.meta[0].value == "if":
                     stmt = copy.deepcopy(sub_block.meta[1])
-                    if stmt.bool_true(variables):
-                        sub_block.run(variables)
+                    if stmt.bool_true(variables, functions):
+                        sub_block.run(variables, functions)
                     else:
                         flag = False
                         while not flag:
@@ -55,20 +56,20 @@ class QBlock:
                             sub_block = copy.deepcopy(self.sub_blocks[i])
                             if(sub_block.meta[0].value == "elif"):
                                 stmt = copy.deepcopy(sub_block.meta[1])
-                                flag = stmt.bool_true(variables)
+                                flag = stmt.bool_true(variables, functions)
                                 if flag:
-                                    sub_block.run(variables)
+                                    sub_block.run(variables, functions)
                                     break
                             else:
                                 break
                         sub_block = copy.deepcopy(self.sub_blocks[i])
                         if not flag and sub_block.meta[0].value == "else":
-                            sub_block.run(variables)
+                            sub_block.run(variables, functions)
                 elif sub_block.meta[0].value == "while":
                     stmt = copy.deepcopy(sub_block.meta[1])
-                    while stmt.bool_true(variables):
-                        sub_block.run(variables)
+                    while stmt.bool_true(variables, functions):
+                        sub_block.run(variables, functions)
                         stmt = copy.deepcopy(sub_block.meta[1])
             else:
-                sub_block.execute(0, len(sub_block.nodes), variables)
+                sub_block.execute(0, len(sub_block.nodes), variables, functions)
             i = i + 1

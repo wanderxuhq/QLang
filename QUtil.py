@@ -9,4 +9,4 @@ class QUtil:
         DOB=5
         PNT=6
         CMT=7
-    keywords = ["true", "false", "if", "elif", "else", "while"]
+    keywords = ["true", "false", "if", "elif", "else", "while", "return"]
