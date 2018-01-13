@@ -34,4 +34,4 @@ class QProgram:
 
     def run(self):
         qf = self.functions["main"]
-        qf.body.run(qf.parameters, self.functions)
+        qf.body.run({}, self.functions)

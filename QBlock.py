@@ -48,7 +48,9 @@ class QBlock:
                 if sub_block.meta[0].value == "if":
                     stmt = copy.deepcopy(sub_block.meta[1])
                     if stmt.bool_true(variables, functions):
-                        sub_block.run(variables, functions)
+                        result = sub_block.run(variables, functions)
+                        if isinstance(result, QNode):
+                            return result
                     else:
                         flag = False
                         while not flag:
@@ -58,18 +60,26 @@ class QBlock:
                                 stmt = copy.deepcopy(sub_block.meta[1])
                                 flag = stmt.bool_true(variables, functions)
                                 if flag:
-                                    sub_block.run(variables, functions)
-                                    break
+                                    result = sub_block.run(variables, functions)
+                                    if isinstance(result, QNode):
+                                        return result
+                                    #break
                             else:
                                 break
                         sub_block = copy.deepcopy(self.sub_blocks[i])
                         if not flag and sub_block.meta[0].value == "else":
-                            sub_block.run(variables, functions)
+                            result = sub_block.run(variables, functions)
+                            if isinstance(result, QNode):
+                                return result
                 elif sub_block.meta[0].value == "while":
                     stmt = copy.deepcopy(sub_block.meta[1])
                     while stmt.bool_true(variables, functions):
-                        sub_block.run(variables, functions)
+                        resutl = sub_block.run(variables, functions)
+                        if isinstance(result, QNode):
+                            return result
                         stmt = copy.deepcopy(sub_block.meta[1])
             else:
-                sub_block.execute(0, len(sub_block.nodes), variables, functions)
+                result = sub_block.execute(0, len(sub_block.nodes), variables, functions)
+                if isinstance(result, QNode):
+                    return result
             i = i + 1

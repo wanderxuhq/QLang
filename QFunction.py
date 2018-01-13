@@ -4,8 +4,6 @@ class QFunction:
     parameters = None
     body = None
 
-    caller = None
-    #callee
     def __init__(self, name, parameters, body):
         self.name = name
         self.parameters = self.parse_parameter(parameters)
@@ -20,22 +18,20 @@ class QFunction:
             parameters.append(QNode(QUtil.TokenType.VAR, m.group('var')))
         return parameters
 
-    def call(self, caller, functions):
-        self.caller = caller
-        i = 2
+    def call(self, caller, params, functions):
+        #i = 2
         k = 0
-        params = []
+        #params = []
         variables = {}
-        while i < len(caller.nodes) - 1:
-            params.append(caller.nodes[i].getvalue(caller.nodes[i].value))
-            i = i + 2
-            k = k + 1
+        #while i < len(caller.nodes) - 1:
+        #    params.append(caller.nodes[i].getvalue(caller.nodes[i].value))
+        #    i = i + 2
+        #    k = k + 1
         i = 0
         while i < len(self.parameters):
             variables[self.parameters[i].value] = params[i]
             i = i + 1
-        self.body.run(variables, functions)
-        self.caller = None
+        return self.body.run(variables, functions)
     def __str__(self):
         return str(self.name) + ", " + str(self.parameters) + ", "  + str(self.body)
     def __repr__(self):
