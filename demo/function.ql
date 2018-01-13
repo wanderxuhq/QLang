@@ -7,7 +7,7 @@ abs(a,b){
 	}
 	else{
 		print(">0\n")
-		return 0+a
+		return a
 	}
 }
 

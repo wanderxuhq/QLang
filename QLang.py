@@ -8,8 +8,8 @@ with open('demo/function.ql') as f:
         inputs.append(line)
 f.closed
 
-#for input in inputs:
-#    logging.debug(input)
+for input in inputs:
+    logging.debug(input)
 
 #a = QBlock(None, inputs)
 #a.compile()
@@ -18,5 +18,5 @@ f.closed
 
 p = QProgram(inputs)
 p.compile()
-logging.debug(p.functions)
+#logging.debug(p.functions)
 p.run()
