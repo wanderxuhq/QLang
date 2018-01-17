@@ -5,7 +5,7 @@ class QStatement:
     nodes = None
     cutlength = 0
     pattern = re.compile(
-        r"\s*((?P<cmt>\/\/.*)|(?P<var>[_$A-Za-z][_\$A-Za-z0-9]*)|(?P<num>((?!\d)[+-][0-9]+(\.[0-9]+)?)|([0-9]+)(\.[0-9]+)?)|(?P<alp>[A-Za-z][A-Za-z0-9]*)|(?P<str>\"(\\\\|\\\"|\\n|[^\"])*\")|(?P<dob>==|!=|<=|>=|&&|\|\|)|(?P<pnt>[.,/#!$%^&\*;:{}+-=_`~()><]))?"
+        r"\s*((?P<cmt>\/\/.*)|(?P<var>[_$A-Za-z][_\$A-Za-z0-9]*)|(?P<num>((?<=[+-])[+-][0-9]+(\.[0-9]+)?)|([0-9]+)(\.[0-9]+)?)|(?P<alp>[A-Za-z][A-Za-z0-9]*)|(?P<str>\"(\\\\|\\\"|\\n|[^\"])*\")|(?P<dob>==|!=|<=|>=|&&|\|\|)|(?P<pnt>[.,/#!$%^&\*;:{}+-=_`~()><]))?"
     )
     def __init__(self, inputs):
         self.inputs = inputs
@@ -56,7 +56,8 @@ class QStatement:
     def execute(self, start, end, variables, functions):
         stack=[]
         i = start
-        while i < end - self.cutlength:
+        l = end
+        while i < len(self.nodes):
         #call function
             if i < end - 1 and len(self.nodes) > 0 and self.nodes[i].type == QUtil.TokenType.VAR and self.nodes[i + 1].value == "(" and self.nodes[i].value not in QUtil.keywords:
                 if self.nodes[i].value == "print":
@@ -72,23 +73,32 @@ class QStatement:
                     fstack = []
                     fstack.append(l)
                     l = l + 1
+                    k = l
                     while len(fstack) > 0:
-                        if (self.nodes[l].type == QUtil.TokenType.VAR and self.nodes[l].value not in QUtil.keywords) or self.nodes[l].type == QUtil.TokenType.NUM or self.nodes[l].type == QUtil.TokenType.STR:
-                            params.append(self.nodes[l].getvalue(self.nodes[l].value))
+                        if self.nodes[l].value == ",":
+                            l = self.execute(k, l - 1, variables, functions)
+                            params.append(self.nodes[k])
+                            l = k + 1
                         elif self.nodes[l].value == "(":
                             fstack.append(l)
                         elif self.nodes[l].value == ")":
                             fstack.pop()
                         l = l + 1
+                    #self.cutlength = 0
+                    self.cutlength = 0
+                    self.execute(k, l - 1 - self.cutlength, variables, functions)
+                    
+                    params.append(self.nodes[k])
                     result = function.call(self, params, functions)
                     k = i
-                    while k < l - 1:
-                        self.cut(i)
+                    while k < l - self.cutlength:
+                        del(self.nodes[i])
                         k = k + 1
+                    l = i + 1
                     self.nodes[i] = result
-                    print("check")
+                    #print("check")
             elif len(self.nodes) > 0 and self.nodes[i].value == "return": #i should always == 0
-                self.execute(start + 1, end, variables, functions)
+                self.execute(start + 1, end - self.cutlength, variables, functions)
                 #self.nodes[1]
                 #1 -> some variable
                 return self.nodes[1].getvalue(variables)
@@ -96,6 +106,8 @@ class QStatement:
             else:
                 i = i + 1
         
+        end = l
+        #self.cutlength = 0
         i = start
         while i < end - self.cutlength:
             node = self.nodes[i]

@@ -1,18 +1,14 @@
-abs(a,b){
-	print(a)
-	print("\n")
+abs(a){
 	if(a<0){
-		print("<0\n")
 		return -a
 	}
 	else{
-		print(">0\n")
 		return a
 	}
 }
 
 main(){
-	k=abs(100,5)
+	k=abs(-100)
 	print("main\n")
-	print(k+"hhhhhhhhhhh")
+	print(k)
 }

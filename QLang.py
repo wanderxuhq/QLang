@@ -3,7 +3,7 @@ import logging
 from QProgram import *
 logging.basicConfig(format='[%(asctime)s, line %(lineno)d]: %(message)s',level=logging.DEBUG)
 inputs = []
-with open('demo/function.ql') as f:
+with open('demo/fibonacci.ql') as f:
     for line in f:
         inputs.append(line)
 f.closed
