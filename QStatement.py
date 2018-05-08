@@ -57,9 +57,9 @@ class QStatement:
         stack=[]
         i = start
         l = end
-        while i < len(self.nodes):
+        while i < end - self.cutlength:
         #call function
-            if i < end - 1 and len(self.nodes) > 0 and self.nodes[i].type == QUtil.TokenType.VAR and self.nodes[i + 1].value == "(" and self.nodes[i].value not in QUtil.keywords:
+            if i < end - 1 - self.cutlength and len(self.nodes) > 0 and self.nodes[i].type == QUtil.TokenType.VAR and self.nodes[i + 1].value == "(" and self.nodes[i].value not in QUtil.keywords:
                 if self.nodes[i].value == "print":
                     self.execute(i + 1, len(self.nodes), variables, functions)
                     print(self.nodes[i + 1].getstrval(variables), end="")
@@ -85,14 +85,15 @@ class QStatement:
                             fstack.pop()
                         l = l + 1
                     #self.cutlength = 0
-                    self.cutlength = 0
-                    self.execute(k, l - 1 - self.cutlength, variables, functions)
+                    #self.cutlength = 0
+                    self.execute(k, l - 1, variables, functions)
                     
                     params.append(self.nodes[k])
                     result = function.call(self, params, functions)
                     k = i
-                    while k < l - self.cutlength:
+                    while k < l - 1 - self.cutlength:
                         del(self.nodes[i])
+                        #end = end - 1
                         k = k + 1
                     l = i + 1
                     self.nodes[i] = result
