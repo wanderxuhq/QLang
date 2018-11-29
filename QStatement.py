@@ -1,15 +1,20 @@
 import re
 from QNode import *
+from QOperation import *
+from QExpression import *
 class QStatement:
     inputs = None
     nodes = None
     cutlength = 0
+    expression = None
+    opstack = None
     pattern = re.compile(
         r"\s*((?P<cmt>\/\/.*)|(?P<var>[_$A-Za-z][_\$A-Za-z0-9]*)|(?P<num>((?<=[+-])[+-][0-9]+(\.[0-9]+)?)|([0-9]+)(\.[0-9]+)?)|(?P<alp>[A-Za-z][A-Za-z0-9]*)|(?P<str>\"(\\\\|\\\"|\\n|[^\"])*\")|(?P<dob>==|!=|<=|>=|&&|\|\|)|(?P<pnt>[.,/#!$%^&\*;:{}+-=_`~()><]))?"
     )
     def __init__(self, inputs):
         self.inputs = inputs
         self.parse()
+        self.opstack = [0]
     
     def __str__(self):
         return str(self.inputs)
@@ -53,6 +58,21 @@ class QStatement:
             self.nodes = nodes
             return nodes
 
+    def compile(self, i):
+        
+        while i < len(self.nodes):
+            node = self.nodes[i]
+            if node.type == QUtil.TokenType.VAR or node.type == QUtil.TokenType.NUM or node.type == QUtil.TokenType.STR:
+                self.expression = QExpression(node)
+            elif node.value == '+' or node.value == '-':
+                if 1 <= self.opstack[len(self.opstack) - 1]: # 优先级低当爸爸
+                    self.expression = QExpression(node).add_children(self.expression)
+                else:
+                    del(self.opstack[len(self.opstack) - 1])
+                self.compile(i + 1)
+                opstack.append(1)
+            elif node.value == '*' or node.value == '/'
+            
     def execute(self, start, end, variables, functions):
         stack=[]
         i = start
