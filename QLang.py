@@ -1,6 +1,7 @@
 #import string
 import logging
-from QProgram import *
+#from QProgram import *
+from QStatement import *
 from QExpression import *
 from QOperation import *
 logging.basicConfig(format='[%(asctime)s, line %(lineno)d]: %(message)s',level=logging.DEBUG)
@@ -29,7 +30,9 @@ f.closed
 #b=QExpression()
 #b.value=3
 #x.children=[a,b]
-x=QExpression([[QNode(2,16),[QNode(2,25),QNode(2,94)]],[QNode(2,6),QNode(2,7)]])
+#x=QExpression([[QNode(2,16),[QNode(2,25),QNode(2,94)]],[QNode(2,6),QNode(2,7)]])
 #x.operation=Plus()
+#x.run()
+#print(x.node.value)
+x=QStatement('(1+2+3*4)^5+6+7+8+9')
 x.run()
-print(x.node.value)
