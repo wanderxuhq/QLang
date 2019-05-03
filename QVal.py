@@ -10,8 +10,6 @@ class QNode:
         return str(self.value)
     def __repr__(self):
         return str(self.value)
-    def bool_true(self):
-        return self.value == "true"
 
     def getvalue(self, variables):
         if self.type == QUtil.TokenType.VAR and self.value not in QUtil.keywords:

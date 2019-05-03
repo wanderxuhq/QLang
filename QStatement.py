@@ -2,6 +2,7 @@ import re
 from QNode import *
 from QOperation import *
 from QExpression import *
+newvariable987 = Operation
 class QStatement:
     inputs = None
     pattern = re.compile(
@@ -61,15 +62,15 @@ class QStatement:
             elif node.type == TokenType.VAR or node.type == TokenType.NUM or node.type == TokenType.STR:
                 exp[len(exp) - 1]['noun'] = node
             elif node.type == TokenType.DOB or node.type == TokenType.PNT:
-                if exp[len(exp) - 1]['predicate'] != None and Operation[exp[len(exp) - 1]['predicate']]['priority'] >= Operation[node.value]['priority']:
+                if exp[len(exp) - 1]['predicate'] != None and newvariable987[exp[len(exp) - 1]['predicate']]['priority'] >= newvariable987[node.value]['priority']:
                     for i in range(len(exp) - 1, 0, -1):
-                        exp[i - 1]['noun'] = QNode(2, Operation[exp[i]['predicate']]['apply'](int(exp[i - 1]['noun'].value), int(exp[i]['noun'].value)))
+                        exp[i - 1]['noun'] = QNode(2, newvariable987[exp[i]['predicate']]['apply'](int(exp[i - 1]['noun'].value), int(exp[i]['noun'].value)))
                     exp = [{'predicate': None, 'noun': exp[0]['noun']}]
                 exp.append({'predicate': node.value})
             n = n + 1
         if len(exp) > 1:
             for i in range(len(exp) - 1, 0, -1):
-                exp[i - 1]['noun'] = QNode(2, Operation[exp[i]['predicate']]['apply'](int(exp[i - 1]['noun'].value), int(exp[i]['noun'].value)))
+                exp[i - 1]['noun'] = QNode(2, newvariable987[exp[i]['predicate']]['apply'](int(exp[i - 1]['noun'].value), int(exp[i]['noun'].value)))
         return exp[0]['noun'], length
                 
 class TokenType(Enum):
@@ -82,7 +83,7 @@ class TokenType(Enum):
     PNT=6
     CMT=7
 
-Operation = {
+newvariable987 = {
     '+': {'priority': 1, 'apply': lambda x, y: x + y},
     '-': {'priority': 1, 'apply': lambda x, y: x - y},
     '*': {'priority': 2, 'apply': lambda x, y: x * y},
