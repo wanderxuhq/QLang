@@ -1,9 +1,6 @@
-#import string
 import logging
 #from QProgram import *
 from QStatement import *
-from QExpression import *
-from QOperation import *
 logging.basicConfig(format='[%(asctime)s, line %(lineno)d]: %(message)s',level=logging.DEBUG)
 inputs = []
 with open('demo/fibonacci.ql') as f:
@@ -34,5 +31,6 @@ f.closed
 #x.operation=Plus()
 #x.run()
 #print(x.node.value)
-x=QStatement('(1+2+3*4)^5+6+7+8+9')
+x=QStatement('((1+2+3.5*4)**5+(6+7*8))+(9)')
+#x=QStatement('1+2')
 x.run()
