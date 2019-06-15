@@ -1,8 +1,15 @@
 <html>
 <head>
+<script type = "text/javascript" src="qlang.js"></script>
+<script type="text/javascript">
+function run(){
+	document.getElementById('result').innerHTML = new QStatement(document.getElementById('input').value).run().value;
+}
+</script>
 </head>
 <body>
-<textarea id = "input" onchange="core()"></textarea>
-<script type = "text/javascript" src="QLang.js"></script>
+<textarea id="input">((1+2+3.5*4)**5+(6+7*8))+(9)</textarea>
+<button id="run" onclick="run()">run!</button>
+<div id="result"></div>
 </body>
 </html>

@@ -1,198 +1,90 @@
-var log = console.log.bind(console);
-var debug = console.debug.bind(console);
-var err = console.error.bind(console);
+//(function(){
+//var pattern = /\s*((\/\/.*)|([_$A-Za-z][_\$A-Za-z0-9]*)|([0-9]+(\.[0-9]+)?)|(\"(\\\\|\\\"|\\n|[^\"])*\")|(\*\*|==|!=|<=|>=|&&|\|\||[.,/#!$%^&\*;:{}+-=_`~()><]))?/g;
 
-(function(){
-	
-}());
-
-var TYPE = {
-	NUMBER: 1,
-	STRING: 2,
-}
-var variables = new Map();
-
-function core(){
-	var text = document.getElementById("input").value;
-	var statements = text.split("\n");
-	//log(statements);
-	for(statement of statements){
-		//log(statement);
-		execute(statement);
+class QNode{
+	constructor(type, value){
+		this.type = type;
+		this.value = value;
 	}
+	static NUM = 1;
+	static CHAR = 2;
+	static STR = 3;
+	static VAR = 4;
+	static PNT = 5;
 }
 
-var matches = [
-		['(','[','{'],
-		[')',']','}']
-	];
+function QStatement(inputs, variables){
+	this.inputs = inputs;
+	this.variables = variables || {};
+	this.pattern = /\s*((?<cmt>\/\/.*)|(?<var>[_$A-Za-z][_\$A-Za-z0-9]*)|(?<num>[0-9]+(\.[0-9]+)?)|(?<str>\"(\\\\|\\\"|\\n|[^\"])*\")|(?<pnt>\*\*|==|!=|<=|>=|&&|\|\||[.,/#!$%^&\*;:{}+-=_`~()><]))?/g;
 	
-function getMatch(tokens, i){
-	var matches = [
-		['(','[','{'],
-		[')',']','}']
-	];
-	
-	var operation = new Map([
-		['+', function(){
-			console.log('+');
-		}]
-	]);
-	
-	var matchStack = [];
-	while (i < tokens.length){
-		var t = tokens[i];
-	var uindex = matches[0].indexOf(t);
-	var oindex = matches[1].indexOf(t);
-		if(uindex != -1){
-			var u = matches[0][uindex];
-			matchStack.push({t, i});
-		} else if(oindex != -1){
-			var o = matches[1][oindex];
-			if(t === o){
-				matchStack.pop();
+	this.run = function(){
+		var nodes = [];
+		do{
+			var m = this.pattern.exec(this.inputs);
+			if (m.groups['var'] !== undefined){
+				//if m.group('var') in QUtil.keywords:
+				//    nodes.append(m.group('var'))
+				//else:
+				nodes.push(new QNode(QNode.VAR, m.groups['var']));
+			} else if (m.groups['num'] != null){
+				nodes.push(new QNode(QNode.NUM, m.groups['num']));
+			} else if (m.groups['str'] != null){
+				nodes.push(new QNode(QNode.STR, m.groups['str']));
+			} else if (m.groups['pnt'] != null){
+				nodes.push(new QNode(QNode.PNT, m.groups['pnt']));
 			}
-			if( matchStack.length === 0 ){
-				return i;
+		} while(m.index < inputs.length);
+		return this.execute(nodes)[0];
+	}
+	
+	this.execute = function(nodes){
+		console.log(this.inputs, nodes);
+		var exp = [{predicate: null}];
+		var length = nodes.length;
+		var n = 0;
+		while (n < length){
+			var node = nodes[n];
+			console.log(node);
+			if (node.value == '('){
+				[exp[exp.length - 1]['noun'], skip] = this.execute(nodes.slice(n + 1, nodes.length));
+				console.log(exp[exp.length - 1], skip);
+				n = n + skip;
+			} else if (node.value == ')'){
+				length = n + 1;
+				break;
+			} else if (node.type == QNode.VAR || node.type == QNode.NUM || node.type == QNode.STR){
+				exp[exp.length - 1]['noun'] = node;
+			} else if (node.type == QNode.PNT){
+				if (exp[exp.length - 1]['predicate'] !== null && this.Operation[exp[exp.length - 1]['predicate']]['priority'] >= this.Operation[node.value]['priority']){
+					for(var i = exp.length - 1; i > 0; i--){
+						console.log('hit!');
+						exp[i - 1]['noun'] = new QNode(QNode.NUM, this.Operation[exp[i]['predicate']]['apply'](parseFloat(exp[i - 1]['noun'].value), parseFloat(exp[i]['noun'].value)));
+					}
+					exp = [{'predicate': null, 'noun': exp[0]['noun']}];
+				}
+				exp.push({'predicate': node.value})
+			}
+			n = n + 1;
+		}
+		if (exp.length > 1){
+			for(var i = exp.length - 1; i > 0; i--){
+				console.log('hit!');
+				exp[i - 1]['noun'] = new QNode(QNode.NUM, this.Operation[exp[i]['predicate']]['apply'](parseFloat(exp[i - 1]['noun'].value), parseFloat(exp[i]['noun'].value)))
 			}
 		}
-	i++;
-	}
-	console.log(matchStack);
-}
-
-function calExp(tokens){
-	var operation = new Map([
-		['+', function(a, b){
-			return a + b;
-		}],
-		['-', function(a, b){
-			return a - b;
-		}],
-	]);
-	
-	var matchStack = [];
-	var operationMark = undefined;
-	var laseValue = undefined;
-	var laseValueIndex = undefined;
-	for(var i = 0; i < tokens.length;){
-		var t = tokens[i];
-	var uindex = matches[0].indexOf(t);
-	//var oindex = matches[1].indexOf(t);
-		if(uindex != -1){
-			var u = matches[0][uindex];
-			//var oindex = tokens.indexOf(matches[1][uindex]);
-			var oindex = getMatch(tokens, i);
-			tmpResult = calExp(tokens.slice(i + 1, oindex));
-			tokens.splice(i, oindex - i + 1 , tmpResult );
-			lastValue = tmpResult;
-			matchStack.push({t, i});
-		} 
-		/*
-		else if(oindex != -1){
-			var o = matches[1][oindex];
-			if(t === o){
-				tokens = tokens.splice(matchStack[matches[0][oindex]].i,i,calExp(tokens.slice(matchStack[matches[0][oindex]].i,i)));
-				matchStack.pop();
-			}
-		} 
-		*/
-		else if(operation.has(t)) {
-			operationMark = t;
-			i++;
-		} else {
-			if(operationMark != undefined){
-				r = operation.get(operationMark)(getValue(laseValue),  getValue(t));
-				laseValue = r;
-				log(r);
-				tokens.splice(laseValueIndex, i - laseValueIndex + 1 , r );
-				i = laseValueIndex + 1;
-				if( tokens.length === 1 )
-					return r;
-			}
-			else{
-				laseValueIndex = i;
-				laseValue = t;
-				i++;
-			}
-			
-		}
+		console.log(exp[0], length);
+		return [exp[0]['noun'], length];	
 	}
 	
-}
-
-function execute(originStatement){
-	var statement = originStatement.replace(/\s/g,'');
-	//var tokens = statement.split(/\b/);
-	var tokens = statement.match(/\s*((&&|\|\||[.,/#!$%^&\*;:{}+-=_`~()])|(\/\/.*)|([0-9]+)|(\"(\\\"|\\\\|\\n|[^\"])*\")|[A-Za-z][A-Za-z0-9]*|==|<=|>=)?/g)
-	//log(tokens);
-	if(tokens.length === 1)
-		variables.set(tokens[0], undefined)
-	else if(tokens[1] === "="){
-		var variable = tokens.shift();
-		variables.set(variable, undefined);
-		var value = tokens;
-		value.shift();
-		assignment(variable, value);
-	}else if(tokens[0] === "if"){
-		var bool = calExp(tokens.slice(1,tokens.length));
-	}else{
-		var cmd = tokens.shift();
-		var parameters = tokens;
-		command(cmd, parameters);
+	this.Operation = {
+		'+': {'priority': 1, 'apply': (x, y) => x + y},
+		'-': {'priority': 1, 'apply': (x, y) => x - y},
+		'*': {'priority': 2, 'apply': (x, y) => x * y},
+		'/': {'priority': 2, 'apply': (x, y) => x / y},
+		'**': {'priority': 3, 'apply': (x, y) => x ** y},
+		'=': {'priority': 0, 'apply': (x, y) => {this.variables[variable] = value;}}
 	}
 }
 
-function assignment(variable, value){
-	if(constVal(value) > 0){
-		variables.set(variable, value);
-	} else{
-		var val = variables.get(value[0]);
-		if (val != undefined){
-			variables.set(variable, value[0]);//chain
-			//variables.set(variable, val);//value
-		}
-	}
-	debug(variable + ": " + variables.get(variable));
-}
-
-function constVal(variable){
-	if(variable === undefined){
-		return 0
-	}
-	var reg = /^(\d+)|('(\\'|\\[A-Za-z]|\\\\|[^'])+')$/
-	var type = reg.exec(variable);
-	if (type === null){
-		return 0;
-	}
-	if(type[1] != undefined) {
-		return TYPE.NUMBER;
-	} else if(type[2] != undefined) {
-		return TYPE.STRING;
-	} else {
-		return 0;
-	}
-}
-
-function getValue(v){
-	if(constVal(v) === TYPE.NUMBER){
-		return parseInt(v);
-	} else if(constVal(v) === TYPE.STRING){
-		return v;
-	}
-	else {
-		return getValue(variables.get(v));
-	} 
-}
-
-function command(cmd, parameters){
-	if(cmd === 'print'){
-		log(" result: " + calExp(parameters));
-	} else if (cmd === 'add'){
-		var sum = 0;
-		for(var num of parameters){
-			sum += parseInt(num);
-		}
-		debug("result: " + sum);
-	}
-}
+//})();
