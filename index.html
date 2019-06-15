@@ -3,12 +3,13 @@
 <script type = "text/javascript" src="qlang.js"></script>
 <script type="text/javascript">
 function run(){
-	document.getElementById('result').innerHTML = new QStatement(document.getElementById('input').value).run().value;
+	document.getElementById('result').innerHTML = new QBlock(document.getElementById('input').value).run();
 }
 </script>
 </head>
 <body>
-<textarea id="input">((1+2+3.5*4)**5+(6+7*8))+(9)</textarea>
+<!--((1+2+3.5*4)**5+(6+7*8))+(9) -->
+<textarea id="input">a=1;b=2;a+b</textarea>
 <button id="run" onclick="run()">run!</button>
 <div id="result"></div>
 </body>
