@@ -96,7 +96,7 @@ class QStatement{
 }
 
 class QBlock{
-	pattern = /\s*((?<cmt>\/\/.*)|(?<var>[_$A-Za-z][_\$A-Za-z0-9]*)|(?<num>[0-9]+(\.[0-9]+)?)|(?<str>\"(\\\\|\\\"|\\n|[^\"])*\")|(?<pnt>\*\*|==|!=|<=|>=|&&|\|\||[.,/#!$%^&\*;:{}+-=_`~()><]))?/g;
+	pattern = /\s*((?<cmt>\/\/.*)|(?<var>[_$A-Za-z][_\$A-Za-z0-9]*)|(?<num>((?<=^|[\+\-\*\/=]|\*\*)[\+\-])?[0-9]+(\.[0-9]+)?)|(?<str>\"(\\\\|\\\"|\\n|[^\"])*\")|(?<pnt>\*\*|==|!=|<=|>=|&&|\|\||[.,/#!$%^&\*;:{}+-=_`~()><]))?/g;
 	constructor(input, variables){
 		this.input = input;
 		this.variables = variables || {};
@@ -111,9 +111,6 @@ class QBlock{
 				index++;
 				nodes[index] = [];
 			} else if (m.groups['var'] !== undefined){
-				//if m.group('var') in QUtil.keywords:
-				//    nodes.append(m.group('var'))
-				//else:
 				nodes[index].push(new QNode(QNode.VAR, m.groups['var']));
 			} else if (m.groups['num'] !== undefined){
 				nodes[index].push(new QNode(QNode.NUM, m.groups['num']));
