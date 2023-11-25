@@ -1,7 +1,19 @@
-//let str = `let  a2 :String= 1`;
-let str = 'let y = 5 + 2 * 3 + 4 * 6;let x = 1+ 2 + 3;let z = 1 - 2 + 3 * 4;let a = 1 * 2 + 3'
+//const source = `let bool = true || false;let a=  -1; let x = ((2)); let c = (1 + 2) * 3;let a5 = (a,b,c){let x = 5;}
+//let d = (g){let k = 1 * 3 + 2 * 4; let l = n}`;
 /*
-let str = `let  a1= 1;let  a2 = [1,2,
+const source = `let i=1
+while i <= 9{
+    let j = 1
+    while j<=i{
+        let j=j+1
+    }
+    let j=1
+    let i=i+1
+}`
+*/
+//const source = `let y = 1+2+3*4*5`;
+/*
+let source = `let  a1= 1;let  a2 = [1,2,
     3]
  let a3=a1;let  a4 :String= 456;let a5 = (a,b,c){let x = 5;};a5(p)
  x
@@ -10,15 +22,71 @@ let str = `let  a1= 1;let  a2 = [1,2,
  q;
  if x {let b = 5; let c = 6;} else {let d = 7};
  if k {let f = 1;} else if i {let g = 2;let j = 3;} else {let h = 3};
- let y = 5 + 2 * 3 + 4;
+ let y = 5 + 2 * 3 + 4 * 6;let x = 1+ 2 + 3;let z = (1 - 2 + 3 * 4);let a = 1 * 2 + -3;
+ let s = "Hello\\nworld";
+ let o = {a: F, b = 3
+     c :String = "strvalue",
+     f = (p) {
+        print(this.a)
+      }}
  `;
  */
-//let y = 5 + 2 * 3 + 4;
-//let str = `let a5 = (a,b,c){let x = 5;}`;
 
-let token;// = new Token(null, '');
+let source = `
+let n = 1
+let b = true
+let s = "hello world"
+let s1 = "value of n is "
+let arr = [1, 2, "str", s]
+print(arr[0])
+let t: String ="typed variable"
+let st = {
+  a: Number = 2,
+  b = "str",
+  c = n,
+  d: String,
+  f = (p) {
+    print(this.a)
+  }
+}
+print(st.a)
+print(st.d) //null/novalue
+st.d = "struct variable"
+print(st.d) //struct variable
+
+let o2 = {
+  x = "string1"
+  y = 6
+}
+
+let f = (p1, p2) {
+  return p1 * 3 + p2
+}
+f(3, 4)
+let fib = (n) {
+  if n == 0 || n == 1 {
+     return n     
+  } else {
+    return fib(n - 2) + fib(n - 1)
+  }
+}
+if n > 10 {
+  print(10)
+} else if n > 1{
+  print(1)
+} else {
+  print(0)
+}
+let s
+s = 0
+`
+
+let str = source;
+
+let token;
 let tokens = [];
 
+let index = 0;
 class Node {
     type
     value
@@ -26,18 +94,21 @@ class Node {
 }
 
 class Token {
-    static ASSIGN = 'ASSIGN'
+    static DECLARE = 'DECLARE'
     static IF = 'IF'
     static ELSE = 'ELSE'
-    static IDENTIFY = 'IDENTIFY'
+    static WHILE = 'WHILE'
+    static RETURN = 'RETURN'
+    static IDENTITY = 'IDENTITY'
     static NUMBER = 'NUMBER'
+    static BOOLEAN = 'BOOLEAN'
+    static STRING = 'STRING'
     static EQUAL = '='
     static COLON = ':'
     static COMMA = ','
     static SEMICOLON = ';'
     static BLANK = ' '
     static NEW_LINE = 'NEW_LINE'
-    static BIN_OP = 'BIN_OP'
 
     static LEFT_PARENTHESIS = '('
     static RIGHT_PARENTHESIS = ')'
@@ -46,12 +117,16 @@ class Token {
     static LEFT_BRACE = '{'
     static RIGHT_BRACE = '}'
     static EOF = 'EOF';
+    static SYMBOL = 'SYMBOL';
 
+    static COMMENT = 'COMMENT'
     type
     value
+    position
     constructor(type, value) {
         this.type = type
         this.value = value
+        this.position = index
         tokens.push(this)
     }
 }
@@ -60,7 +135,7 @@ class Statement {
 
 }
 
-class AssignStatement {
+class DeclareStatement {
     variable
     type
     value
@@ -68,9 +143,36 @@ class AssignStatement {
 
 
 //Token
-const getToken = (skipNewline = true, skipSpace = true) => {
+const getToken = (skipNewline = true, skipSpace = true, skipComment = true) => {
     let char = peek();
+    //let symbol = char;
     if (char !== '') {
+
+
+        //if (isBinOpSymbol(char)) {
+        let symbol = '';
+        const binOpSymbols = Array.from(binOpPrecedence.keys()).join('');
+        while(binOpSymbols.indexOf(char) > -1) {
+            symbol = `${symbol}${char}`
+            eat()
+            char = peek();
+        }
+        /*
+        while (binOpSymbols.find(e => e.startsWith(`${symbol}${char}`))) {
+            symbol = `${symbol}${char}`
+            eat()
+            char = peek();
+        }*/
+        if (isBinOpSymbol(symbol)) {
+            token = new Token(Token.SYMBOL, symbol)
+            return token;
+        } else {
+            str = `${symbol}${str}`
+            char = peek()
+        }
+        //}
+
+        let match = false;
         if (char.match(/[A-Za-z]/)) {
             let id = char;
             while (char.match(/[A-Za-z0-9]/)) {
@@ -80,8 +182,10 @@ const getToken = (skipNewline = true, skipSpace = true) => {
                     id += char
                 }
             }
+
+            match = true;
             if (id === 'let') {
-                token = new Token(Token.ASSIGN)
+                token = new Token(Token.DECLARE)
                 return token
             } else if (id === 'if') {
                 token = new Token(Token.IF)
@@ -89,51 +193,71 @@ const getToken = (skipNewline = true, skipSpace = true) => {
             } else if (id === 'else') {
                 token = new Token(Token.ELSE)
                 return token
+            } else if (id === 'while') {
+                token = new Token(Token.WHILE)
+                return token
+            } else if (id === 'return') {
+                token = new Token(Token.RETURN)
+                return token
+            } else if (id === 'true' || id === 'false') {
+                token = new Token(Token.BOOLEAN, id)
+                return token
             } else {
-                token = new Token(Token.IDENTIFY, id)
+                token = new Token(Token.IDENTITY, id)
                 return token
             }
-        } else if (char.match(/[-+*]/)) {
-            eat()
-            token = new Token(Token.BIN_OP, char);
-            return token
         } else if (char.match(/=/)) {
             eat()
-            token = new Token(Token.EQUAL);
-            return token
+            if (peek() !== '=') {
+                match = true;
+                token = new Token(Token.EQUAL);
+                return token
+            } else {
+                eat()
+                //symbol += '='
+            }
         } else if (char.match(/:/)) {
+            match = true;
             eat()
             token = new Token(Token.COLON);
             return token
         } else if (char.match(/,/)) {
+            match = true;
             eat()
             token = new Token(Token.COMMA)
             return token
         } else if (char.match(/;/)) {
+            match = true;
             eat()
             token = new Token(Token.SEMICOLON)
             return token
         } else if (char.match(/[(]/)) {
+            match = true;
             eat()
             token = new Token(Token.LEFT_PARENTHESIS)
             return token
         } else if (char.match(/[)]/)) {
+            match = true;
             eat()
             token = new Token(Token.RIGHT_PARENTHESIS)
             return token
         } else if (char.match(/[[]/)) {
+            match = true;
             eat()
             token = new Token(Token.LEFT_SQUARE_BRACKETS)
             return token
         } else if (char.match(/[\]]/)) {
+            match = true;
             eat()
             token = new Token(Token.RIGHT_SQUARE_BRACKETS)
             return token
         } else if (char.match(/[{]/)) {
+            match = true;
             eat()
             token = new Token(Token.LEFT_BRACE)
             return token
         } else if (char.match(/[}]/)) {
+            match = true;
             eat()
             token = new Token(Token.RIGHT_BRACE)
             return token
@@ -141,10 +265,12 @@ const getToken = (skipNewline = true, skipSpace = true) => {
             if (skipNewline) {
                 eat();
                 token = getToken(skipNewline, skipSpace)
+                match = true;
                 return token
             } else {
                 eat();
                 token = new Token(Token.NEW_LINE)
+                match = true;
                 return token
             }
         } else if (char.match(/\s/)) {
@@ -160,9 +286,11 @@ const getToken = (skipNewline = true, skipSpace = true) => {
             if (skipSpace) {
                 token = getToken(skipNewline, skipSpace)
                 //tokens.push(token)
+                match = true;
                 return token;
             } else {
                 token = new Token(Token.BLANK, space)
+                match = true;
                 return token
             }
         } else if (char.match(/[0-9.]/)) {
@@ -174,12 +302,92 @@ const getToken = (skipNewline = true, skipSpace = true) => {
                     number += char
                 }
             }
+            match = true;
             token = new Token(Token.NUMBER, number);
             return token
-        } else {
+        } else if (char.match(/["`']/)) {
+            const strSymbol = char;
+            let string = '';
             eat()
-            token = new Token(null, char)
-            return token
+            char = peek()
+            while (char !== strSymbol) {
+                if (char === '\\') {
+                    eat()
+                    char = peek()
+                    if (char === 'n') {
+                        string += '\n'
+                    }
+                } else {
+                    string += char;
+                }
+                eat()
+                char = peek()
+            }
+            eat()
+
+            match = true;
+            token = new Token(Token.STRING, string);
+            return token;
+        } else if (char.match(/\//)) {
+            eat()
+            char = peek()
+            let comment = ''
+            if (char.match(/\//)) {
+                while (char !== '\n') {
+                    eat()
+                    char = peek()
+                    comment += char
+                }
+                comment = comment.substring(0, comment.length - 1)
+                if (!skipComment) {
+                    match = true
+                    token = new Token(Token.COMMENT, comment)
+                    return token
+                } else {
+                    match = true
+                    token = getToken(skipNewline, skipSpace, skipComment)
+                    return token
+                }
+            } else if (char.match(/[*]/)) {
+                while (true) {
+                    eat()
+                    char = peek()
+                    comment += char
+
+                    if (char === '*') {
+                        eat()
+                        char = peek()
+                        if (char === '/') {
+                            eat()
+                            break;
+                        }
+                    }
+                }
+                comment = comment.substring(0, comment.length - 1)
+                if (!skipComment) {
+                    match = true
+                    token = new Token(Token.COMMENT, comment)
+                    return token
+                } else {
+                    match = true
+                    token = getToken(skipNewline, skipSpace, skipComment);
+                    return token
+                }
+            }
+        }
+
+        if (!match && isBinOpSymbol(char)) {
+            let symbol = '';
+            const binOpSymbols = Array.from(binOpPrecedence.keys());
+            while (binOpSymbols.find(e => e.startsWith(`${symbol}${char}`))) {
+                symbol = `${symbol}${char}`
+                eat()
+                char = peek();
+            }
+            token = new Token(Token.SYMBOL, symbol)
+            return token;
+        } else {
+            return token;
         }
     } else {
         token = new Token(Token.EOF)
@@ -196,6 +404,7 @@ const peek = () => {
 
 const eat = () => {
     str = str.substring(1);
+    index++
 }
 
 class Ast {
@@ -207,13 +416,20 @@ class Ast {
 
     static STATEMENTS = 'STATEMENTS';
     static STATEMENT = 'STATEMENT';
+    static DECLARE = 'DECLARE';
     static ASSIGN = 'ASSIGN';
     static IF = 'IF';
     static IF_UNIT = 'IF_UNIT';
+    static WHILE = 'WHILE';
+    static RETURN = 'RETURN';
     static VALUE = 'VALUE';
     static NUMBER = 'NUMBER';
+    static BOOLEAN = 'BOOLEAN';
+    static STRING = 'STRING';
+    static OBJECT = 'OBJECT';
     static IDENTITY = 'IDENTITY';
     static ARRAY = 'ARRAY';
+    static ARRAY_INDEX = 'ARRAY_INDEX';
     static FUNCTION = 'FUNCTION';
     static FUNCTION_CALL = 'FUNCTION_CALL';
     static BIN_OP = 'BIN_OP';
@@ -226,7 +442,7 @@ class StatementAst extends Ast {
         this.statement = statement
     }
 }
-class StmtAst extends Ast {
+class StmtsAst extends Ast {
     statements
     constructor(statements) {
         super(Ast.STATEMENTS)
@@ -234,19 +450,38 @@ class StmtAst extends Ast {
     }
 }
 
-class AssignStmtAst extends Ast {
-    assignType
+class DeclareStmtAst extends Ast {
+    declareType
     variable
     value
     constructor(type, variable, value) {
-        super(Ast.ASSIGN)
-        this.assignType = type
+        super(Ast.DECLARE)
+        this.declareType = type
         this.variable = variable
         this.value = value
     }
 }
 
-class IfStmtAst extends StmtAst {
+
+class AssignStmtAst extends Ast {
+    variable
+    value
+    constructor(variable, value) {
+        super(Ast.ASSIGN)
+        this.variable = variable
+        this.value = value
+    }
+}
+
+class ReturnStmtAst extends Ast {
+    value
+    constructor(value) {
+        super(Ast.RETURN)
+        this.value = value
+    }
+}
+
+class IfStmtAst extends StmtsAst {
     matchBodies
     elseBody
     constructor(matchBodies, elseBody) {
@@ -256,7 +491,7 @@ class IfStmtAst extends StmtAst {
     }
 }
 
-class IfUnitStmtAst extends StmtAst {
+class IfUnitStmtAst extends StmtsAst {
     contition
     body
     constructor(condition, body) {
@@ -266,6 +501,17 @@ class IfUnitStmtAst extends StmtAst {
     }
 }
 
+class WhileStmtAst extends StmtsAst {
+    contition
+    body
+    constructor(condition, body) {
+        super(Ast.WHILE)
+        this.contition = condition
+        this.body = body
+    }
+}
+
+
 class ExprAst extends Ast {
 }
 
@@ -274,6 +520,30 @@ class NumberExprAst extends ExprAst {
     constructor(value) {
         super(Ast.NUMBER)
         this.value = value
+    }
+}
+
+class BooleanExprAst extends ExprAst {
+    value
+    constructor(value) {
+        super(Ast.BOOLEAN)
+        this.value = value
+    }
+}
+
+class StringExprAst extends ExprAst {
+    value
+    constructor(value) {
+        super(Ast.STRING)
+        this.value = value
+    }
+}
+
+class ObjectExprAst extends ExprAst {
+    fields
+    constructor(fields) {
+        super(Ast.OBJECT)
+        this.fields = fields
     }
 }
 
@@ -288,6 +558,14 @@ class IdentityExprAst extends ExprAst {
 class ArrayExprAst extends ExprAst {
     constructor(value) {
         super(Ast.ARRAY)
+        this.value = value
+    }
+}
+
+class ArrayIndexExprAst extends ExprAst {
+    constructor(name, value) {
+        super(Ast.ARRAY_INDEX)
+        this.name = name
         this.value = value
     }
 }
@@ -324,30 +602,94 @@ class BinOpExprAst extends ExprAst {
     }
 }
 
-const parseBinOpUnit = (lastPrecedence, lhs) => {
-    const precedence = getBinOpPrecedence(token.value)
-    const op = token.value;
-    if (token.type !== Token.BIN_OP || precedence <= lastPrecedence) {
-        return lhs;
-    } else {
-        getToken()
-        return new BinOpExprAst(op, lhs, parseBinOpUnit(precedence, parseValue()))
-    }
+const binOpPrecedence = (() => {
+    const map = new Map();
+
+    map.set('||', 10);
+    map.set('&&', 20);
+    map.set('|', 30);
+    map.set('^', 40);
+    map.set('&', 50);
+    map.set('==', 60);
+    map.set('<=', 60);
+    map.set('<', 60);
+    map.set('>=', 60);
+    map.set('>', 60);
+    map.set('!=', 60);
+    map.set('+', 70);
+    map.set('-', 70);
+    map.set('*', 80);
+    map.set('/', 80);
+    map.set('%', 80);
+    map.set('.', 90);
+
+    return map;
+})();
+
+const getBinOpPrecedence = (op) => {
+    return binOpPrecedence.get(op);
 }
 
-const parseBinOp = (lhs) => {
-    while (token.type === Token.BIN_OP) {
-        lhs = parseBinOpUnit(0, lhs)
+const isBinOpSymbol = (char) => {
+    return binOpPrecedence.has(char)
+}
+
+const isBinOpToken = (token) => {
+    return token.type === Token.SYMBOL && isBinOpSymbol(token.value)
+}
+
+const isValueToken = (token) => {
+    return token.type === Token.NUMBER
+        || token.type === Token.IDENTITY
+        || token.type === Token.BOOLEAN
+        || token.type === Token.STRING
+        || token.type === Token.LEFT_SQUARE_BRACKETS
+        || token.type === Token.LEFT_PARENTHESIS
+        || token.type === Token.LEFT_BRACE
+        || isBinOpToken(token)
+}
+
+const parseBinOpUnit = (lhs) => {
+    const op = token;
+    getToken()
+    let rhs = parseValue()
+
+    let next = token
+    while (isBinOpToken(next) && getBinOpPrecedence(op.value) < getBinOpPrecedence(next.value)) {
+        rhs = parseBinOpUnit(rhs)
+        next = token
     }
-    return lhs
+
+    return new BinOpExprAst(op.value, lhs, rhs)
+}
+
+
+const parseBinOp = (value) => {
+    let next = token
+    while (isBinOpToken(next)) {
+        value = parseBinOpUnit(value)
+
+        next = token
+    }
+    return value
 }
 
 const parseValue = () => {
-    if (token.type === Token.NUMBER) { // value
+    if (token.type === Token.NUMBER) {
         let t = token;
         getToken()
         return new NumberExprAst(t.value)
-    } else if (token.type === Token.IDENTIFY) { // value
+    } else if (token.type === Token.BOOLEAN) {
+        let t = token;
+        getToken()
+
+        return new BooleanExprAst(t.value)
+    } else if (token.type === Token.STRING) {
+        let t = token
+        getToken()
+
+        return new StringExprAst(t.value)
+    } else if (token.type === Token.IDENTITY) {
         let t = token;
         getToken()
 
@@ -356,12 +698,10 @@ const parseValue = () => {
             let t4 = getToken();
             if (t4.type !== Token.RIGHT_PARENTHESIS) {
                 while (true) {
-                    if (t4.type === Token.IDENTIFY) {
-                        paramValues.push(new IdentityExprAst(t4.value));
-                    } else if (t4.type === Token.NUMBER) {
-                        paramValues.push(new NumberExprAst(t4.value));
+                    if (isValueToken(t4)){
+                        paramValues.push(parseBinOp(parseValue()));
                     }
-                    let t5 = getToken()
+                    let t5 = token
                     if (t5.type === Token.COMMA) {
                         t4 = getToken()
                         continue;
@@ -378,14 +718,29 @@ const parseValue = () => {
             }
 
             return new FunctionCallAst(t, paramValues)
+        } else if (token.type === Token.LEFT_SQUARE_BRACKETS) {
+            getToken();
+            const value = parseBinOp(parseValue());
+            if (token.type === Token.RIGHT_SQUARE_BRACKETS){
+                const arrayIndexToken = new ArrayIndexExprAst(t, value);
+                getToken();
+
+                return arrayIndexToken;
+            } else {
+                //TODO error
+            }
         }
         return new IdentityExprAst(t.value)
+    } else if (isBinOpToken(token) && (token.value === '+' || token.value === '-')) {
+        const op = token;
+        getToken()
+        return new BinOpExprAst(op.value, new NumberExprAst(0), parseValue());
     } else if (token.type === Token.LEFT_SQUARE_BRACKETS) {
         const arrValues = [];
         let t4;
         do {
             t4 = getToken()
-            if (t4.type === Token.IDENTIFY || t4.type === Token.NUMBER) {
+            if (isValueToken(t4)) {
                 arrValues.push(parseValue());
             }
             if (token.type === Token.COMMA) {
@@ -397,58 +752,125 @@ const parseValue = () => {
         getToken()
         return new ArrayExprAst(arrValues)
     } else if (token.type === Token.LEFT_PARENTHESIS) {
-        const paramValues = [];
         let t4 = getToken();
-        if (t4.type !== Token.RIGHT_PARENTHESIS) {
+        //, + ( )
+
+        if (t4.type !== Token.IDENTITY) {
+            let v = parseBinOp(parseValue())
+            if (token.type === Token.RIGHT_PARENTHESIS) {
+                getToken()
+            } else {
+                // Parenthesis mis match
+            }
+            return v
+        }
+
+        let t8 = getToken();
+        const paramValues = [];
+        if (t8.type === Token.COMMA) {
+            if (t4.type === Token.IDENTITY) {
+                paramValues.push(t4.value);
+            }
             while (true) {
-                if (t4.type === Token.IDENTIFY) {
+                t4 = getToken()
+                if (t4.type === Token.IDENTITY) {
                     paramValues.push(t4.value);
                 }
                 let t5 = getToken()
                 if (t5.type === Token.COMMA) {
-                    t4 = getToken()
                     continue;
-                } else if (t5.type === Token.RIGHT_PARENTHESIS) {
+                } else if (t5.type === Token.RIGHT_PARENTHESIS) { //(x,y,z)
                     break;
+                } else {
+                    //break;
                 }
-                t4 = getToken()
+                //t4 = getToken()
             };
+            getToken()
+            if (token.type === Token.LEFT_BRACE) {
+                //getToken()
+                return new FunctionExprAst(paramValues, parseBlock());
+            } else {
+
+            }
+        } else if (t8.type === Token.RIGHT_PARENTHESIS) {
+            getToken()
+
+            if (token.type === Token.LEFT_BRACE) {
+                paramValues.push(t4.value)
+                return new FunctionExprAst(paramValues, parseBlock());
+            } else {
+                const v = parseValue();
+                if (token.type === Token.RIGHT_PARENTHESIS) {
+                    getToken()
+                    return v;
+                }
+            }
+        } else {
+            return parseBinOp(new IdentityExprAst(t8.value));
         }
+    } else if (token.type === Token.LEFT_BRACE) {
         getToken()
 
-        if (token.type === Token.LEFT_BRACE) {
-            //getToken()
-            return new FunctionExprAst(paramValues, parseBlock());
-        } else {
+        const fields = [];
+        while (token.type === Token.IDENTITY) {
+            const identity = new IdentityExprAst(token.value)
+            let type
+            let value
+            getToken()
+            if (token.type === Token.EQUAL) {
+                getToken()
+                value = parseBinOp(parseValue())
+                //fields.push();
+            } else if (token.type === Token.COLON) {
+                getToken()
+                if (token.type === Token.IDENTITY) {
+                    type = new IdentityExprAst(token.value)
+                } else {
+                    // error
+                }
+                getToken();
+                if (token.type === Token.EQUAL) {
+                    getToken()
+                    if (isValueToken(token)) {
+                        value = parseBinOp(parseValue())
+                    }
+                }
+            }
 
+            if (token.type === Token.NEW_LINE || token.type == Token.COMMA) {
+                getToken()
+            }
+            fields.push({ identity: identity, type: type, value: value });
         }
+
+        if (token.type === Token.RIGHT_BRACE) {
+            getToken()
+        }
+
+        return new ObjectExprAst(fields);
     }
 }
 
 const parseBlock = () => {
-    const ast = new StmtAst([]);
+    let ast;
 
     if (token.type === Token.LEFT_BRACE) {
         getToken()
-        while (token.type && str) {
-            ast.statements.push(parseStatement());
-            //let t7 = getToken(false)
-            if (token.type === Token.SEMICOLON) {
-                getToken()
-            }
-            if (token.type === Token.RIGHT_BRACE || token.type === Token.EOF) {
-                break;
-            }
-        }
+        ast = parseStatements()
+
     }
-    getToken()
+    if (token.type === Token.RIGHT_BRACE || token.type === Token.EOF) {
+        //break;
+        getToken()
+    }
 
     return ast;
 }
 
 const parseStatements = () => {
-    const ast = new StmtAst([]);
-    while (token.type && token.type !== Token.EOF) {
+    const ast = new StmtsAst([]);
+    while (token.type && token.type !== Token.EOF && token.type !== Token.RIGHT_BRACE) {
         const statement = parseStatement();
         if (statement) {
             ast.statements.push(statement);
@@ -462,19 +884,19 @@ const parseStatements = () => {
 }
 
 const parseStatement = () => {
-    console.dir(token);
-    if (token.type === Token.ASSIGN) { // let
+    //console.dir(token);
+    if (token.type === Token.DECLARE) { // let
         let t1 = getToken();
-        if (t1.type === Token.IDENTIFY) { //id
+        if (t1.type === Token.IDENTITY) { //id
             let t2 = getToken();
             if (t2.type === Token.EQUAL) { // =
                 let t3 = getToken()
-                if (t3.type === Token.NUMBER || t3.type === Token.IDENTIFY || t3.type === Token.LEFT_SQUARE_BRACKETS || t3.type === Token.LEFT_PARENTHESIS) {
+                if (isValueToken(t3)) {
                     let valueAst = parseValue()
-                    if (token.type === Token.BIN_OP) {
+                    if (isBinOpToken(token)) {
                         valueAst = parseBinOp(valueAst)
                     }
-                    const ast = new AssignStmtAst(null, t1.value, valueAst);
+                    const ast = new DeclareStmtAst(null, t1.value, valueAst);
                     //TODO exp
 
                     //getToken(false)
@@ -482,12 +904,12 @@ const parseStatement = () => {
                 }
             } else if (t2.type === Token.COLON) { // :
                 let t4 = getToken()
-                if (t4.type === Token.IDENTIFY) { // type
+                if (t4.type === Token.IDENTITY) { // type
                     let t5 = getToken()
                     if (t5.type === Token.EQUAL) { // =
                         let t6 = getToken();
-                        if (t6.type === Token.NUMBER || t6.type === Token.IDENTIFY || t6.type === Token.LEFT_SQUARE_BRACKETS) {
-                            const ast = new AssignStmtAst(t4.value, t1.value, parseValue());
+                        if (isValueToken(t6)) {
+                            const ast = new DeclareStmtAst(t4.value, t1.value, parseValue());
                             //TODO exp
                             //getToken(false);
                             return ast;
@@ -495,25 +917,35 @@ const parseStatement = () => {
                     }
 
                 }
+            } else {
+                return new DeclareStmtAst(null, t1.value, null);
             }
         }
         //console.dir(t);
-    } else if (token.type === Token.IDENTIFY) {
-        const valueAst = parseValue();
-        //getToken()
+    } else if (token.type === Token.IDENTITY) {
+        const valueAst = parseBinOp(parseValue());
+
+        //const variable = parseBinOp(parseValue())
+        if (token.type === Token.EQUAL) {
+            getToken()
+            const value = parseBinOp(parseValue())
+
+            return new AssignStmtAst(valueAst, value)
+        }
         return valueAst;
     } else if (token.type === Token.IF) {
         getToken();
 
         const matchBodies = [];
-        matchBodies.push(new IfUnitStmtAst(parseValue(), parseBlock()));
+        const value = parseValue();
+        matchBodies.push(new IfUnitStmtAst(parseBinOp(value), parseBlock()));
         let elseBody;
         if (token.type === Token.ELSE) {
             while (token.type === Token.ELSE) {
                 getToken();
                 if (token.type === Token.IF) {
                     getToken();
-                    matchBodies.push(new IfUnitStmtAst(parseValue(), parseBlock()));
+                    matchBodies.push(new IfUnitStmtAst(parseBinOp(parseValue()), parseBlock()));
                     //getToken()
                 } else {
                     elseBody = parseBlock();
@@ -527,22 +959,24 @@ const parseStatement = () => {
         }
 
         return new IfStmtAst(matchBodies, elseBody);
+    } else if (token.type === Token.WHILE) {
+        getToken();
+
+        const condition = parseValue();
+        return new WhileStmtAst(condition, parseBlock())
+    } else if (token.type === Token.RETURN) {
+        getToken()
+        return new ReturnStmtAst(parseBinOp(parseValue()))
     } else {
         console.log("token", token)
         throw new Error()
     }
 }
 
-const getBinOpPrecedence = (op) => {
-    const map = new Map();
-    map.set('-', 5);
-    map.set('+', 10);
-    map.set('*', 20);
-    return map.get(op);
-}
-
 //let lastPrecedence = 0;
 //str = `${str}`;
 getToken()
+console.log(source);
 console.log(JSON.stringify(parseStatements(), null, 2))
-console.log(tokens);
+console.log(source);
+//console.log(tokens);
