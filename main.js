@@ -38,6 +38,7 @@ let b = true
 let s = "hello world"
 let s1 = "value of n is "
 let arr = [1, 2, "str", s]
+let c = b
 print(arr[0])
 let t: String ="typed variable"
 let st = {
@@ -47,7 +48,8 @@ let st = {
   d: String,
   f = (p) {
     print(this.a)
-  }
+  },
+  g = f(1)
 }
 print(st.a)
 print(st.d) //null/novalue
@@ -77,10 +79,31 @@ if n > 10 {
 } else {
   print(0)
 }
+while i <= 9{
+    let j = 1
+    while j<=i{
+        let j=j+1
+    }
+    let j=1
+    let i=i+1
+}
 let s
 s = 0
 `
-
+/*
+source = `
+let i=1
+while (i<=9){
+	let j=1
+	while j<=i{
+		print(j+"*"+i+"="+i*j+"\\t") 
+		j=j+1
+	}
+	print("\\n")
+	j=1
+	i=i+1
+}`
+*/
 let str = source;
 
 let token;
@@ -152,7 +175,7 @@ const getToken = (skipNewline = true, skipSpace = true, skipComment = true) => {
         //if (isBinOpSymbol(char)) {
         let symbol = '';
         const binOpSymbols = Array.from(binOpPrecedence.keys()).join('');
-        while(binOpSymbols.indexOf(char) > -1) {
+        while (binOpSymbols.indexOf(char) > -1) {
             symbol = `${symbol}${char}`
             eat()
             char = peek();
@@ -316,6 +339,10 @@ const getToken = (skipNewline = true, skipSpace = true, skipComment = true) => {
                     char = peek()
                     if (char === 'n') {
                         string += '\n'
+                    } else if (char === 't') {
+                        string += '\t'
+                    } else if (char === '\\') {
+                        string += '\\\\'
                     }
                 } else {
                     string += char;
@@ -433,6 +460,10 @@ class Ast {
     static FUNCTION = 'FUNCTION';
     static FUNCTION_CALL = 'FUNCTION_CALL';
     static BIN_OP = 'BIN_OP';
+
+    accept(visitor) {
+        return visitor.visit(this)
+    }
 }
 
 class StatementAst extends Ast {
@@ -481,7 +512,7 @@ class ReturnStmtAst extends Ast {
     }
 }
 
-class IfStmtAst extends StmtsAst {
+class IfStmtAst extends Ast {
     matchBodies
     elseBody
     constructor(matchBodies, elseBody) {
@@ -491,22 +522,22 @@ class IfStmtAst extends StmtsAst {
     }
 }
 
-class IfUnitStmtAst extends StmtsAst {
-    contition
+class IfUnitStmtAst extends Ast {
+    condition
     body
     constructor(condition, body) {
         super(Ast.IF_UNIT)
-        this.contition = condition
+        this.condition = condition
         this.body = body
     }
 }
 
-class WhileStmtAst extends StmtsAst {
-    contition
+class WhileStmtAst extends Ast {
+    condition
     body
     constructor(condition, body) {
         super(Ast.WHILE)
-        this.contition = condition
+        this.condition = condition
         this.body = body
     }
 }
@@ -600,6 +631,18 @@ class BinOpExprAst extends ExprAst {
         this.lhs = lhs;
         this.rhs = rhs;
     }
+}
+
+const isValueAst = (ast) => {
+    return ast.type === Ast.NUMBER
+        || ast.type === Ast.IDENTITY
+        || ast.type === Ast.BOOLEAN
+        || ast.type === Ast.STRING
+        || ast.type === Ast.ARRAY
+        || ast.type === Ast.OBJECT
+        || ast.type === Ast.FUNCTION
+        || ast.type === Ast.FUNCTION_CALL
+        || ast.type === Ast.BIN_OP
 }
 
 const binOpPrecedence = (() => {
@@ -698,7 +741,7 @@ const parseValue = () => {
             let t4 = getToken();
             if (t4.type !== Token.RIGHT_PARENTHESIS) {
                 while (true) {
-                    if (isValueToken(t4)){
+                    if (isValueToken(t4)) {
                         paramValues.push(parseBinOp(parseValue()));
                     }
                     let t5 = token
@@ -721,7 +764,7 @@ const parseValue = () => {
         } else if (token.type === Token.LEFT_SQUARE_BRACKETS) {
             getToken();
             const value = parseBinOp(parseValue());
-            if (token.type === Token.RIGHT_SQUARE_BRACKETS){
+            if (token.type === Token.RIGHT_SQUARE_BRACKETS) {
                 const arrayIndexToken = new ArrayIndexExprAst(t, value);
                 getToken();
 
@@ -807,7 +850,14 @@ const parseValue = () => {
                 }
             }
         } else {
-            return parseBinOp(new IdentityExprAst(t8.value));
+            const v = parseBinOp(new IdentityExprAst(t4.value));
+            if (token.type === Token.RIGHT_PARENTHESIS) {
+                getToken()
+            } else {
+                //TODO error
+            }
+
+            return v
         }
     } else if (token.type === Token.LEFT_BRACE) {
         getToken()
@@ -962,7 +1012,7 @@ const parseStatement = () => {
     } else if (token.type === Token.WHILE) {
         getToken();
 
-        const condition = parseValue();
+        const condition = parseBinOp(parseValue());
         return new WhileStmtAst(condition, parseBlock())
     } else if (token.type === Token.RETURN) {
         getToken()
@@ -976,7 +1026,139 @@ const parseStatement = () => {
 //let lastPrecedence = 0;
 //str = `${str}`;
 getToken()
+
+const ast = parseStatements();
+
 console.log(source);
-console.log(JSON.stringify(parseStatements(), null, 2))
+console.log(JSON.stringify(ast, null, 2))
 console.log(source);
+
+
+
+class Visitor {
+    visit(t) {
+        return null
+    }
+}
+
+class MapVisitor {
+    visitors
+    constructor(visitors) {
+        this.visitors = visitors
+    }
+}
+
+console.log();
+const compiler = (() => {
+    const statementsVisitor = {}, declareVisitor = {}, assignVisitor = {}, returnVisitor = {}, valueVisitor = {}, ifVisitor = {}, whileVisitor = {};
+    statementsVisitor.visit = (statementsAst) => {
+        let stmt = ''
+        for (const statement of statementsAst.statements) {
+            if (statement.type === Ast.DECLARE) {
+                stmt += statement.accept(declareVisitor)
+            } else if (statement.type === Ast.ASSIGN) {
+                stmt += statement.accept(assignVisitor)
+            } else if (statement.type === Ast.RETURN) {
+                stmt += statement.accept(returnVisitor)
+            } else if (isValueAst(statement)) {
+                stmt += statement.accept(valueVisitor)
+            } else if (statement.type === Ast.IF) {
+                stmt += statement.accept(ifVisitor)
+            } else if (statement.type === Ast.WHILE) {
+                stmt += statement.accept(whileVisitor)
+            }
+            stmt += ';\n'
+        }
+
+        console.log(stmt)
+
+        return stmt;
+    }
+    declareVisitor.visit = (declareStmtAst) => {
+        let stmt = `let ${declareStmtAst.variable}`
+
+        stmt += ` = ${declareStmtAst.value?.accept(valueVisitor)}`;
+
+        return stmt;
+    }
+    assignVisitor.visit = (assignStmtAst) => {
+        let stmt = `let ${assignStmtAst.variable}`
+
+        stmt += ` = ${assignStmtAst.value?.accept(valueVisitor)}`;
+
+        return `${assignStmtAst.variable.accept(valueVisitor)} = ${assignStmtAst.value.accept(valueVisitor)}`;
+    }
+    returnVisitor.visit = (returnStmtAst) => {
+        return `return ${returnStmtAst.value?.accept(valueVisitor)}`;
+    }
+    valueVisitor.visit = (ast) => {
+        let numberVisitor = {}, identityVisitor = {}, booleanVisitor = {}, stringVisitor = {}, binOpVisitor = {}, arrayVisitor = {}, objectVisitor = {}, functionVisitor = {}, functionCallVisitor = {}
+
+        numberVisitor.visit = (numberExprAst) => {
+            return numberExprAst.value
+        }
+        identityVisitor.visit = (identityExprAst) => {
+            return identityExprAst.value
+        }
+        booleanVisitor.visit = (booleanExprAst) => {
+            return booleanExprAst.value
+        }
+        stringVisitor.visit = (stringExprAst) => {
+            return `"${stringExprAst.value.replace('\n', '\\n').replace('\t', '\\t')}"`;
+        }
+        binOpVisitor.visit = (binOpExprAst) => {
+            return `(${binOpExprAst.lhs.accept(valueVisitor)}${binOpExprAst.op}${binOpExprAst.rhs.accept(valueVisitor)})`;
+        }
+        arrayVisitor.visit = (arrayExprAst) => {
+            return `[ ${arrayExprAst.value.map(e => e.accept(valueVisitor)).join(', ')} ]`;
+        }
+        objectVisitor.visit = (objectExprAst) => {
+            return "{\n" + objectExprAst.fields.map(e => `${e.identity.value}: ${e.value?.accept(valueVisitor)}`).join(',\n') + "\n}"
+        }
+        functionVisitor.visit = (functionExprAst) => {
+            return `(${functionExprAst.parameters.join(', ')}) => {\n${functionExprAst.body.accept(statementsVisitor)}}`
+        }
+        functionCallVisitor.visit = (functionCallExprAst) => {
+            return `${functionCallExprAst.name.value}(${functionCallExprAst.parameters.map(e => e.accept(valueVisitor)).join(', ')})`
+        }
+
+        if (ast.type === Ast.NUMBER) {
+            return ast.accept(numberVisitor)
+        } else if (ast.type === Ast.IDENTITY) {
+            return ast.accept(identityVisitor)
+        } else if (ast.type === Ast.BOOLEAN) {
+            return ast.accept(booleanVisitor)
+        } else if (ast.type === Ast.STRING) {
+            return ast.accept(stringVisitor)
+        } else if (ast.type === Ast.BIN_OP) {
+            return ast.accept(binOpVisitor)
+        } else if (ast.type === Ast.ARRAY) {
+            return ast.accept(arrayVisitor)
+        } else if (ast.type === Ast.OBJECT) {
+            return ast.accept(objectVisitor)
+        } else if (ast.type === Ast.FUNCTION) {
+            return ast.accept(functionVisitor)
+        } else if (ast.type === Ast.FUNCTION_CALL) {
+            return ast.accept(functionCallVisitor)
+        }
+
+        return '';
+    }
+    ifVisitor.visit = (ifStmtAst) => {
+        let stmt = '';
+        const firstMatch = ifStmtAst.matchBodies.pop()
+        stmt += `if (${firstMatch.condition.accept(valueVisitor)}) {\n${firstMatch.body.accept(statementsVisitor)}}`
+        stmt += ifStmtAst.matchBodies.map(e => ` else if (${e.condition.accept(valueVisitor)}) {\n${e.body.accept(statementsVisitor)}}`).join('')
+        if (ifStmtAst.elseBody){
+            stmt += ` else {\n${ifStmtAst.elseBody.accept(statementsVisitor)}}`
+        }
+
+        return stmt
+    }
+    whileVisitor.visit = (whileStmtAst) => {
+        return `while (${whileStmtAst.condition.accept(valueVisitor)}) {\n${whileStmtAst.body.accept(statementsVisitor)}}`
+    }
+
+    ast.accept(statementsVisitor)
+})()
 //console.log(tokens);
