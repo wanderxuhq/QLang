@@ -1,120 +1,13 @@
-//const source = `let bool = true || false;let a=  -1; let x = ((2)); let c = (1 + 2) * 3;let a5 = (a,b,c){let x = 5;}
-//let d = (g){let k = 1 * 3 + 2 * 4; let l = n}`;
-/*
-const source = `let i=1
-while i <= 9{
-    let j = 1
-    while j<=i{
-        let j=j+1
-    }
-    let j=1
-    let i=i+1
-}`
-*/
-//const source = `let y = 1+2+3*4*5`;
-/*
-let source = `let  a1= 1;let  a2 = [1,2,
-    3]
- let a3=a1;let  a4 :String= 456;let a5 = (a,b,c){let x = 5;};a5(p)
- x
- y
- z
- q;
- if x {let b = 5; let c = 6;} else {let d = 7};
- if k {let f = 1;} else if i {let g = 2;let j = 3;} else {let h = 3};
- let y = 5 + 2 * 3 + 4 * 6;let x = 1+ 2 + 3;let z = (1 - 2 + 3 * 4);let a = 1 * 2 + -3;
- let s = "Hello\\nworld";
- let o = {a: F, b = 3
-     c :String = "strvalue",
-     f = (p) {
-        print(this.a)
-      }}
- `;
- */
-
-let source = `
-let n = 1
-let b = true
-let s = "hello world"
-let s1 = "value of n is "
-let arr = [1, 2, "str", s]
-let c = b
-print(arr[0])
-let t: String ="typed variable"
-let st = {
-  a: Number = 2,
-  b = "str",
-  c = n,
-  d: String,
-  f = (p) {
-    print(this.a)
-  },
-  g = f(1)
-}
-print(st.a)
-print(st.d) //null/novalue
-st.d = "struct variable"
-print(st.d) //struct variable
-
-let o2 = {
-  x = "string1"
-  y = 6
-}
-
-let f = (p1, p2) {
-  return p1 * 3 + p2
-}
-f(3, 4)
-let fib = (n) {
-  if n == 0 || n == 1 {
-     return n     
-  } else {
-    return fib(n - 2) + fib(n - 1)
-  }
-}
-if n > 10 {
-  print(10)
-} else if n > 1{
-  print(1)
-} else {
-  print(0)
-}
-while i <= 9{
-    let j = 1
-    while j<=i{
-        let j=j+1
-    }
-    let j=1
-    let i=i+1
-}
-let s
-s = 0
-`
-/*
-source = `
-let i=1
-while (i<=9){
-	let j=1
-	while j<=i{
-		print(j+"*"+i+"="+i*j+"\\t") 
-		j=j+1
-	}
-	print("\\n")
-	j=1
-	i=i+1
-}`
-*/
+const fs = require('fs')
+const source = fs.readFileSync('./demo/clojure.ql')
 let str = source;
 
 let token;
 let tokens = [];
 
 let index = 0;
-class Node {
-    type
-    value
-    children
-}
+let row = 0;
+let col = 0;
 
 class Token {
     static DECLARE = 'DECLARE'
@@ -154,24 +47,11 @@ class Token {
     }
 }
 
-class Statement {
-
-}
-
-class DeclareStatement {
-    variable
-    type
-    value
-}
-
-
 //Token
 const getToken = (skipNewline = true, skipSpace = true, skipComment = true) => {
     let char = peek();
     //let symbol = char;
     if (char !== '') {
-
-
         //if (isBinOpSymbol(char)) {
         let symbol = '';
         const binOpSymbols = Array.from(binOpPrecedence.keys()).join('');
@@ -285,13 +165,14 @@ const getToken = (skipNewline = true, skipSpace = true, skipComment = true) => {
             token = new Token(Token.RIGHT_BRACE)
             return token
         } else if (char.match(/\n/)) {
+            row++;
+            col = 0;
+            eat();
             if (skipNewline) {
-                eat();
                 token = getToken(skipNewline, skipSpace)
                 match = true;
                 return token
             } else {
-                eat();
                 token = new Token(Token.NEW_LINE)
                 match = true;
                 return token
@@ -299,6 +180,10 @@ const getToken = (skipNewline = true, skipSpace = true, skipComment = true) => {
         } else if (char.match(/\s/)) {
             let space = char;
             while (char.match(/\s/)) {
+                if (char === '\n') {
+                    row++;
+                    col = 0;
+                }
                 eat()
                 char = peek();
                 if (char.match(/\s/)) {
@@ -432,13 +317,27 @@ const peek = () => {
 const eat = () => {
     str = str.substring(1);
     index++
+    col++
 }
 
 class Ast {
     type
+    index
+    row
+    col
+    parent
+    context
 
     constructor(type) {
         this.type = type
+        this.row = row
+        this.col = col
+        this.index = index
+        this.context = {
+            scope: new Map(),
+            object: new Map(),
+            parameter: new Map()
+        }
     }
 
     static STATEMENTS = 'STATEMENTS';
@@ -459,20 +358,57 @@ class Ast {
     static ARRAY_INDEX = 'ARRAY_INDEX';
     static FUNCTION = 'FUNCTION';
     static FUNCTION_CALL = 'FUNCTION_CALL';
+    static PARENTHESIS_LIST = 'PARENTHESIS_LIST';
+    static COMMA_LIST = 'COMMA_LIST';
     static BIN_OP = 'BIN_OP';
 
     accept(visitor) {
         return visitor.visit(this)
     }
-}
 
-class StatementAst extends Ast {
-    statement
-    constructor(statement) {
-        super(Ast.STATEMENT)
-        this.statement = statement
+    inContext(variable) {
+        if (this.context.scope.has(variable)) {
+            const result = {
+                level: 0,
+                value: this.context.scope.get(variable)
+            }
+            //console.log(variable, result)
+            return result
+        } else if (this.context.parameter.has(variable)) {
+            const result = {
+                level: "parameter",
+                value: this.context.parameter.get(variable)
+            }
+            //console.log(variable, result)
+            return result
+        } else if (this.context.object.has(variable)) {
+            const result = {
+                level: "object",
+                value: this.context.object.get(variable)
+            }
+            //console.log(variable, result)
+            return result
+        } else {
+            let parent = this.parent
+            let depth = 0;
+            while (parent !== undefined) {
+                if (parent.context.scope.has(variable)) {
+                    depth++;
+                    const result = {
+                        level: depth,
+                        value: parent.context.scope.get(variable)
+                    }
+                    //console.log(variable, result)
+                    return result
+                }
+                parent = parent.parent
+            }
+
+            return { level: -1 };
+        }
     }
 }
+
 class StmtsAst extends Ast {
     statements
     constructor(statements) {
@@ -492,7 +428,6 @@ class DeclareStmtAst extends Ast {
         this.value = value
     }
 }
-
 
 class AssignStmtAst extends Ast {
     variable
@@ -611,12 +546,28 @@ class FunctionExprAst extends ExprAst {
     }
 }
 
+class CommaListAstSnip extends ExprAst {
+    value
+    constructor(value) {
+        super(Ast.COMMA_LIST)
+        this.value = value
+    }
+}
+
+class ParenthesisListAstSnip extends ExprAst {
+    value
+    constructor(value) {
+        super(Ast.PARENTHESIS_LIST)
+        this.value = value
+    }
+}
+
 class FunctionCallAst extends ExprAst {
-    name
+    fun
     parameters
-    constructor(name, parameters) {
+    constructor(fun, parameters) {
         super(Ast.FUNCTION_CALL)
-        this.name = name
+        this.fun = fun
         this.parameters = parameters
     }
 }
@@ -627,7 +578,7 @@ class BinOpExprAst extends ExprAst {
     rhs
     constructor(op, lhs, rhs) {
         super(Ast.BIN_OP)
-        this.op = op;
+        this.op = op.value;
         this.lhs = lhs;
         this.rhs = rhs;
     }
@@ -703,7 +654,7 @@ const parseBinOpUnit = (lhs) => {
         next = token
     }
 
-    return new BinOpExprAst(op.value, lhs, rhs)
+    return new BinOpExprAst(op, lhs, rhs)
 }
 
 
@@ -737,30 +688,14 @@ const parseValue = () => {
         getToken()
 
         if (token.type === Token.LEFT_PARENTHESIS) {
-            const paramValues = [];
-            let t4 = getToken();
-            if (t4.type !== Token.RIGHT_PARENTHESIS) {
-                while (true) {
-                    if (isValueToken(t4)) {
-                        paramValues.push(parseBinOp(parseValue()));
-                    }
-                    let t5 = token
-                    if (t5.type === Token.COMMA) {
-                        t4 = getToken()
-                        continue;
-                    } else if (t5.type === Token.RIGHT_PARENTHESIS) {
-                        break;
-                    }
-                    t4 = getToken()
-                };
-            }
-            getToken(false)
+            const parenthesisList = parseParenthesisList().value
 
-            if (token.type === Token.NEW_LINE) {
-                getToken();
+            let functionCallAst = new FunctionCallAst(t, parenthesisList[0])
+            for (let i = 1; i < parenthesisList.length; i++) {
+                const parenthesisResult = parenthesisList[i]
+                functionCallAst = new FunctionCallAst(functionCallAst, parenthesisResult)
             }
-
-            return new FunctionCallAst(t, paramValues)
+            return functionCallAst
         } else if (token.type === Token.LEFT_SQUARE_BRACKETS) {
             getToken();
             const value = parseBinOp(parseValue());
@@ -772,12 +707,20 @@ const parseValue = () => {
             } else {
                 //TODO error
             }
+        } else if (token.type === Token.COMMA) {
+            const list = new CommaListAstSnip([])
+
+            while (token.type === Token.COMMA) {
+                list.value.push(parseValue())
+            }
+
+            return list
         }
         return new IdentityExprAst(t.value)
     } else if (isBinOpToken(token) && (token.value === '+' || token.value === '-')) {
         const op = token;
         getToken()
-        return new BinOpExprAst(op.value, new NumberExprAst(0), parseValue());
+        return new BinOpExprAst(op, new NumberExprAst(0), parseValue());
     } else if (token.type === Token.LEFT_SQUARE_BRACKETS) {
         const arrValues = [];
         let t4;
@@ -798,7 +741,7 @@ const parseValue = () => {
         let t4 = getToken();
         //, + ( )
 
-        if (t4.type !== Token.IDENTITY) {
+        if (t4.type === Token.BOOLEAN || t4.type === Token.NUMBER || t4.type === Token.STRING) {
             let v = parseBinOp(parseValue())
             if (token.type === Token.RIGHT_PARENTHESIS) {
                 getToken()
@@ -806,6 +749,18 @@ const parseValue = () => {
                 // Parenthesis mis match
             }
             return v
+        } else if (t4.type === Token.RIGHT_PARENTHESIS) {
+            getToken()
+
+            if (token.type === Token.LEFT_BRACE) {
+                return new FunctionExprAst([], parseBlock());
+            } else {
+                const v = parseValue();
+                if (token.type === Token.RIGHT_PARENTHESIS) {
+                    getToken()
+                    return v;
+                }
+            }
         }
 
         let t8 = getToken();
@@ -900,6 +855,39 @@ const parseValue = () => {
 
         return new ObjectExprAst(fields);
     }
+}
+
+const parseParenthesisList = () => {
+    let result = new ParenthesisListAstSnip([[]])
+    let index = 0;
+    while (token.type === Token.LEFT_PARENTHESIS) {
+        getToken()
+        const value = parseBinOp(parseValue());
+        if (value) {
+            result.value[index].push(value)
+        } else {
+            //novalue
+        }
+        while (token.type === Token.COMMA) {
+            getToken();
+            const value = parseValue()
+            if (value) {
+                result.value[index].push(value)
+            } else {
+                //novalue
+            }
+        }
+        if (token.type === Token.RIGHT_PARENTHESIS) {
+            getToken();
+            index++
+            result.value[index] = []
+        } else {
+            //Parenthesis mis match
+        }
+    }
+    result.value = result.value.slice(0, result.value.length - 1);
+
+    return result
 }
 
 const parseBlock = () => {
@@ -1029,12 +1017,11 @@ getToken()
 
 const ast = parseStatements();
 
+/*
 console.log(source);
 console.log(JSON.stringify(ast, null, 2))
 console.log(source);
-
-
-
+*/
 class Visitor {
     visit(t) {
         return null
@@ -1048,8 +1035,331 @@ class MapVisitor {
     }
 }
 
-console.log();
+const semanticParser = (() => {
+    const statementsVisitor = {}, declareVisitor = {}, assignVisitor = {}, returnVisitor = {}, valueVisitor = {}, ifVisitor = {}, whileVisitor = {};
+    statementsVisitor.visit = (statementsAst) => {
+        let maxLevel = 0;
+        for (const statement of statementsAst.statements) {
+            //statement.parent = statementsAst
+            if (statement.type === Ast.DECLARE) {
+                statementsAst.context.scope.set(statement.variable, statement.value)
+                if (statement.value) {
+                    //TODO replace?
+                    statement.value.context.scope = statementsAst.context.scope
+                    statement.value.accept(valueVisitor)
+                }
+            } else if (statement.type === Ast.ASSIGN) {
+                statementsAst.context.scope.set(statement.variable, statement.value)
+                statement.value.context.scope = statementsAst.context.scope
+                statement.parent = statementsAst
+                statement.value.accept(valueVisitor)
+                statement.level = statement.inContext(statement.variable.value).level
+            } else if (statement.type === Ast.RETURN) {
+                //stmt += statement.accept(returnVisitor)
+                statement.value.context.scope = statementsAst.context.scope
+                statement.value.accept(valueVisitor)
+            } else if (isValueAst(statement)) {
+                //TODO
+                statement.context.scope = statementsAst.context.scope
+                statement.accept(valueVisitor)
+                //stmt += statement.accept(valueVisitor)
+            } else if (statement.type === Ast.IF) {
+                //TODO
+                statement.matchBodies.map(e => {
+                    e.condition.context.scope = statementsAst.context.scope;
+                    e.body.context.scope = statementsAst.context.scope;
+                })
+                if (statement.elseBody) {
+                    statement.elseBody.context.scope = statementsAst.context.scope;
+                }
+                statement.parent = statementsAst
+                statement.accept(ifVisitor)
+            } else if (statement.type === Ast.WHILE) {
+                statement.condition.context.scope = statementsAst.context.scope;
+                statement.body.context.scope = statementsAst.context.scope;
+                statement.accept(whileVisitor)
+            }
+
+            if (statement.level > maxLevel) {
+                maxLevel = statement.level
+            }
+        }
+
+        statementsAst.level = maxLevel
+    }
+    declareVisitor.visit = (declareStmtAst) => {
+
+    }
+    assignVisitor.visit = (assignStmtAst) => {
+
+    }
+    returnVisitor.visit = (returnStmtAst) => {
+
+    }
+    valueVisitor.visit = (ast) => {
+        let numberVisitor = {}, identityVisitor = {}, booleanVisitor = {}, stringVisitor = {}, binOpVisitor = {}, arrayVisitor = {}, objectVisitor = {}, functionVisitor = {}, functionCallVisitor = {}
+
+        numberVisitor.visit = (numberExprAst) => {
+            //return numberExprAst.value
+        }
+        identityVisitor.visit = (identityExprAst) => {
+            const inContext = ast.inContext(identityExprAst.value)
+            if (inContext.level === -1) {
+                console.error(`${identityExprAst.value} is not in context`)
+            } else {
+                identityExprAst.level = inContext.level
+            }
+            //return identityExprAst.value
+        }
+        booleanVisitor.visit = (booleanExprAst) => {
+            //return booleanExprAst.value
+        }
+        stringVisitor.visit = (stringExprAst) => {
+            //return `"${stringExprAst.value.replace('\n', '\\n').replace('\t', '\\t')}"`;
+        }
+        binOpVisitor.visit = (binOpExprAst) => {
+            binOpExprAst.lhs.context.scope = ast.context.scope
+            binOpExprAst.lhs.accept(valueVisitor)
+            binOpExprAst.rhs.context.scope = ast.context.scope
+            binOpExprAst.rhs.accept(valueVisitor)
+            //return `(${binOpExprAst.lhs.accept(valueVisitor)}${binOpExprAst.op}${binOpExprAst.rhs.accept(valueVisitor)})`;
+        }
+        arrayVisitor.visit = (arrayExprAst) => {
+            arrayExprAst.value.map(e => {
+                e.parent = arrayExprAst.parent
+                //TODO replace?
+                e.context.scope = arrayExprAst.context.scope
+                e.accept(valueVisitor)
+            })
+            //return `[ ${arrayExprAst.value.map(e => e.accept(valueVisitor)).join(', ')} ]`;
+        }
+        objectVisitor.visit = (objectExprAst) => {
+            //TODO
+            //return "{\n" + objectExprAst.fields.map(e => `${e.identity.value}: ${e.value?.accept(valueVisitor)}`).join(',\n') + "\n}"
+        }
+        functionVisitor.visit = (functionExprAst) => {
+            functionExprAst.body.parent = functionExprAst
+            functionExprAst.body.context.scope = functionExprAst.context.scope
+            for (const parameter of functionExprAst.parameters) {
+                //TODO scope?
+                functionExprAst.body.context.scope.set(parameter, undefined)
+            }
+            //functionExprAst.body.parent = ast.context
+            functionExprAst.body.accept(statementsVisitor)
+            functionExprAst.level = functionExprAst.body.level
+            functionExprAst.pure = functionExprAst.level === 0
+            //return `(${functionExprAst.parameters.join(', ')}) => {\n${functionExprAst.body.accept(statementsVisitor)}}`
+        }
+        functionCallVisitor.visit = (functionCallExprAst) => {
+            //TODO
+            if (functionCallExprAst.fun.type === Ast.IDENTITY) {
+                const inContext = functionCallExprAst.inContext(functionCallExprAst.fun.value);
+                if (inContext.level === -1) {
+                    console.error(`${functionCallExprAst.fun.value} is not in context`)
+                } else if (inContext.value.type !== Ast.FUNCTION) {
+                    console.error(`${functionCallExprAst.fun.value} is not in function`)
+                } else {
+                    functionCallExprAst.name = functionCallExprAst.fun
+                    functionCallExprAst.fun = inContext.value
+                    for (let i = 0; i < inContext.value.parameters.length; i++) {
+                        inContext.value.context.scope.set(inContext.value.parameters[i], functionCallExprAst.parameters[i])
+                    }
+                    if (inContext.level > 0) {
+                        functionCallExprAst.level = inContext.level - 1;
+                        functionCallExprAst.pure = false;
+                    } else {
+                        functionCallExprAst.level = 0;
+                        functionCallExprAst.pure = inContext.value.pure || functionCallExprAst.parent !== undefined
+                    }
+                }
+            } else {
+                functionCallExprAst.fun.context.scope = functionCallExprAst.context.scope
+                functionCallVisitor.visit(functionCallExprAst.fun)
+            }
+        }
+
+        if (ast.type === Ast.NUMBER) {
+            return ast.accept(numberVisitor)
+        } else if (ast.type === Ast.IDENTITY) {
+            return ast.accept(identityVisitor)
+        } else if (ast.type === Ast.BOOLEAN) {
+            return ast.accept(booleanVisitor)
+        } else if (ast.type === Ast.STRING) {
+            return ast.accept(stringVisitor)
+        } else if (ast.type === Ast.BIN_OP) {
+            return ast.accept(binOpVisitor)
+        } else if (ast.type === Ast.ARRAY) {
+            return ast.accept(arrayVisitor)
+        } else if (ast.type === Ast.OBJECT) {
+            return ast.accept(objectVisitor)
+        } else if (ast.type === Ast.FUNCTION) {
+            return ast.accept(functionVisitor)
+        } else if (ast.type === Ast.FUNCTION_CALL) {
+            return ast.accept(functionCallVisitor)
+        }
+
+        return '';
+    }
+    ifVisitor.visit = (ifStmtAst) => {
+        ifStmtAst.matchBodies.map(e => {
+            e.condition.accept(valueVisitor)
+            e.body.accept(statementsVisitor)
+        })
+
+        if (ifStmtAst.elseBody) {
+            ifStmtAst.elseBody.accept(statementsVisitor)
+        }
+    }
+    whileVisitor.visit = (whileStmtAst) => {
+        whileStmtAst.condition.accept(valueVisitor)
+        whileStmtAst.body.accept(statementsVisitor)
+    }
+
+    ast.accept(statementsVisitor)
+    //console.log(ast)
+    console.log('aaa')
+})()
+
+//console.log(ast);
+
+const runtime = (() => {
+
+    const runStatements = (ast, envStack) => {
+        const env = envStack[envStack.length - 1]
+
+        for (const statement of ast.statements) {
+            if (isValueAst(statement)) {
+                runValue(statement, envStack)
+            } else if (statement.type === Ast.DECLARE) {
+                //env.push(a)
+                env.set(statement.variable, statement.value)
+            } else if (statement.type === Ast.ASSIGN) {
+                env.set(statement.variable, statement.value)
+            } else if (statement.type === Ast.FUNCTION_CALL) {
+                //env.set(statement.name, statement)
+                runFunction(statement, envStack)
+            } else if (statement.type === Ast.RETURN) {
+                return runValue(statement.value, envStack)
+            } else if (statement.type === Ast.IF) {
+                let match = false
+                for (const matchBody of statement.matchBodies) {
+                    if (runValue(matchBody.condition, envStack)) {
+                        match = true
+                        return runStatements(matchBody.body, envStack)
+                    }
+                }
+
+                if (!match) {
+                    return runStatements(statement.elseBody, envStack)
+                }
+            }
+        }
+    }
+
+    const findInEnvStack = (key, envStack) => {
+        for (let i = envStack.length - 1; i >= 0; i--) {
+            const env = envStack[i];
+            if (env.has(key)) {
+                return {
+                    env: env,
+                    value: env.get(key)
+                }
+            }
+        }
+    }
+
+    const runValue = (ast, envStack) => {
+        let numberVisitor = {},
+            identityVisitor = {},
+            booleanVisitor = {},
+            stringVisitor = {},
+            binOpVisitor = {},
+            arrayVisitor = {},
+            objectVisitor = {},
+            functionVisitor = {},
+            functionCallVisitor = {}
+            if (ast.type === Ast.NUMBER) {
+                return Number(ast.value)
+            } else if (ast.type === Ast.IDENTITY) {
+                const v = findInEnvStack(ast.value, envStack);
+                if(v) {
+                    return v.value
+                } else {
+                    //TODO novalue
+                }
+            } else if (ast.type === Ast.STRING) {
+                return ast.value
+            } else if (ast.type == Ast.BOOLEAN) {
+                return ast.value
+            } else if (ast.type === Ast.BIN_OP) {
+                if (ast.op === '+') {
+                    return runValue(ast.lhs, envStack) + runValue(ast.rhs, envStack)
+                } else if (ast.op === '-') {
+                    return runValue(ast.lhs, envStack) - runValue(ast.rhs, envStack)
+                } else if (ast.op === '*') {
+                    return runValue(ast.lhs, envStack) * runValue(ast.rhs, envStack)
+                } else if (ast.op === '/') {
+                    return runValue(ast.lhs, envStack) / runValue(ast.rhs, envStack)
+                } else if (ast.op === '&&') {
+                    return runValue(ast.lhs, envStack) && runValue(ast.rhs, envStack)
+                } else if (ast.op === '||') {
+                    return runValue(ast.lhs, envStack) || runValue(ast.rhs, envStack)
+                } else if (ast.op === '==') {
+                    return runValue(ast.lhs, envStack) === runValue(ast.rhs, envStack)
+                } else if (ast.op === '.') {
+                    const v = findInEnvStack(ast.lhs.value, envStack)
+                    if (v) {
+                        const obj = v.value
+                        const value = runValue(obj.fields.find(e => e.identity.value === ast.rhs.value).value)
+                        console.log("value", value)
+                        return value
+                    } else {
+                        //novalue
+                    }
+                }
+            } else if (ast.type === Ast.FUNCTION_CALL) {
+                //console.log(ast)
+                return runFunction(ast, envStack)
+            }
+    }
+
+    const runFunction = (ast, envStack) => {        
+        if (ast.name?.value === 'print') {
+            console.log(runValue(ast.parameters[0], envStack))
+            return
+        } else if (ast.fun.type === Ast.IDENTITY) {
+            const v = findInEnvStack("fib", envStack)
+            if (v) {
+                const fun = v.value
+                const env = new Map()
+                envStack.push(env)
+                for (let i = 0; i < fun.parameters.length; i++) {
+                    env.set(fun.parameters[i], runValue(ast.parameters[i]))
+                }
+                const result = runStatements(fun.body, envStack)
+                envStack.pop()
+
+                return result
+            }
+        } else if (ast.fun.type === Ast.FUNCTION) {
+            const env = new Map()
+            envStack.push(env)
+            for (let i = 0; i < ast.fun.parameters.length; i++) {
+                env.set(ast.fun.parameters[i], runValue(ast.parameters[i], envStack))
+            }
+            const result = runStatements(ast.fun.body, envStack)
+            envStack.pop()
+            return result;
+        } else if (ast.fun.type === Ast.FUNCTION_CALL) {
+        }
+    }
+
+    const envStack = []
+    envStack.push(new Map())
+    runStatements(ast, envStack)
+})()
 const compiler = (() => {
+    return
     const statementsVisitor = {}, declareVisitor = {}, assignVisitor = {}, returnVisitor = {}, valueVisitor = {}, ifVisitor = {}, whileVisitor = {};
     statementsVisitor.visit = (statementsAst) => {
         let stmt = ''
@@ -1119,7 +1429,20 @@ const compiler = (() => {
             return `(${functionExprAst.parameters.join(', ')}) => {\n${functionExprAst.body.accept(statementsVisitor)}}`
         }
         functionCallVisitor.visit = (functionCallExprAst) => {
-            return `${functionCallExprAst.name.value}(${functionCallExprAst.parameters.map(e => e.accept(valueVisitor)).join(', ')})`
+            if (functionCallExprAst.fun.type === Ast.IDENTITY) {
+                let fun = functionCallExprAst.fun.value
+
+                if (functionCallExprAst.fun.value === 'print') {
+                    fun = 'process.stdout.write'
+                }
+                return `${fun}(${functionCallExprAst.parameters.map(e => e.accept(valueVisitor)).join(', ')})`
+            } else if (functionCallExprAst.fun.type === Ast.FUNCTION) {
+                return `${functionCallExprAst.name.value}(${functionCallExprAst.parameters.map(e => e.accept(valueVisitor)).join(', ')})`;
+            } else if (functionCallExprAst.fun.type === Ast.FUNCTION_CALL) {
+                return `${functionCallVisitor.visit(functionCallExprAst.fun)}(${functionCallExprAst.parameters.map(e => e.accept(valueVisitor)).join(', ')})`
+                //return `${functionCallExprAst.name.value}(${functionCallExprAst.parameters.map(e => e.accept(valueVisitor)).join(', ')})`;
+            }
+
         }
 
         if (ast.type === Ast.NUMBER) {
@@ -1149,7 +1472,7 @@ const compiler = (() => {
         const firstMatch = ifStmtAst.matchBodies.pop()
         stmt += `if (${firstMatch.condition.accept(valueVisitor)}) {\n${firstMatch.body.accept(statementsVisitor)}}`
         stmt += ifStmtAst.matchBodies.map(e => ` else if (${e.condition.accept(valueVisitor)}) {\n${e.body.accept(statementsVisitor)}}`).join('')
-        if (ifStmtAst.elseBody){
+        if (ifStmtAst.elseBody) {
             stmt += ` else {\n${ifStmtAst.elseBody.accept(statementsVisitor)}}`
         }
 

@@ -1,5 +1,5 @@
-k=10
-l=1
+let k=10
+let l=1
 while(l<=k){
 	i=1
 	while(i<=l){
