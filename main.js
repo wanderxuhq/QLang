@@ -1,5 +1,5 @@
 const fs = require('fs')
-const source = fs.readFileSync('./demo/clojure.ql')
+const source = fs.readFileSync('./demo/obj.ql')
 let str = source;
 
 let token;
@@ -1217,7 +1217,6 @@ const semanticParser = (() => {
 
     ast.accept(statementsVisitor)
     //console.log(ast)
-    console.log('aaa')
 })()
 
 //console.log(ast);
@@ -1232,9 +1231,9 @@ const runtime = (() => {
                 runValue(statement, envStack)
             } else if (statement.type === Ast.DECLARE) {
                 //env.push(a)
-                env.set(statement.variable, statement.value)
+                env.set(statement.variable, runValue(statement.value, envStack))
             } else if (statement.type === Ast.ASSIGN) {
-                env.set(statement.variable, statement.value)
+                env.set(statement.variable.value, runValue(statement.value, envStack))
             } else if (statement.type === Ast.FUNCTION_CALL) {
                 //env.set(statement.name, statement)
                 runFunction(statement, envStack)
@@ -1251,6 +1250,10 @@ const runtime = (() => {
 
                 if (!match) {
                     return runStatements(statement.elseBody, envStack)
+                }
+            } else if (statement.type === Ast.WHILE) {
+                while(runValue(statement.condition, envStack)) {
+                    runStatements(statement.body, envStack)
                 }
             }
         }
@@ -1269,6 +1272,7 @@ const runtime = (() => {
     }
 
     const runValue = (ast, envStack) => {
+        /*
         let numberVisitor = {},
             identityVisitor = {},
             booleanVisitor = {},
@@ -1278,6 +1282,7 @@ const runtime = (() => {
             objectVisitor = {},
             functionVisitor = {},
             functionCallVisitor = {}
+            */
             if (ast.type === Ast.NUMBER) {
                 return Number(ast.value)
             } else if (ast.type === Ast.IDENTITY) {
@@ -1291,6 +1296,12 @@ const runtime = (() => {
                 return ast.value
             } else if (ast.type == Ast.BOOLEAN) {
                 return ast.value
+            } else if (ast.type == Ast.OBJECT) {
+                const obj = {}
+                for (const field of ast.fields) {
+                    obj[field.identity.value] = runValue(field.value, envStack)
+                }
+                return obj;
             } else if (ast.type === Ast.BIN_OP) {
                 if (ast.op === '+') {
                     return runValue(ast.lhs, envStack) + runValue(ast.rhs, envStack)
@@ -1306,13 +1317,18 @@ const runtime = (() => {
                     return runValue(ast.lhs, envStack) || runValue(ast.rhs, envStack)
                 } else if (ast.op === '==') {
                     return runValue(ast.lhs, envStack) === runValue(ast.rhs, envStack)
+                } else if (ast.op === '<=') {
+                    return runValue(ast.lhs, envStack) <= runValue(ast.rhs, envStack)
+                } else if (ast.op === '>=') {
+                    return runValue(ast.lhs, envStack) >= runValue(ast.rhs, envStack)
                 } else if (ast.op === '.') {
                     const v = findInEnvStack(ast.lhs.value, envStack)
                     if (v) {
                         const obj = v.value
-                        const value = runValue(obj.fields.find(e => e.identity.value === ast.rhs.value).value)
-                        console.log("value", value)
-                        return value
+                        //const value = runValue(obj.fields.find(e => e.identity.value === ast.rhs.value).value)
+                        return obj[ast.rhs.value]
+                        //console.log("value", value)
+                        //return value
                     } else {
                         //novalue
                     }
@@ -1320,15 +1336,19 @@ const runtime = (() => {
             } else if (ast.type === Ast.FUNCTION_CALL) {
                 //console.log(ast)
                 return runFunction(ast, envStack)
+            } else if (ast.type === Ast.FUNCTION) {
+                //console.log(ast)
+                //TODO deal with function
+                return ast
             }
     }
 
     const runFunction = (ast, envStack) => {        
         if (ast.name?.value === 'print') {
-            console.log(runValue(ast.parameters[0], envStack))
+            process.stdout.write(runValue(ast.parameters[0], envStack) + '')
             return
         } else if (ast.fun.type === Ast.IDENTITY) {
-            const v = findInEnvStack("fib", envStack)
+            const v = findInEnvStack(ast.fun.value, envStack)
             if (v) {
                 const fun = v.value
                 const env = new Map()
@@ -1337,6 +1357,16 @@ const runtime = (() => {
                     env.set(fun.parameters[i], runValue(ast.parameters[i]))
                 }
                 const result = runStatements(fun.body, envStack)
+
+                if (result.type === Ast.FUNCTION) {
+                    result.callbackEnv = new Map();
+                    
+                    for (let i = 0; i < fun.parameters.length; i++) {
+                        //result.callbackEnv.set()
+                        result.callbackEnv.set(fun.parameters[i], runValue(ast.parameters[i]))
+                    }
+                    
+                }
                 envStack.pop()
 
                 return result
@@ -1348,9 +1378,50 @@ const runtime = (() => {
                 env.set(ast.fun.parameters[i], runValue(ast.parameters[i], envStack))
             }
             const result = runStatements(ast.fun.body, envStack)
+
+            if (result.type === Ast.FUNCTION) {
+                result.callbackEnv = new Map();
+                
+                for (let i = 0; i < fun.parameters.length; i++) {
+                    //result.callbackEnv.set()
+                    result.callbackEnv.set(fun.parameters[i], runValue(ast.parameters[i]))
+                }
+                
+            }
+
             envStack.pop()
             return result;
         } else if (ast.fun.type === Ast.FUNCTION_CALL) {
+            console.log("function call")
+
+            const funResult = runFunction(ast.fun, envStack)
+
+            const env = new Map()
+            envStack.push(env)
+            for (let i = 0; i < funResult.parameters.length; i++) {
+                env.set(funResult.parameters[i], runValue(ast.parameters[i], envStack))
+            }
+            //TODO need more investigate
+            funResult.callbackEnv.forEach((value, key, map) => {
+                env.set(key, value);
+            })
+            
+            const result = runStatements(funResult.body, envStack)
+
+            if (result.type === Ast.FUNCTION) {
+                result.callbackEnv = new Map();
+                
+                for (let i = 0; i < fun.parameters.length; i++) {
+                    //result.callbackEnv.set()
+                    result.callbackEnv.set(fun.parameters[i], runValue(ast.parameters[i]))
+                }
+                
+            }
+
+            envStack.pop()
+            return result;
+
+            //return runFunction(ast.fun, envStack)
         }
     }
 
