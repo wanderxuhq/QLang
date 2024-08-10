@@ -1,5 +1,5 @@
 const fs = require('fs')
-const source = fs.readFileSync('./demo/obj.ql')
+const source = fs.readFileSync('./demo/clojure.ql')
 let str = source;
 
 let token;
@@ -415,6 +415,13 @@ class StmtsAst extends Ast {
         super(Ast.STATEMENTS)
         this.statements = statements
     }
+
+    toObject() {
+        return {
+            type: "STATEMENTS",
+            statements: this.statements.map(e => e.toObject())
+        }
+    }
 }
 
 class DeclareStmtAst extends Ast {
@@ -427,6 +434,15 @@ class DeclareStmtAst extends Ast {
         this.variable = variable
         this.value = value
     }
+
+    toObject() {
+        return {
+            type: "DECLARE",
+            declareType: this.declareType,
+            variable: this.variable,
+            value: this.value.toObject()
+        }
+    }
 }
 
 class AssignStmtAst extends Ast {
@@ -437,6 +453,14 @@ class AssignStmtAst extends Ast {
         this.variable = variable
         this.value = value
     }
+
+    toObject() {
+        return {
+            type: "ASSIGN",
+            variable: this.variable,
+            value: this.value
+        }
+    }
 }
 
 class ReturnStmtAst extends Ast {
@@ -444,6 +468,13 @@ class ReturnStmtAst extends Ast {
     constructor(value) {
         super(Ast.RETURN)
         this.value = value
+    }
+
+    toObject() {
+        return {
+            type: "RETURN",
+            value: this.value.toObject()
+        }
     }
 }
 
@@ -455,6 +486,14 @@ class IfStmtAst extends Ast {
         this.matchBodies = matchBodies
         this.elseBody = elseBody
     }
+
+    toObject() {
+        return {
+            type: "IF",
+            matchBodies: this.matchBodies,
+            elseBody: this.elseBody
+        }
+    }
 }
 
 class IfUnitStmtAst extends Ast {
@@ -465,6 +504,14 @@ class IfUnitStmtAst extends Ast {
         this.condition = condition
         this.body = body
     }
+
+    toObject() {
+        return {
+            type: "IF_UNIT",
+            condition: this.condition,
+            body: this.body
+        }
+    }
 }
 
 class WhileStmtAst extends Ast {
@@ -474,6 +521,14 @@ class WhileStmtAst extends Ast {
         super(Ast.WHILE)
         this.condition = condition
         this.body = body
+    }
+
+    toObject() {
+        return {
+            type: "WHILE",
+            condition: this.condition,
+            body: this.body
+        }
     }
 }
 
@@ -487,6 +542,13 @@ class NumberExprAst extends ExprAst {
         super(Ast.NUMBER)
         this.value = value
     }
+
+    toObject() {
+        return {
+            type: "NUMBER",
+            value: this.value
+        }
+    }
 }
 
 class BooleanExprAst extends ExprAst {
@@ -494,6 +556,13 @@ class BooleanExprAst extends ExprAst {
     constructor(value) {
         super(Ast.BOOLEAN)
         this.value = value
+    }
+
+    toObject() {
+        return {
+            type: "BOOLEAN",
+            value: this.value
+        }
     }
 }
 
@@ -503,6 +572,13 @@ class StringExprAst extends ExprAst {
         super(Ast.STRING)
         this.value = value
     }
+
+    toObject() {
+        return {
+            type: "STRING",
+            value: this.value
+        }
+    }
 }
 
 class ObjectExprAst extends ExprAst {
@@ -510,6 +586,13 @@ class ObjectExprAst extends ExprAst {
     constructor(fields) {
         super(Ast.OBJECT)
         this.fields = fields
+    }
+
+    toObject() {
+        return {
+            type: "OBJECT",
+            fields: this.fields
+        }
     }
 }
 
@@ -519,12 +602,26 @@ class IdentityExprAst extends ExprAst {
         super(Ast.IDENTITY)
         this.value = value
     }
+
+    toObject() {
+        return {
+            type: "IDENTITY",
+            value: this.value
+        }
+    }
 }
 
 class ArrayExprAst extends ExprAst {
     constructor(value) {
         super(Ast.ARRAY)
         this.value = value
+    }
+
+    toObject() {
+        return {
+            type: "ARRAY",
+            value: this.value
+        }
     }
 }
 
@@ -533,6 +630,13 @@ class ArrayIndexExprAst extends ExprAst {
         super(Ast.ARRAY_INDEX)
         this.name = name
         this.value = value
+    }
+
+    toObject() {
+        return {
+            type: "ARRAY_INDEX",
+            value: this.value
+        }
     }
 }
 
@@ -544,6 +648,14 @@ class FunctionExprAst extends ExprAst {
         this.parameters = parameters
         this.body = body
     }
+
+    toObject() {
+        return {
+            type: "FUNCTION",
+            parameters: this.parameters,
+            body: this.body.toObject()
+        }
+    }
 }
 
 class CommaListAstSnip extends ExprAst {
@@ -552,6 +664,13 @@ class CommaListAstSnip extends ExprAst {
         super(Ast.COMMA_LIST)
         this.value = value
     }
+
+    toObject() {
+        return {
+            type: "COMMA_LIST",
+            value: this.value
+        }
+    }
 }
 
 class ParenthesisListAstSnip extends ExprAst {
@@ -559,6 +678,13 @@ class ParenthesisListAstSnip extends ExprAst {
     constructor(value) {
         super(Ast.PARENTHESIS_LIST)
         this.value = value
+    }
+
+    toObject() {
+        return {
+            type: "PARENTHESIS_LIST",
+            value: this.value
+        }
     }
 }
 
@@ -569,6 +695,14 @@ class FunctionCallAst extends ExprAst {
         super(Ast.FUNCTION_CALL)
         this.fun = fun
         this.parameters = parameters
+    }
+
+    toObject() {
+        return {
+            type: "FUNCTION_CALL",
+            fun: this.fun.toObject(),
+            parameters: this.parameters
+        }
     }
 }
 
@@ -581,6 +715,15 @@ class BinOpExprAst extends ExprAst {
         this.op = op.value;
         this.lhs = lhs;
         this.rhs = rhs;
+    }
+
+    toObject() {
+        return {
+            type: "BIN_OP",
+            op: this.op,
+            lhs: this.lhs,
+            rhs: this.rhs
+        }
     }
 }
 
@@ -1219,7 +1362,8 @@ const semanticParser = (() => {
     //console.log(ast)
 })()
 
-//console.log(ast);
+//console.log(ast)
+console.log(JSON.stringify(ast.toObject(), null, 2));
 
 const runtime = (() => {
 
@@ -1252,7 +1396,7 @@ const runtime = (() => {
                     return runStatements(statement.elseBody, envStack)
                 }
             } else if (statement.type === Ast.WHILE) {
-                while(runValue(statement.condition, envStack)) {
+                while (runValue(statement.condition, envStack)) {
                     runStatements(statement.body, envStack)
                 }
             }
@@ -1283,69 +1427,91 @@ const runtime = (() => {
             functionVisitor = {},
             functionCallVisitor = {}
             */
-            if (ast.type === Ast.NUMBER) {
-                return Number(ast.value)
-            } else if (ast.type === Ast.IDENTITY) {
-                const v = findInEnvStack(ast.value, envStack);
-                if(v) {
-                    return v.value
-                } else {
-                    //TODO novalue
-                }
-            } else if (ast.type === Ast.STRING) {
-                return ast.value
-            } else if (ast.type == Ast.BOOLEAN) {
-                return ast.value
-            } else if (ast.type == Ast.OBJECT) {
-                const obj = {}
-                for (const field of ast.fields) {
-                    obj[field.identity.value] = runValue(field.value, envStack)
-                }
-                return obj;
-            } else if (ast.type === Ast.BIN_OP) {
-                if (ast.op === '+') {
-                    return runValue(ast.lhs, envStack) + runValue(ast.rhs, envStack)
-                } else if (ast.op === '-') {
-                    return runValue(ast.lhs, envStack) - runValue(ast.rhs, envStack)
-                } else if (ast.op === '*') {
-                    return runValue(ast.lhs, envStack) * runValue(ast.rhs, envStack)
-                } else if (ast.op === '/') {
-                    return runValue(ast.lhs, envStack) / runValue(ast.rhs, envStack)
-                } else if (ast.op === '&&') {
-                    return runValue(ast.lhs, envStack) && runValue(ast.rhs, envStack)
-                } else if (ast.op === '||') {
-                    return runValue(ast.lhs, envStack) || runValue(ast.rhs, envStack)
-                } else if (ast.op === '==') {
-                    return runValue(ast.lhs, envStack) === runValue(ast.rhs, envStack)
-                } else if (ast.op === '<=') {
-                    return runValue(ast.lhs, envStack) <= runValue(ast.rhs, envStack)
-                } else if (ast.op === '>=') {
-                    return runValue(ast.lhs, envStack) >= runValue(ast.rhs, envStack)
-                } else if (ast.op === '.') {
-                    const v = findInEnvStack(ast.lhs.value, envStack)
-                    if (v) {
-                        const obj = v.value
-                        //const value = runValue(obj.fields.find(e => e.identity.value === ast.rhs.value).value)
-                        return obj[ast.rhs.value]
-                        //console.log("value", value)
-                        //return value
-                    } else {
-                        //novalue
-                    }
-                }
-            } else if (ast.type === Ast.FUNCTION_CALL) {
-                //console.log(ast)
-                return runFunction(ast, envStack)
-            } else if (ast.type === Ast.FUNCTION) {
-                //console.log(ast)
-                //TODO deal with function
-                return ast
+        if (ast.type === Ast.NUMBER) {
+            return Number(ast.value)
+        } else if (ast.type === Ast.IDENTITY) {
+            const v = findInEnvStack(ast.value, envStack);
+            if (v) {
+                return v.value
+            } else {
+                //TODO novalue
             }
+        } else if (ast.type === Ast.STRING) {
+            return ast.value
+        } else if (ast.type == Ast.BOOLEAN) {
+            return ast.value
+        } else if (ast.type == Ast.OBJECT) {
+            const obj = {}
+            for (const field of ast.fields) {
+                obj[field.identity.value] = runValue(field.value, envStack)
+            }
+            return obj;
+        } else if (ast.type === Ast.BIN_OP) {
+            if (ast.op === '+') {
+                return runValue(ast.lhs, envStack) + runValue(ast.rhs, envStack)
+            } else if (ast.op === '-') {
+                return runValue(ast.lhs, envStack) - runValue(ast.rhs, envStack)
+            } else if (ast.op === '*') {
+                return runValue(ast.lhs, envStack) * runValue(ast.rhs, envStack)
+            } else if (ast.op === '/') {
+                return runValue(ast.lhs, envStack) / runValue(ast.rhs, envStack)
+            } else if (ast.op === '&&') {
+                return runValue(ast.lhs, envStack) && runValue(ast.rhs, envStack)
+            } else if (ast.op === '||') {
+                return runValue(ast.lhs, envStack) || runValue(ast.rhs, envStack)
+            } else if (ast.op === '==') {
+                return runValue(ast.lhs, envStack) === runValue(ast.rhs, envStack)
+            } else if (ast.op === '<=') {
+                return runValue(ast.lhs, envStack) <= runValue(ast.rhs, envStack)
+            } else if (ast.op === '>=') {
+                return runValue(ast.lhs, envStack) >= runValue(ast.rhs, envStack)
+            } else if (ast.op === '.') {
+                const v = findInEnvStack(ast.lhs.value, envStack)
+                if (v) {
+                    const obj = v.value
+                    //const value = runValue(obj.fields.find(e => e.identity.value === ast.rhs.value).value)
+                    return obj[ast.rhs.value]
+                    //console.log("value", value)
+                    //return value
+                } else {
+                    //novalue
+                }
+            }
+        } else if (ast.type === Ast.FUNCTION_CALL) {
+            //console.log(ast)
+            return runFunction(ast, envStack)
+        } else if (ast.type === Ast.FUNCTION) {
+            //console.log(ast)
+            //TODO deal with function
+            return ast
+        }
     }
 
-    const runFunction = (ast, envStack) => {        
-        if (ast.name?.value === 'print') {
-            process.stdout.write(runValue(ast.parameters[0], envStack) + '')
+    // Run function call
+    const runFunction = (ast, envStack) => {
+        if (ast.type === Ast.FUNCTION) {
+            const fun = ast
+            /*
+            for (let i = 0; i < fun.parameters.length; i++) {
+                env.set(fun.parameters[i], runValue(ast.parameters[i]))
+            }
+                */
+            const result = runStatements(fun.body, envStack)
+
+            if (result.type === Ast.FUNCTION) {
+                result.callbackEnv = new Map();
+
+                for (let i = 0; i < fun.parameters.length; i++) {
+                    //result.callbackEnv.set()
+                    result.callbackEnv.set(fun.parameters[i], runValue(ast.parameters[i]))
+                }
+
+            }
+
+            return result
+        } else if (ast.name?.value === 'print') {
+            const result = runValue(ast.parameters[0], envStack);
+            process.stdout.write(result + '')
             return
         } else if (ast.fun.type === Ast.IDENTITY) {
             const v = findInEnvStack(ast.fun.value, envStack)
@@ -1360,12 +1526,12 @@ const runtime = (() => {
 
                 if (result.type === Ast.FUNCTION) {
                     result.callbackEnv = new Map();
-                    
+
                     for (let i = 0; i < fun.parameters.length; i++) {
                         //result.callbackEnv.set()
                         result.callbackEnv.set(fun.parameters[i], runValue(ast.parameters[i]))
                     }
-                    
+
                 }
                 envStack.pop()
 
@@ -1381,12 +1547,12 @@ const runtime = (() => {
 
             if (result.type === Ast.FUNCTION) {
                 result.callbackEnv = new Map();
-                
-                for (let i = 0; i < fun.parameters.length; i++) {
+
+                for (let i = 0; i < ast.fun.parameters.length; i++) {
                     //result.callbackEnv.set()
-                    result.callbackEnv.set(fun.parameters[i], runValue(ast.parameters[i]))
+                    result.callbackEnv.set(ast.fun.parameters[i], runValue(ast.parameters[i]))
                 }
-                
+
             }
 
             envStack.pop()
@@ -1394,33 +1560,44 @@ const runtime = (() => {
         } else if (ast.fun.type === Ast.FUNCTION_CALL) {
             console.log("function call")
 
-            const funResult = runFunction(ast.fun, envStack)
-
+            const result = runFunction(ast.fun, envStack)
+            //TODO if funResult is function
             const env = new Map()
             envStack.push(env)
-            for (let i = 0; i < funResult.parameters.length; i++) {
-                env.set(funResult.parameters[i], runValue(ast.parameters[i], envStack))
+            for (let i = 0; i < result.parameters.length; i++) {
+                env.set(result.parameters[i], runValue(ast.parameters[i], envStack))
             }
             //TODO need more investigate
-            funResult.callbackEnv.forEach((value, key, map) => {
-                env.set(key, value);
-            })
+            if (result.type === Ast.FUNCTION) {
+                result.callbackEnv.forEach((value, key, map) => {
+                    env.set(key, value);
+                })
+            }
+
             
+            if (result.type === Ast.FUNCTION) {
+                return runFunction(result, envStack)
+            }
+            
+            envStack.pop()
+
+            return result;
+            /*
             const result = runStatements(funResult.body, envStack)
 
             if (result.type === Ast.FUNCTION) {
                 result.callbackEnv = new Map();
                 
-                for (let i = 0; i < fun.parameters.length; i++) {
+                for (let i = 0; i < ast.fun.parameters.length; i++) {
                     //result.callbackEnv.set()
-                    result.callbackEnv.set(fun.parameters[i], runValue(ast.parameters[i]))
+                    result.callbackEnv.set(ast.fun.parameters[i], runValue(ast.parameters[i]))
                 }
                 
             }
 
             envStack.pop()
             return result;
-
+*/
             //return runFunction(ast.fun, envStack)
         }
     }
