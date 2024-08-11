@@ -1479,7 +1479,16 @@ const runtime = (() => {
             }
         } else if (ast.type === Ast.FUNCTION_CALL) {
             //console.log(ast)
-            return runFunction(ast, envStack)
+            const result = runFunction(ast, envStack)
+            if (result?.type === Ast.FUNCTION) {
+                for (let i = 0; i < result.parameters.length; i++) {
+                    result.callbackEnv.set(result.parameters[i], runValue(ast.parameters[i], envStack))
+                }
+            //envStack.pop()
+
+            //return result
+            }
+            return result;
         } else if (ast.type === Ast.FUNCTION) {
             //console.log(ast)
             //TODO deal with function
@@ -1501,9 +1510,9 @@ const runtime = (() => {
             if (result.type === Ast.FUNCTION) {
                 result.callbackEnv = new Map();
 
-                for (let i = 0; i < fun.parameters.length; i++) {
+                for (let i = 0; i < result.parameters.length; i++) {
                     //result.callbackEnv.set()
-                    result.callbackEnv.set(fun.parameters[i], runValue(ast.parameters[i]))
+                    //result.callbackEnv.set(fun.parameters[i], runValue(ast.parameters[i]))
                 }
 
             }
@@ -1529,7 +1538,7 @@ const runtime = (() => {
 
                     for (let i = 0; i < fun.parameters.length; i++) {
                         //result.callbackEnv.set()
-                        result.callbackEnv.set(fun.parameters[i], runValue(ast.parameters[i]))
+                        result.callbackEnv.set(fun.parameters[i], runValue(ast.parameters[i], envStack))
                     }
 
                 }
@@ -1560,12 +1569,15 @@ const runtime = (() => {
         } else if (ast.fun.type === Ast.FUNCTION_CALL) {
             console.log("function call")
 
-            const result = runFunction(ast.fun, envStack)
+            let result = runFunction(ast.fun, envStack)
             //TODO if funResult is function
             const env = new Map()
             envStack.push(env)
-            for (let i = 0; i < result.parameters.length; i++) {
-                env.set(result.parameters[i], runValue(ast.parameters[i], envStack))
+
+            if (result.type) {
+                for (let i = 0; i < result.parameters.length; i++) {
+                    env.set(result.parameters[i], runValue(ast.parameters[i], envStack))
+                }
             }
             //TODO need more investigate
             if (result.type === Ast.FUNCTION) {
@@ -1573,13 +1585,21 @@ const runtime = (() => {
                     env.set(key, value);
                 })
             }
-
+            
             
             if (result.type === Ast.FUNCTION) {
-                return runFunction(result, envStack)
+                result = runFunction(result, envStack)
+                if (result.type) {
+                    for (let i = 0; i < result.parameters.length; i++) {
+                        env.set(result.parameters[i], runValue(ast.parameters[i], envStack))
+                    }
+                }
+                //envStack.pop()
+
+                return result
             }
+            //envStack.pop()
             
-            envStack.pop()
 
             return result;
             /*
