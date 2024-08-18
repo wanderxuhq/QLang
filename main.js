@@ -1,5 +1,5 @@
 const fs = require('fs')
-const source = fs.readFileSync('./demo/clojure.ql')
+const source = fs.readFileSync('./demo/obj.ql')
 let str = source;
 
 let token;
@@ -418,9 +418,16 @@ class StmtsAst extends Ast {
 
     toObject() {
         return {
-            type: "STATEMENTS",
+            type: Ast.STATEMENTS,
             statements: this.statements.map(e => e.toObject())
         }
+    }
+
+    toValue() {
+        return {
+            type: Ast.STATEMENTS,
+            statements: this.statements.map(statement => statement.toValue())
+        };
     }
 }
 
@@ -437,11 +444,19 @@ class DeclareStmtAst extends Ast {
 
     toObject() {
         return {
-            type: "DECLARE",
+            type: Ast.DECLARE,
             declareType: this.declareType,
             variable: this.variable,
             value: this.value.toObject()
         }
+    }
+
+    toValue() {
+        return {
+            type: Ast.DECLARE,
+            variable: this.variable,
+            value: this.value.toValue()
+        };
     }
 }
 
@@ -456,9 +471,17 @@ class AssignStmtAst extends Ast {
 
     toObject() {
         return {
-            type: "ASSIGN",
+            type: Ast.ASSIGN,
             variable: this.variable,
             value: this.value
+        }
+    }
+
+    toValue() {
+        return {
+            type: Ast.ASSIGN,
+            variable: this.variable,
+            value: this.value.toValue()
         }
     }
 }
@@ -472,9 +495,16 @@ class ReturnStmtAst extends Ast {
 
     toObject() {
         return {
-            type: "RETURN",
+            type: Ast.RETURN,
             value: this.value.toObject()
         }
+    }
+
+    toValue() {
+        return {
+            type: Ast.RETURN,
+            value: this.value.toValue()
+        };
     }
 }
 
@@ -489,9 +519,16 @@ class IfStmtAst extends Ast {
 
     toObject() {
         return {
-            type: "IF",
+            type: Ast.IF,
             matchBodies: this.matchBodies,
             elseBody: this.elseBody
+        }
+    }
+
+    toValue() {
+        return {
+            type: Ast.IF,
+            //TODO
         }
     }
 }
@@ -525,9 +562,17 @@ class WhileStmtAst extends Ast {
 
     toObject() {
         return {
-            type: "WHILE",
+            type: Ast.WHILE,
             condition: this.condition,
             body: this.body
+        }
+    }
+
+    toValue() {
+        return {
+            type: Ast.WHILE,
+            condition: this.condition.toValue(),
+            body: this.body.toValue()
         }
     }
 }
@@ -545,7 +590,14 @@ class NumberExprAst extends ExprAst {
 
     toObject() {
         return {
-            type: "NUMBER",
+            type: Ast.NUMBER,
+            value: this.value
+        }
+    }
+
+    toValue() {
+        return {
+            type: Ast.NUMBER,
             value: this.value
         }
     }
@@ -560,7 +612,14 @@ class BooleanExprAst extends ExprAst {
 
     toObject() {
         return {
-            type: "BOOLEAN",
+            type: Ast.BOOLEAN,
+            value: this.value
+        }
+    }
+
+    toValue() {
+        return {
+            type: Ast.BOOLEAN,
             value: this.value
         }
     }
@@ -575,7 +634,14 @@ class StringExprAst extends ExprAst {
 
     toObject() {
         return {
-            type: "STRING",
+            type: Ast.STRING,
+            value: this.value
+        }
+    }
+
+    toValue() {
+        return {
+            type: Ast.STRING,
             value: this.value
         }
     }
@@ -590,8 +656,21 @@ class ObjectExprAst extends ExprAst {
 
     toObject() {
         return {
-            type: "OBJECT",
+            type: Ast.OBJECT,
             fields: this.fields
+        }
+    }
+
+    toValue() {
+        return {
+            type: Ast.OBJECT,
+            fields: this.fields.map(field => {
+                return {
+                    identity: field.identity.toValue(),
+                    type: field.type?.toValue(),
+                    value: field.value.toValue()
+                }
+            })
         }
     }
 }
@@ -605,7 +684,14 @@ class IdentityExprAst extends ExprAst {
 
     toObject() {
         return {
-            type: "IDENTITY",
+            type: Ast.IDENTITY,
+            value: this.value
+        }
+    }
+
+    toValue() {
+        return {
+            type: Ast.IDENTITY,
             value: this.value
         }
     }
@@ -619,8 +705,15 @@ class ArrayExprAst extends ExprAst {
 
     toObject() {
         return {
-            type: "ARRAY",
+            type: Ast.ARRAY,
             value: this.value
+        }
+    }
+
+    toObject() {
+        return {
+            type: Ast.ARRAY,
+            value: this.value.map(item => item.toValue())
         }
     }
 }
@@ -634,7 +727,14 @@ class ArrayIndexExprAst extends ExprAst {
 
     toObject() {
         return {
-            type: "ARRAY_INDEX",
+            type: Ast.ARRAY_INDEX,
+            value: this.value
+        }
+    }
+
+    toValue() {
+        return {
+            type: Ast.ARRAY_INDEX,
             value: this.value
         }
     }
@@ -656,6 +756,14 @@ class FunctionExprAst extends ExprAst {
             body: this.body.toObject()
         }
     }
+
+    toValue() {
+        return {
+            type: Ast.FUNCTION,
+            parameters: clone(this.parameters),
+            body: this.body.toValue()
+        }
+    }
 }
 
 class CommaListAstSnip extends ExprAst {
@@ -667,8 +775,15 @@ class CommaListAstSnip extends ExprAst {
 
     toObject() {
         return {
-            type: "COMMA_LIST",
+            type: Ast.COMMA_LIST,
             value: this.value
+        }
+    }
+
+    toValue() {
+        return {
+            type: Ast.COMMA_LIST,
+            value: this.value.map(item => item.toValue())
         }
     }
 }
@@ -682,8 +797,15 @@ class ParenthesisListAstSnip extends ExprAst {
 
     toObject() {
         return {
-            type: "PARENTHESIS_LIST",
+            type: Ast.PARENTHESIS_LIST,
             value: this.value
+        }
+    }
+
+    toValue() {
+        return {
+            type: Ast.PARENTHESIS_LIST,
+            value: this.value.toValue()
         }
     }
 }
@@ -699,9 +821,17 @@ class FunctionCallAst extends ExprAst {
 
     toObject() {
         return {
-            type: "FUNCTION_CALL",
+            type: Ast.FUNCTION_CALL,
             fun: this.fun.toObject(),
             parameters: this.parameters
+        }
+    }
+
+    toValue() {
+        return {
+            type: Ast.FUNCTION_CALL,
+            fun: this.fun.toValue(),
+            parameters: this.parameters.map(parameter => parameter.toValue())
         }
     }
 }
@@ -719,13 +849,24 @@ class BinOpExprAst extends ExprAst {
 
     toObject() {
         return {
-            type: "BIN_OP",
+            type: Ast.BIN_OP,
             op: this.op,
             lhs: this.lhs,
             rhs: this.rhs
         }
     }
+
+    toValue() {
+        return {
+            type: Ast.BIN_OP,
+            op: this.op,
+            lhs: this.lhs.toValue(),
+            rhs: this.rhs.toValue()
+        }
+    }
 }
+
+const clone = (e) => JSON.parse(JSON.stringify(e))
 
 const isValueAst = (ast) => {
     return ast.type === Ast.NUMBER
@@ -833,7 +974,7 @@ const parseValue = () => {
         if (token.type === Token.LEFT_PARENTHESIS) {
             const parenthesisList = parseParenthesisList().value
 
-            let functionCallAst = new FunctionCallAst(t, parenthesisList[0])
+            let functionCallAst = new FunctionCallAst(new IdentityExprAst(t), parenthesisList[0])
             for (let i = 1; i < parenthesisList.length; i++) {
                 const parenthesisResult = parenthesisList[i]
                 functionCallAst = new FunctionCallAst(functionCallAst, parenthesisResult)
@@ -1248,7 +1389,7 @@ const semanticParser = (() => {
         identityVisitor.visit = (identityExprAst) => {
             const inContext = ast.inContext(identityExprAst.value)
             if (inContext.level === -1) {
-                console.error(`${identityExprAst.value} is not in context`)
+                console.error(`${JSON.stringify(identityExprAst)} is not in context`)
             } else {
                 identityExprAst.level = inContext.level
             }
@@ -1296,9 +1437,9 @@ const semanticParser = (() => {
         functionCallVisitor.visit = (functionCallExprAst) => {
             //TODO
             if (functionCallExprAst.fun.type === Ast.IDENTITY) {
-                const inContext = functionCallExprAst.inContext(functionCallExprAst.fun.value);
+                const inContext = functionCallExprAst.inContext(functionCallExprAst.fun.value.value);
                 if (inContext.level === -1) {
-                    console.error(`${functionCallExprAst.fun.value} is not in context`)
+                    console.error(`${JSON.stringify(functionCallExprAst.fun.value)} is not in context`)
                 } else if (inContext.value.type !== Ast.FUNCTION) {
                     console.error(`${functionCallExprAst.fun.value} is not in function`)
                 } else {
@@ -1363,7 +1504,7 @@ const semanticParser = (() => {
 })()
 
 //console.log(ast)
-console.log(JSON.stringify(ast.toObject(), null, 2));
+console.log(JSON.stringify(ast.toValue(), null, 2));
 
 const runtime = (() => {
 
@@ -1518,12 +1659,12 @@ const runtime = (() => {
             }
 
             return result
-        } else if (ast.name?.value === 'print') {
+        } else if (ast.name?.value.value === 'print') {
             const result = runValue(ast.parameters[0], envStack);
             process.stdout.write(result + '')
             return
         } else if (ast.fun.type === Ast.IDENTITY) {
-            const v = findInEnvStack(ast.fun.value, envStack)
+            const v = findInEnvStack(ast.fun.value.value, envStack)
             if (v) {
                 const fun = v.value
                 const env = new Map()
@@ -1554,14 +1695,14 @@ const runtime = (() => {
             }
             const result = runStatements(ast.fun.body, envStack)
 
-            if (result.type === Ast.FUNCTION) {
+            //TODO void result
+            if (result && result.type === Ast.FUNCTION) {
                 result.callbackEnv = new Map();
 
                 for (let i = 0; i < ast.fun.parameters.length; i++) {
                     //result.callbackEnv.set()
                     result.callbackEnv.set(ast.fun.parameters[i], runValue(ast.parameters[i]))
                 }
-
             }
 
             envStack.pop()
