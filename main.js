@@ -22,6 +22,7 @@ class Token {
     static EQUAL = '='
     static COLON = ':'
     static COMMA = ','
+    static DOT = '.'
     static SEMICOLON = ';'
     static BLANK = ' '
     static NEW_LINE = 'NEW_LINE'
@@ -129,6 +130,11 @@ const getToken = (skipNewline = true, skipSpace = true, skipComment = true) => {
             eat()
             token = new Token(Token.COMMA)
             return token
+        } else if (char.match(/\./)) {
+            match = true;
+            eat()
+            token = new Token(Token.DOT)
+            return token
         } else if (char.match(/;/)) {
             match = true;
             eat()
@@ -201,7 +207,7 @@ const getToken = (skipNewline = true, skipSpace = true, skipComment = true) => {
                 match = true;
                 return token
             }
-        } else if (char.match(/[0-9.]/)) {
+        } else if (char.match(/[0-9]/)) {
             let number = char;
             while (char.match(/[0-9.]/)) {
                 eat()
@@ -354,6 +360,7 @@ class Ast {
     static STRING = 'STRING';
     static OBJECT = 'OBJECT';
     static IDENTITY = 'IDENTITY';
+    static OBJECT_PATH = 'OBJECT_PATH';
     static ARRAY = 'ARRAY';
     static ARRAY_INDEX = 'ARRAY_INDEX';
     static FUNCTION = 'FUNCTION';
@@ -677,22 +684,48 @@ class ObjectExprAst extends ExprAst {
 
 class IdentityExprAst extends ExprAst {
     value
-    constructor(value) {
+    path
+    constructor(value, path) {
         super(Ast.IDENTITY)
         this.value = value
+        this.path = path
     }
 
     toObject() {
         return {
             type: Ast.IDENTITY,
-            value: this.value
+            value: this.value,
+            path: this.path
         }
     }
 
     toValue() {
         return {
             type: Ast.IDENTITY,
-            value: this.value
+            value: this.value,
+            path: this.path
+        }
+    }
+}
+
+class ObjectPathExprAst extends ExprAst {
+    path
+    constructor(value) {
+        super(Ast.OBJECT_PATH)
+        this.path = value
+    }
+
+    toObject() {
+        return {
+            type: Ast.OBJECT_PATH,
+            value: this.path
+        }
+    }
+
+    toValue() {
+        return {
+            type: Ast.OBJECT_PATH,
+            value: this.path
         }
     }
 }
@@ -899,7 +932,7 @@ const binOpPrecedence = (() => {
     map.set('*', 80);
     map.set('/', 80);
     map.set('%', 80);
-    map.set('.', 90);
+    //map.set('.', 90);
 
     return map;
 })();
@@ -941,7 +974,6 @@ const parseBinOpUnit = (lhs) => {
     return new BinOpExprAst(op, lhs, rhs)
 }
 
-
 const parseBinOp = (value) => {
     let next = token
     while (isBinOpToken(next)) {
@@ -971,10 +1003,25 @@ const parseValue = () => {
         let t = token;
         getToken()
 
+        let idAst = new IdentityExprAst(t.value)
+        
+        if (token.type === Token.DOT) {
+            let path = []
+            path.push(t);
+            while(token.type === Token.DOT) {
+                getToken();
+                if (token.type === Token.IDENTITY) {
+                    path.push(token);
+                    getToken();
+                }
+            }
+            idAst.path = path
+        }
+
         if (token.type === Token.LEFT_PARENTHESIS) {
             const parenthesisList = parseParenthesisList().value
 
-            let functionCallAst = new FunctionCallAst(new IdentityExprAst(t), parenthesisList[0])
+            let functionCallAst = new FunctionCallAst(idAst, parenthesisList[0])
             for (let i = 1; i < parenthesisList.length; i++) {
                 const parenthesisResult = parenthesisList[i]
                 functionCallAst = new FunctionCallAst(functionCallAst, parenthesisResult)
@@ -1000,7 +1047,7 @@ const parseValue = () => {
 
             return list
         }
-        return new IdentityExprAst(t.value)
+        return idAst
     } else if (isBinOpToken(token) && (token.value === '+' || token.value === '-')) {
         const op = token;
         getToken()
@@ -1437,7 +1484,7 @@ const semanticParser = (() => {
         functionCallVisitor.visit = (functionCallExprAst) => {
             //TODO
             if (functionCallExprAst.fun.type === Ast.IDENTITY) {
-                const inContext = functionCallExprAst.inContext(functionCallExprAst.fun.value.value);
+                const inContext = functionCallExprAst.inContext(functionCallExprAst.fun.value);
                 if (inContext.level === -1) {
                     console.error(`${JSON.stringify(functionCallExprAst.fun.value)} is not in context`)
                 } else if (inContext.value.type !== Ast.FUNCTION) {
@@ -1544,13 +1591,30 @@ const runtime = (() => {
         }
     }
 
-    const findInEnvStack = (key, envStack) => {
+    const findInEnvStack = (idAst, envStack) => {
+        let isPath = false;
+        if (idAst.path) {
+            isPath = true;
+        }
         for (let i = envStack.length - 1; i >= 0; i--) {
             const env = envStack[i];
-            if (env.has(key)) {
-                return {
-                    env: env,
-                    value: env.get(key)
+            if (!isPath) {
+                if (env.has(idAst.value)) {
+                    return {
+                        env: env,
+                        value: env.get(idAst.value)
+                    }
+                }
+            } else {
+                let obj = env.get(idAst.path[0].value);
+                if (env.has(idAst.path[0].value)) {
+                    for (let k = 1; k < idAst.path.length; k++) {
+                        obj = obj[idAst.path[k].value];
+                    }
+                    return {
+                        env: env,
+                        value: obj
+                    }
                 }
             }
         }
@@ -1571,7 +1635,7 @@ const runtime = (() => {
         if (ast.type === Ast.NUMBER) {
             return Number(ast.value)
         } else if (ast.type === Ast.IDENTITY) {
-            const v = findInEnvStack(ast.value, envStack);
+            const v = findInEnvStack(ast, envStack);
             if (v) {
                 return v.value
             } else {
@@ -1607,11 +1671,17 @@ const runtime = (() => {
             } else if (ast.op === '>=') {
                 return runValue(ast.lhs, envStack) >= runValue(ast.rhs, envStack)
             } else if (ast.op === '.') {
-                const v = findInEnvStack(ast.lhs.value, envStack)
+                const v = findInEnvStack(ast.lhs, envStack)
                 if (v) {
                     const obj = v.value
                     //const value = runValue(obj.fields.find(e => e.identity.value === ast.rhs.value).value)
-                    return obj[ast.rhs.value]
+                    if (ast.rhs.type === Ast.IDENTITY) {
+                        return obj[ast.rhs.value];
+                        //return runValue(obj[ast.rhs.value], envStack);
+                    } else if (ast.rhs.type === Ast.FUNCTION_CALL) {
+                        return runFunction(ast.rhs, envStack)
+                        //runFunction(ast, envStack)
+                    }
                     //console.log("value", value)
                     //return value
                 } else {
@@ -1659,12 +1729,12 @@ const runtime = (() => {
             }
 
             return result
-        } else if (ast.name?.value.value === 'print') {
+        } else if (ast.name?.value === 'print') {
             const result = runValue(ast.parameters[0], envStack);
             process.stdout.write(result + '')
             return
         } else if (ast.fun.type === Ast.IDENTITY) {
-            const v = findInEnvStack(ast.fun.value.value, envStack)
+            const v = findInEnvStack(ast.fun, envStack)
             if (v) {
                 const fun = v.value
                 const env = new Map()
