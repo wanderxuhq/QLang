@@ -360,7 +360,7 @@ class Ast {
     static STRING = 'STRING';
     static OBJECT = 'OBJECT';
     static IDENTITY = 'IDENTITY';
-    static OBJECT_PATH = 'OBJECT_PATH';
+    static IDENTITY_PATH = 'IDENTITY_PATH';
     static ARRAY = 'ARRAY';
     static ARRAY_INDEX = 'ARRAY_INDEX';
     static FUNCTION = 'FUNCTION';
@@ -684,18 +684,16 @@ class ObjectExprAst extends ExprAst {
 
 class IdentityExprAst extends ExprAst {
     value
-    path
+    
     constructor(value, path) {
         super(Ast.IDENTITY)
         this.value = value
-        this.path = path
     }
 
     toObject() {
         return {
             type: Ast.IDENTITY,
             value: this.value,
-            path: this.path
         }
     }
 
@@ -703,28 +701,27 @@ class IdentityExprAst extends ExprAst {
         return {
             type: Ast.IDENTITY,
             value: this.value,
-            path: this.path
         }
     }
 }
 
-class ObjectPathExprAst extends ExprAst {
+class IdentityPathExprAst extends ExprAst {
     path
     constructor(value) {
-        super(Ast.OBJECT_PATH)
+        super(Ast.IDENTITY_PATH)
         this.path = value
     }
 
     toObject() {
         return {
-            type: Ast.OBJECT_PATH,
+            type: Ast.IDENTITY_PATH,
             value: this.path
         }
     }
 
     toValue() {
         return {
-            type: Ast.OBJECT_PATH,
+            type: Ast.IDENTITY_PATH,
             value: this.path
         }
     }
@@ -743,7 +740,7 @@ class ArrayExprAst extends ExprAst {
         }
     }
 
-    toObject() {
+    toValue() {
         return {
             type: Ast.ARRAY,
             value: this.value.map(item => item.toValue())
@@ -1004,18 +1001,18 @@ const parseValue = () => {
         getToken()
 
         let idAst = new IdentityExprAst(t.value)
-        
+
         if (token.type === Token.DOT) {
             let path = []
-            path.push(t);
+            path.push(idAst)
+            idAst = new IdentityPathExprAst(path)
             while(token.type === Token.DOT) {
                 getToken();
                 if (token.type === Token.IDENTITY) {
-                    path.push(token);
+                    path.push(new IdentityExprAst(token.value));
                     getToken();
                 }
             }
-            idAst.path = path
         }
 
         if (token.type === Token.LEFT_PARENTHESIS) {
@@ -1031,10 +1028,44 @@ const parseValue = () => {
             getToken();
             const value = parseBinOp(parseValue());
             if (token.type === Token.RIGHT_SQUARE_BRACKETS) {
+                let idResult;
+                //TODO x.y.z[a].xxx
                 const arrayIndexToken = new ArrayIndexExprAst(t, value);
                 getToken();
 
-                return arrayIndexToken;
+                if (token.type === Token.DOT) {
+                    //TODO obj[index].xxx
+                    //getToken()
+                    //let _idAst = new IdentityExprAst(.value)
+                    let path = []
+                    path.push(arrayIndexToken)
+                    let _idAst = new IdentityPathExprAst(path)
+                    while(token.type === Token.DOT) {
+                        getToken();
+                        if (token.type === Token.IDENTITY) {
+                            path.push(new IdentityExprAst(token.value));
+                            getToken();
+                        }
+                    }
+
+                    idResult = _idAst
+                } else {
+                    idResult =  arrayIndexToken;
+                }
+
+                if (token.type === Token.LEFT_PARENTHESIS) {
+                    //TODO o[xxx].f(y)[0]
+                    const parenthesisList = parseParenthesisList().value
+        
+                    let functionCallAst = new FunctionCallAst(idResult, parenthesisList[0])
+                    for (let i = 1; i < parenthesisList.length; i++) {
+                        const parenthesisResult = parenthesisList[i]
+                        functionCallAst = new FunctionCallAst(functionCallAst, parenthesisResult)
+                    }
+                    return functionCallAst
+                }
+                
+                return idResult;
             } else {
                 //TODO error
             }
@@ -1593,7 +1624,7 @@ const runtime = (() => {
 
     const findInEnvStack = (idAst, envStack) => {
         let isPath = false;
-        if (idAst.path) {
+        if (idAst.type === Ast.IDENTITY_PATH) {
             isPath = true;
         }
         for (let i = envStack.length - 1; i >= 0; i--) {
@@ -1606,8 +1637,15 @@ const runtime = (() => {
                     }
                 }
             } else {
-                let obj = env.get(idAst.path[0].value);
-                if (env.has(idAst.path[0].value)) {
+                let obj;
+                if (idAst.path[0].type === Ast.ARRAY_INDEX) {
+                    obj = env.get(idAst.path[0].name.value)[runValue(idAst.path[0].value, envStack)];
+                } else if (idAst.path[0].type === Ast.IDENTITY) {
+                    obj = env.get(idAst.path[0].value);
+                }
+                //let obj = env.get(idAst.path[0].value);
+                //TODO obj is array
+                if (obj) {
                     for (let k = 1; k < idAst.path.length; k++) {
                         obj = obj[idAst.path[k].value];
                     }
@@ -1645,6 +1683,8 @@ const runtime = (() => {
             return ast.value
         } else if (ast.type == Ast.BOOLEAN) {
             return ast.value
+        } else if (ast.type === Ast.ARRAY) {
+            return ast.value.map(e => runValue(e, envStack))
         } else if (ast.type == Ast.OBJECT) {
             const obj = {}
             for (const field of ast.fields) {
@@ -1733,7 +1773,7 @@ const runtime = (() => {
             const result = runValue(ast.parameters[0], envStack);
             process.stdout.write(result + '')
             return
-        } else if (ast.fun.type === Ast.IDENTITY) {
+        } else if (ast.fun.type === Ast.IDENTITY || ast.fun.type === Ast.IDENTITY_PATH) {
             const v = findInEnvStack(ast.fun, envStack)
             if (v) {
                 const fun = v.value
