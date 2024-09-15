@@ -12,13 +12,18 @@ import {
     BooleanExprAst,
     IdentityExprAst,
     IdentityPathExprAst,
-    BinOpExprAst
+    BinOpExprAst,
+    IdentityIndexExprAst,
+    IfStmtAst,
+    FunctionExprAst
 } from './ast.js';
+import { match } from 'assert';
 
 const NOT_MATCH = (index) => {
     return {
         type: 'NOT_MATCH',
-        index: index,
+        start: index,
+        end: index,
         length: 0
     }
 }
@@ -29,17 +34,16 @@ const isMatch = (snip) => {
 
 const parse = (index, parser) => {
     let result = {
-        index: index,
-        length: 0,
+        start: index,
+        end: index,
         result: []
     }
     for (const p of parser) {
-        const parseResult = p(result.index);
-        
+        const parseResult = p(result.end);
+
         if (isMatch(parseResult)) {
             result.result.push(parseResult);
-            result.index += parseResult.length;
-            result.length += parseResult.length
+            result.end = parseResult.end;
         } else {
             return NOT_MATCH(index);
         }
@@ -48,12 +52,12 @@ const parse = (index, parser) => {
     return result;
 }
 
-const parseConst = (index, token) => {
+const parseConst = token => index => {
     if (str.substring(index, index + token.length) === token) {
         return {
             type: token,
-            length: token.length,
-            index: index + token.length
+            start: index,
+            end: index + token.length
         }
     } else {
         return NOT_MATCH(index);
@@ -61,29 +65,50 @@ const parseConst = (index, token) => {
 }
 
 const parseLet = (index) => {
-    return parseConst(index, 'let');
+    return parseConst('let')(index);
 }
 
 const parseSpace = (index) => {
+    let _index = index;
     let length = 0;
-    let char = str.substring(index, index + 1);
+    let char = str.substring(_index, _index + 1);
+    let comment = parseComment(_index);
+
     if (char.match(/\s/)) {
         let space = char;
-        index++;
+        _index++;
         length++;
         while (char.match(/\s/)) {
-            char = str.substring(index, index + 1);
+            char = str.substring(_index, _index + 1);
             if (char.match(/\s/)) {
                 space += char
-                index++;
+                _index++;
                 length++;
+            } else {
+                comment = parseComment(_index);
+                if (isMatch(comment)) {
+                    _index = comment.end;
+                    //char = str.substring(_index, _index + 1);
+                    console.log('comment1: ', str.substring(comment.start, comment.end));
+                    char = str.substring(_index, _index + 1);
+                }
             }
         }
         return {
             type: 'SPACE_ANE_NEWLINE',
-            index: index + length,
-            length: length,
+            start: index,
+            end: _index,
             value: space
+        }
+    } else if(isMatch(comment)) {
+        const optionalSpace = parseOptionalSpace(comment.end);
+        console.log('comment2: ', str.substring(index, optionalSpace.end));
+        return {
+            type: 'SPACE',
+            start: index,
+            end: optionalSpace.end,
+            //TODO /*value*/
+            value: str.substring(index, optionalSpace.end)
         }
     } else {
         return NOT_MATCH(index);
@@ -91,93 +116,105 @@ const parseSpace = (index) => {
 }
 
 const parseOptionalSpace = (index) => {
-    let length = 0;
-    let char = str.substring(index, index + 1);
-    if (char.match(/\s/)) {
-        let space = char;
-        index++;
-        length++;
-        while (char.match(/\s/)) {
-            char = str.substring(index, index + 1);
-            if (char.match(/\s/)) {
-                space += char
-                index++;
-                length++;
-            }
-        }
-        return {
-            type: 'SPACE_ANE_NEWLINE',
-            length: length,
-            index: index + length,
-            value: space
-        }
+    const space = parseSpace(index);
+    if (isMatch(space)) {
+        return space;
     } else {
         return {
             type: 'SPACE_ANE_NEWLINE',
-            index: index + length,
-            length: length,
+            start: index,
+            end: index,
             value: ''
         };
+    }
+}
+
+const parseSpaceOnly = (index) => {
+    let _index = index;
+    let length = 0;
+    let char = str.substring(_index, _index + 1);
+    let comment = parseComment(_index);
+
+    if (char.match(/\s/ && char !== '\n' && char !== '\r')) {
+        let space = char;
+        _index++;
+        length++;
+        while (char.match(/\s/ && char !== '\n' && char !== '\r')) {
+            char = str.substring(_index, _index + 1);
+            if (char.match(/\s/ && char !== '\n' && char !== '\r')) {
+                space += char
+                _index++;
+                length++;
+            } else {
+                comment = parseComment(_index);
+                if (isMatch(comment)) {
+                    _index = comment.end;
+                    console.log('comment3: ', str.substring(index, _index));
+                    char = str.substring(_index, _index + 1);
+                    //char = str.substring(_index, _index + 1);
+                }
+            }
+        }
+        return {
+            type: 'SPACE',
+            start: index,
+            end: _index,
+            value: space
+        }
+    } else if(isMatch(comment)) {
+        console.log('comment4: ', str.substring(index, comment.end));
+        return {
+            type: 'SPACE',
+            start: index,
+            end: comment.end,
+            //TODO /*value*/
+            value: str.substring(index, comment.end)
+        }
+    } else {
+        return NOT_MATCH(index);
     }
 }
 
 const parseOptionalSpaceOnly = (index) => {
-    let length = 0;
-    let char = str.substring(index, index + 1);
-    if (char.match(/ /)) {
-        let space = char;
-        index++;
-        length++;
-        while (char.match(/ /)) {
-            char = str.substring(index, index + 1);
-            if (char.match(/ /)) {
-                space += char
-                index++;
-                length++;
-            }
-        }
-        return {
-            type: 'SPACE',
-            index: index + length,
-            length: length,
-            value: space
-        }
+    const spaceOnly = parseSpaceOnly(index);
+    if (isMatch(spaceOnly)) {
+        return spaceOnly;
     } else {
         return {
             type: 'SPACE',
-            index: index + length,
-            length: length,
+            start: index,
+            end: index,
             value: ''
         };
     }
 }
 
-
 const parseNewLine = (index) => {
+    let _index = index;
     let length = 0;
-    let char = str.substring(index, index + 1);
+    let char = str.substring(_index, _index + 1);
     // For windows \r\n, ignore \r
     if (char.match(/\r/)) {
-        index++;
+        _index++;
         length++;
-        char = str.substring(index, index + 1);
+        char = str.substring(_index, _index + 1);
     }
     if (char.match(/\n/)) {
         let newLine = char;
-        index++;
+        _index++;
         length++;
         while (char.match(/\n/)) {
-            char = str.substring(index, index + 1);
+            char = str.substring(_index, _index + 1);
             if (char.match(/\n/)) {
                 newLine += char
-                index++;
+                _index++;
                 length++;
             }
         }
         return {
             type: 'NEW_LINE',
-            index: index + length,
-            length: length,
+            start: index,
+            end: index + length,
             value: newLine
         }
     } else {
@@ -186,48 +223,107 @@ const parseNewLine = (index) => {
 }
 
 const parseOptionalNewLine = (index) => {
-    let length = 0;
-    let char = str.substring(index, index + 1);
-    if (char.match(/\n/)) {
-        let newLine = char;
-        index++;
-        length++;
-        while (char.match(/\n/)) {
-            char = str.substring(index, index + 1);
-            if (char.match(/\n/)) {
-                newLine += char
-                index++;
-                length++;
-            }
-        }
-        return {
-            type: 'NEW_LINE',
-            length: length,
-            value: newLine
-        }
+    const newLine = parseNewLine(index);
+    if (isMatch(newLine)) {
+        return newLine;
     } else {
         return {
             type: 'NEW_LINE',
-            index: index + length,
-            length: length,
+            start: index,
+            end: index,
             value: ''
         };
     }
 }
 
+const parseComment = (index) => {
+    let _index = index;
+    let startComment = parseConst('/*')(index);
+    if (isMatch(startComment)) {
+        _index = startComment.end;
+        let char = str.substring(_index, _index + 1);
+        
+        let endComment = parseConst('*/')(_index);
+        if (!isMatch(endComment)) {
+            let comment = char;
+            _index++;
+            endComment = parseConst('*/')(_index);
+            while (!isMatch(endComment)) {
+                char = str.substring(_index, _index + 1);
+                if (!isMatch(endComment)) {
+                    comment += char;
+                    _index++;
+                    endComment = parseConst('*/')(_index);
+                }
+            }
+
+            return {
+                type: 'COMMENT',
+                start: index,
+                end: endComment.end,
+                comment: comment
+            }
+        } else {
+            return {
+                type: 'COMMENT',
+                start: index,
+                end: endComment.end,
+                comment: comment
+            }
+        }
+    } else {
+        startComment = parseConst('//')(index);
+        if (isMatch(startComment)) {
+            _index = startComment.end;
+            let char = str.substring(_index, _index + 1);
+
+            let endComment = parseNewLine(_index);
+            if (!isMatch(endComment)) {
+                let comment = char;
+                _index++;
+                endComment = parseNewLine(_index);
+                while (!isMatch(endComment) && _index < str.length) {
+                    char = str.substring(_index, _index + 1);
+                    if (!isMatch(endComment)) {
+                        comment += char;
+                        _index++;
+                        endComment = parseNewLine(_index);
+                    }
+                }
+
+                return {
+                    type: 'COMMENT',
+                    start: index,
+                    end: _index,
+                    comment: comment,
+                }
+            } else {
+                return {
+                    type: 'COMMENT',
+                    start: index,
+                    end: endComment.end,
+                    comment: '',
+                }
+            }
+        } else {
+            return NOT_MATCH(index);
+        }
+    }
+}
 
 const parseIdentity = (index) => {
+    let _index = index;
     let char = str.substring(index, index + 1);
     let length = 0;
     if (char.match(/[A-Za-z]/)) {
         let id = char;
-        index++
+        _index++;
         length++
         while (char.match(/[A-Za-z0-9]/)) {
-            char = str.substring(index, index + 1);
+            char = str.substring(_index, _index + 1);
             if (char.match(/[A-Za-z0-9]/)) {
                 id += char
-                index++
+                _index++;
                 length++
             }
         }
@@ -242,7 +338,8 @@ const parseIdentity = (index) => {
         ) {
             return {
                 type: 'IDENTITY',
-                index: index,
+                start: index,
+                end: index + length,
                 length: length,
                 value: id
             }
@@ -255,37 +352,38 @@ const parseIdentity = (index) => {
 }
 
 const parseColon = (index) => {
-    return parseConst(index, ':');
+    return parseConst(':')(index);
 }
 
 const parseEqual = (index) => {
-    return parseConst(index, '=');
+    return parseConst('=')(index);
 }
 
 const parseStatementEnd = (index) => {
     const optionalSpace = parseOptionalSpaceOnly(index);
-    const semicolon = parseConst(index + optionalSpace.length, ';');
+    const semicolon = parseConst(';')(optionalSpace.end);
 
     if (isMatch(semicolon)) {
-        const optionalNewLine = parseOptionalNewLine(index + semicolon.length);
+        const optionalNewLine = parseOptionalNewLine(semicolon.end);
         return {
             type: 'STATEMENT_END',
-            index: index + semicolon.length + optionalNewLine.length,
-            length: semicolon.length + optionalNewLine.length
+            start: index,
+            end: optionalNewLine.end,
         }
     } else {
-        const newLine = parseNewLine(index + optionalSpace.length);
+        const newLine = parseNewLine(optionalSpace.end);
         if (isMatch(newLine)) {
             return {
                 type: 'STATEMENT_END',
-                index: index + newLine.length,
-                length: newLine.length
+                start: index,
+                end: newLine.end,
             }
         } else {
-            if (index + optionalSpace.length === str.length - 1) {
+            if (optionalSpace.end === str.length) {
                 return {
                     type: 'STATEMENT_END',
-                    index: index,
+                    start: optionalSpace.end,
+                    end: index,
                     length: 0
                 }
             } else {
@@ -296,7 +394,7 @@ const parseStatementEnd = (index) => {
 
 }
 
-const flow = (index, parses) => {
+const matchParse = (index, parses) => {
     for (const parse of parses) {
         const p = parse(index)
         if (isMatch(p)) {
@@ -307,7 +405,7 @@ const flow = (index, parses) => {
     return NOT_MATCH(index);
 }
 
-const parseValueAst = (index) => {
+const parseValueAst = env => (index) => {
     const binOpPrecedence = (() => {
         const map = new Map();
 
@@ -338,8 +436,8 @@ const parseValueAst = (index) => {
     }
     const parseBinOpToken = (index) => {
         for (const [key, value] of binOpPrecedence) {
-            const binOpToken = parseConst(index, key)
-            if (isMatch(binOpToken)) {
+            const binOpToken = parseConst(key)(index)
+            if (isMatch(binOpToken) && !isMatch(parseConst('//')(index)) && !isMatch(parseConst('/*')(index))) {
                 return binOpToken;
             }
         }
@@ -348,28 +446,29 @@ const parseValueAst = (index) => {
     }
     const parseBinOpUnitAst = (lhs, index) => {
         const lOptionalSpace = parseOptionalSpace(index);
-        const op = parseBinOpToken(lOptionalSpace.index);
+        const op = parseBinOpToken(lOptionalSpace.end);
         if (isMatch(op)) {
-            const rOptionalSpace = parseOptionalSpace(op.index);
-            let rhs = parseSingleValueAst(rOptionalSpace.index);
-            let nOptionalSpace = parseOptionalSpace(rhs.index);
-            let nextBinOpToken = parseBinOpToken(nOptionalSpace.index);
+            const rOptionalSpace = parseOptionalSpace(op.end);
+            let rhs = parseSingleValueAst(env)(rOptionalSpace.end);
+            let nOptionalSpace = parseOptionalSpace(rhs.end);
+            let nextBinOpToken = parseBinOpToken(nOptionalSpace.end);
 
             let tmp = rhs;
-            let length = rhs.length;
+            //let length = rhs.length;
             while (isMatch(nextBinOpToken) && getBinOpPrecedence(op.type) < getBinOpPrecedence(nextBinOpToken.type)) {
                 //next = token
                 tmp = rhs;
-                rhs = parseBinOpUnitAst(rhs, rhs.index)
-                nOptionalSpace = parseOptionalSpace(rhs.index);
-                nextBinOpToken = parseBinOpToken(nOptionalSpace.index);
-                length += rhs.length;
+                rhs = parseBinOpUnitAst(rhs, rhs.end)
+                nOptionalSpace = parseOptionalSpace(rhs.end);
+                nextBinOpToken = parseBinOpToken(nOptionalSpace.end);
+                //length += rhs.length;
             }
 
             return {
+                type: 'AST',
                 ast: new BinOpExprAst(op, lhs, rhs),
-                index: rhs.index,
-                length: lhs.length + lOptionalSpace.length + op.length + rOptionalSpace.length + rhs.length
+                start: index,
+                end: rhs.end,
             }
 
         } else {
@@ -377,91 +476,198 @@ const parseValueAst = (index) => {
         }
     }
 
-    let value = parseSingleValueAst(index);
+    let value = parseSingleValueAst(env)(index)
     if (isMatch(value)) {
-        //let next = token
-        while (isBinOpToken(value.index)) {
-            value = parseBinOpUnitAst(value, value.index)
-
-            //next = token
+        //console.log(`findInEnv: ${value.ast.value}`, findInEnv(value.ast, env));
+        let optionalSpace = parseOptionalSpace(value.end);
+        while (isBinOpToken(optionalSpace.end)) {
+            value = parseBinOpUnitAst(value, optionalSpace.end)
+            optionalSpace = parseOptionalSpace(value.end);
         }
     }
 
-    return value
+    return value;
 }
 
-const parseSingleValueAst = (index) => {
-    const f = flow(index, [
-        parseNumberAst,
-        parseStringAst,
-        parseBooleanAst,
-        (index) => {
-            let length = 0;
-            const identity = parseIdentity(index);
-            if (isMatch(identity)) {
-                length += identity.length;
-                let optionalSpace = parseOptionalSpace(identity.index);
-                length += optionalSpace.length;
-                let dot = parseConst(optionalSpace.index, '.');
+const parseIdentityAst = (index) => {
+    let identity = parseIdentity(index);
+    
+    if (isMatch(identity)) {
+        let identityAst = {
+            type: 'AST',
+            ast: new IdentityExprAst(identity.value),
+            start: index,
+            end: identity.end,
+        }
 
-                if (isMatch(dot)) {
-                    let path = [];
-                    let pathSnip;
-                    path.push(identity.value);
-                    while (isMatch(dot)) {
-                        length += dot.length;
+        return identityAst;
+    } else {
+        return NOT_MATCH(index);
+    }
+}
 
-                        optionalSpace = parseOptionalSpace(dot.index);
-                        length += optionalSpace.length;
+const parseValuePathAst = env => identityAst => (index) => {
+    let optionalSpace = parseOptionalSpace(identityAst.end);
 
-                        pathSnip = parseIdentity(optionalSpace.index);
-                        path.push(pathSnip.value);
-                        length += pathSnip.length;
+    let objectIndex = parse(optionalSpace.end, [parseConst('['), parseOptionalSpace, parseValueAst(env), parseOptionalSpace, parseConst(']')]);
+    if (isMatch(objectIndex)) {
+        identityAst.index = objectIndex.result[2];
+        console.log(objectIndex)
+        identityAst.end = objectIndex.end;
+    }
 
-                        dot = parseConst(pathSnip.index, '.');
+    const dot = parseConst('.')(identityAst.end);
+
+    if (isMatch(dot)) {
+        const child = parseValueAst(env)(dot.end);
+        identityAst.ast.child = child;
+        identityAst.end = child.end;
+    }
+
+    return identityAst;
+}
+
+const parseFunctionAst = env => (index) => {
+    let p = parseOptionalSpace(index);
+
+    const parseParameters = (index) => {
+        const parseParameter = (index) => {
+            let p = parseIdentity(index);
+            if (isMatch(p)) {
+                let parameter= {
+                    variable: p.value
+                }
+                let p0 = parse(p.end, [parseOptionalSpace, parseConst(':'), parseOptionalSpace, ]);
+                let identity = parseIdentityAst(p0.end);
+                let identityEnd = parse(identity.end, [parseOptionalSpace, parseConst('=')]);
+                let end = p0.end;
+
+                if (isMatch(identity) && isMatch(identityEnd)) {
+                    let pType = findInEnv(identity.ast, env)
+
+                    if (isMatch(pType)) {
+                        parameter.type = pType;
+                        end = identity.end;
+                    } else {
+                        let pType = parseValueAst(env)(p0.end)
+                        if (isMatch(pType)) {
+                            parameter.type = pType
+
+                            end = pType.end
+                        }
                     }
+                } else {
+                    let pType = parseValueAst(env)(p0.end)
+                    if (isMatch(pType)) {
+                        parameter.type = pType
 
-                    return {
-                        ast: new IdentityPathExprAst(path),
-                        index: pathSnip.index,
-                        length: length
+                        end = pType.end
                     }
                 }
+
+                /*
+                let pType = parseValueAst(env)(p0.end)
+                if (isMatch(pType)) {
+                    parameter.type = pType
+
+                    end = pType.end
+                }
+                */
+                
                 return {
-                    ast: new IdentityExprAst(identity.value),
-                    index: identity.index,
-                    length: identity.length
-                }
+                    parameter,
+                    start: index,
+                    end: end
+                };
             } else {
                 return NOT_MATCH(index);
             }
         }
+        let parameters = []
+        let p = parseOptionalSpace(index);
+        p = parseParameter(p.end);
+        if (isMatch(p)) {
+            while (isMatch(p)) {
+                parameters.push(p)
+                p = parse(p.end, [parseOptionalSpace, parseConst(','), parseOptionalSpace]);
+                p = parseParameter(p.end);
+            }
+
+            return {
+                parameters,
+                start: index,
+                end: p.end
+            }
+        } else {
+            return NOT_MATCH(index);
+        }
+        
+    } 
+
+    let p0 = parse(p.end, [parseConst('('), parseOptionalSpace, parseParameters, parseOptionalSpace, parseConst(')'), parseOptionalSpace, parseConst('=>'), parseOptionalSpace, parseConst('{'), parseOptionalSpace, parseStatementsAst(env), parseOptionalSpace, parseConst('}')]);
+    if (isMatch(p0)) {
+        console.log(p0);
+        return {
+            type: 'AST',
+            ast: new FunctionExprAst(p0.result[2].parameters, p0.result[10]),
+            start: index,
+            end: p0.end
+        }
+    } else {
+        p0 = parse(p.end, [parseParameters, parseOptionalSpace, parseConst('=>'), parseOptionalSpace, parseConst('{'), parseOptionalSpace, parseStatementsAst(env), parseOptionalSpace, parseConst('}')]);
+        if (isMatch(p0)) {
+            console.log(p0);
+            return {
+                type: 'AST',
+                ast: new FunctionExprAst(p0.result[0].parameters, p0.result[6]),
+                start: index,
+                end: p0.end
+            }
+        } else {
+            return NOT_MATCH(index);
+        }
+    }
+}
+
+
+const parseSingleValueAst = env => (index) => {
+    const f = matchParse(index, [
+        parseNumberAst,
+        parseStringAst,
+        parseBooleanAst,
+        parseFunctionAst(env),
+        parseIdentityAst,
+        parseParenthesis(env)
     ]);
 
-    //parseBinOp(f.index);
+    if (isMatch(f)) {
+        parseValuePathAst(env)(f)(f.index);
+    }
 
     return f;
 }
 const parseNumberAst = (index) => {
-    let char = str.substring(index, index + 1);
+    let _index = index;
+    let char = str.substring(_index, _index + 1);
     let length = 0;
     if (char.match(/[0-9]/)) {
         let number = char;
-        index++
+        _index++;
         length++
         while (char.match(/[0-9.]/)) {
-            char = str.substring(index, index + 1);
+            char = str.substring(_index, _index + 1);
             if (char.match(/[0-9.]/)) {
                 number += char
-                index++
+                _index++;
                 length++
             }
         }
 
         return {
+            type: 'AST',
             ast: new NumberExprAst(number),
-            index: index,
-            length: length,
+            start: index,
+            end: index + length,
         };
     } else {
         return NOT_MATCH(index);
@@ -469,47 +675,51 @@ const parseNumberAst = (index) => {
 }
 
 const parseStringAst = (index) => {
-    let char = str.substring(index, index + 1);
+    let _index = index;
+    let char = str.substring(_index, _index + 1);
     let length = 0;
     let string = '';
     if (char.match(/["`']/)) {
         const strSymbol = char;
-        index++
+        _index++;
         length++
-        char = str.substring(index, index + 1);
+        char = str.substring(_index, _index + 1);
 
         while (char !== strSymbol) {
-            char = str.substring(index, index + 1);
-
             if (char === '\\') {
-                index++
+                _index++;
                 length++
-                char = str.substring(index, index + 1);
                 if (char === 'n') {
                     string += '\n'
-                    index++
+                    _index++;
                     length++
                 } else if (char === 't') {
                     string += '\t'
-                    index++
+                    _index++;
                     length++
                 } else if (char === '\\') {
                     string += '\\'
-                    index++
+                    _index++;
                     length++
                 }
             } else {
                 string += char;
-                index++
+                _index++;
                 length++
             }
+
+            char = str.substring(_index, _index + 1);
+
+            //_index++;
         }
+        length++;
         console.log(string);
 
         return {
+            type: 'AST',
             ast: new StringExprAst(string),
-            index: index,
-            length: length,
+            start: index,
+            end: index + length,
         }
     } else {
         return NOT_MATCH(index);
@@ -517,20 +727,22 @@ const parseStringAst = (index) => {
 }
 
 const parseBooleanAst = (index) => {
-    const trueResult = parseConst(index, 'true');
+    const trueResult = parseConst('true')(index);
     if (isMatch(trueResult)) {
         return {
+            type: 'AST',
             ast: new BooleanExprAst('true'),
-            index: trueResult.index,
-            length: trueResult.length,
+            start: index,
+            end: trueResult.end,
         }
     } else {
-        const falseResult = parseConst(index, 'false');
+        const falseResult = parseConst('false')(index);
         if (isMatch(falseResult)) {
             return {
+                type: 'AST',
                 ast: new BooleanExprAst('false'),
-                index: trueResult.index,
-                length: trueResult.length,
+                start: index,
+                end: falseResult.end,
             }
         } else {
             return NOT_MATCH(index);
@@ -538,80 +750,133 @@ const parseBooleanAst = (index) => {
     }
 }
 
-const parseStatementAst = (index, context) => {
+const parseParenthesis = env => (index) => {
+    const result = parse(index, [parseConst('('), parseOptionalSpace, parseValueAst(env), parseOptionalSpace, parseConst(')')]);
+    if (isMatch(result)) {
+        return {
+            type: 'AST',
+            ast: result.result[2].ast,
+            start: result.start,
+            end: result.end,
+        }
+    } else {
+        return NOT_MATCH(index)
+    }
+}
+
+const parseStatementAst = env => (index) => {
     const p = parse(index, [parseOptionalSpace])
-    let p0 = parse(p.index, [parseLet, parseSpace, parseIdentity]);
+    let p0 = parse(p.end, [parseLet, parseSpace, parseIdentity]);
     // let variable
     if (isMatch(p0)) {
         // let variable: Type
-        let p1 = parse(p0.index, [parseOptionalSpace, parseColon, parseOptionalSpace, parseValueAst])
+        let p1 = parse(p0.end, [parseOptionalSpace, parseColon, parseOptionalSpace, parseValueAst(env)])
         if (isMatch(p1)) {
             // let variable: Type = value
-            const p2 = parse(p1.index, [parseOptionalSpace, parseEqual, parseOptionalSpace, parseValueAst]);
+            const p2 = parse(p1.end, [parseOptionalSpace, parseEqual, parseOptionalSpace, parseValueAst(env)]);
             if (isMatch(p2)) {
-                const statementEnd = parse(p2.index, [parseStatementEnd]);
+                const statementEnd = parse(p2.end, [parseStatementEnd]);
                 if (isMatch(statementEnd)) {
                     const ast = new DeclareStmtAst(p1.result[3], p0.result[2], p2.result[3]);
-                    context.set(p0.result[2], { type: p1.result[3], value: p2.result[3] });
+                    //context.set(p0.result[2], { type: p1.result[3], value: p2.result[3] });
                     return {
+                        type: 'AST',
                         ast: ast,
-                        index: statementEnd.index,
-                        length: p0.length + p1.length + p2.length + statementEnd.length
+                        start: index,
+                        end: statementEnd.end,
                     }
                 } else {
                     return NOT_MATCH(index);
                 }
             } else {
-                const statementEnd = parse(p1.index, [parseStatementEnd]);
+                const statementEnd = parse(p1.end, [parseStatementEnd]);
                 if (isMatch(statementEnd)) {
                     const ast = new DeclareStmtAst(p1.result[3], p0.result[2], null);
-                    context.set(p0.result[2], { type: 'any', value: null })
+                    //context.set(p0.result[2], { type: 'any', value: null })
                     return {
+                        type: 'AST',
                         ast: ast,
-                        index: statementEnd.index,
-                        length: p0.length + p1.length + statementEnd.length
+                        start: index,
+                        end: statementEnd.end
                     };
                 } else {
                     return NOT_MATCH(index);
                 }
             }
         } else {
-            p1 = parse(p0.index, [parseOptionalSpace, parseEqual, parseOptionalSpace, parseValueAst])
+            p1 = parse(p0.end, [parseOptionalSpace, parseEqual, parseOptionalSpace, parseValueAst(env)])
             if (isMatch(p1)) {
                 // let variable = value
-                const statementEnd = parse(p1.index, [parseStatementEnd]);
+                const statementEnd = parse(p1.end, [parseStatementEnd]);
                 if (isMatch(statementEnd)) {
                     const ast = new DeclareStmtAst(null, p0.result[2], p1.result[3]);
-                    context.set(p0.result[2], { type: 'any', value: p1.result[3] })
+                    //context.set(p0.result[2], { type: 'any', value: p1.result[3] })
                     return {
+                        type: 'AST',
                         ast: ast,
-                        index: statementEnd.index,
-                        length: p0.length + statementEnd.length
+                        start: index,
+                        end: statementEnd.end,
                     }
+                } else {
+                    console.log(p1)
+                    return NOT_MATCH(index)
                 }
             } else {
                 return NOT_MATCH(index)
             }
         }
     } else {
-        p0 = parse(p.index, [parseIdentity]);
+        p0 = parseValueAst(env)(p.end);
         if (isMatch(p0)) {
-            let p1 = parse(p0.index, [parseOptionalSpace, parseEqual]);
+            let p1 = parse(p0.end, [parseOptionalSpace, parseEqual]);
             if (isMatch(p1)) {
-                let p2 = parse(p1.index, [parseOptionalSpace, parseValueAst]);
+                let p2 = parse(p1.end, [parseOptionalSpace, parseValueAst(env)]);
                 if (isMatch(p2)) {
-                    const statementEnd = parse(p2.index, [parseStatementEnd]);
+                    const statementEnd = parse(p2.end, [parseStatementEnd]);
                     if (isMatch(statementEnd)) {
                         // identity = value
                         return {
-                            ast: new AssignStmtAst(p0.result[0], p2.result[1]),
-                            index: p2.index,
-                            length: p0.length + p1.length + p2.length
+                            type: 'AST',
+                            ast: new AssignStmtAst(p0, p2.result[1]),
+                            start: index,
+                            end: p2.end,
                         };
                     } else {
+                        console.log(`Parse failed: ${str.substring(p2.start, p2.start + 20)}`)
                         return NOT_MATCH(index)
                     }
                 }
+            } else {
+                console.log(`Parse failed: ${str.substring(p1.start, p1.start + 20)}`)
+                return NOT_MATCH(index)
+            }
+        } else {
+            const parseBodySeq = [parseConst('{'), parseOptionalSpace, parseStatementsAst(env), parseOptionalSpace, parseConst('}')];
+            const parseIfSeq = [parseConst('if'), parseOptionalSpace, parseValueAst(env), parseOptionalSpace, ...parseBodySeq];
+            p0 = parse(p.end, parseIfSeq)
+            if (isMatch(p0)) {
+                console.log(p0);
+                let ast = new IfStmtAst([{condition: p0.result[2], body: p0.result[6]}]);
+                p0 = parseOptionalSpace(p0.end);
+                let p1 = parse(p0.end, [parseConst('else'), parseOptionalSpace, ...parseIfSeq])
+                while (isMatch(p1)) {
+                    ast.matchBodies.push({condition: p1.result[4], body: p1.result[8]})
+                    p1 = parse(p1.end, [parseConst('else'), parseOptionalSpace, ...parseIfSeq])
+                }
+                p1 = parseOptionalSpace(p1.end)
+                p1 = parse(p1.end, [parseConst('else'), parseOptionalSpace, ...parseBodySeq])
+                if (isMatch(p1)) {
+                    ast.elseBody = p1.result[4]
+                }
+                return {
+                    type: 'AST',
+                    ast: ast,
+                    start: p0.start,
+                    end: p1.end,
+                };
+            } else {
+                console.log(`Parse failed: ${str.substring(p0.start, p0.start + 20)}`)
+                return NOT_MATCH(index)
             }
         }
         return NOT_MATCH(index);
@@ -709,25 +974,54 @@ const parseStatementAst = (index, context) => {
          */
 }
 
-
-const parseStatements = (index) => {
+const parseStatementsAst = parentEnv => (index) => {
     const ast = new StmtsAst([]);
-    let context = new Map();
-    let statement = parseStatementAst(index, context);
-    let length = 0;
-    let _index = statement.index;
+    let env = {
+        parent: parentEnv,
+        context: new Map()
+    };
+    //let context = new Map();
+    let statement = parseStatementAst(env)(index);
+    let end = index;
     while (isMatch(statement)) {
-        length += statement.length;
-        index = statement.index;
+        if (statement.ast.type === Ast.DECLARE) {
+            env.context.set(statement.ast.variable.value, statement.ast.value);
+        }
+        end = statement.end;
         ast.statements.push(statement);
-        statement = parseStatementAst(statement.index, context);
+        statement = parseStatementAst(env)(statement.end);
     }
 
+    console.log(env);
+
     return {
+        type: 'AST',
         ast: ast,
-        index: _index,
-        length: length
+        start: index,
+        end: end
     }
 }
 
-console.log(JSON.stringify(parseStatements(0), null, 2));
+const findInEnv = (variable, env) => {
+    if (variable.type === Ast.NUMBER) {
+        return variable.value;
+    }
+    while (env) {
+        if (variable.type === Ast.IDENTITY) {
+            //TODO 
+            if (env.context.has(variable.value)) {
+                return env.context.get(variable.value)
+            }
+        }
+
+        env = env.parent;
+    }
+
+    return NOT_MATCH;
+}
+
+let context = new Map();
+context.set('String', {name: 'String', type: 'Type'});
+context.set('Int', {name: 'Int', type: 'Type'});
+
+console.log(JSON.stringify(parseStatementsAst({context: context})(0), null, 2));
