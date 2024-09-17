@@ -136,13 +136,13 @@ const parseSpaceOnly = (index) => {
     let char = str.substring(_index, _index + 1);
     let comment = parseComment(_index);
 
-    if (char.match(/\s/ && char !== '\n' && char !== '\r')) {
+    if (char.match(/\s/) && char !== '\n' && char !== '\r') {
         let space = char;
         _index++;
         length++;
-        while (char.match(/\s/ && char !== '\n' && char !== '\r')) {
+        while (char.match(/\s/) && char !== '\n' && char !== '\r') {
             char = str.substring(_index, _index + 1);
-            if (char.match(/\s/ && char !== '\n' && char !== '\r')) {
+            if (char.match(/\s/) && char !== '\n' && char !== '\r') {
                 space += char
                 _index++;
                 length++;
@@ -465,13 +465,10 @@ const parseValueAst = env => (index, functionCall = true) => {
                 //length += rhs.length;
             }
 
-            return {
-                type: 'AST',
-                ast: new BinOpExprAst(op, lhs, rhs),
-                start: index,
-                end: rhs.end,
-            }
-
+            let ast = new BinOpExprAst(op, lhs, rhs);
+            ast.start = index;
+            ast.end = rhs.end;
+            return ast;
         } else {
             return NOT_MATCH(index);
         }
@@ -479,7 +476,7 @@ const parseValueAst = env => (index, functionCall = true) => {
 
     let value = parseSingleValueAst(env)(index, functionCall)
     if (isMatch(value)) {
-        //console.log(`findInEnv: ${value.ast.value}`, findInEnv(value.ast, env));
+        //console.log(`findInEnv: ${value.value}`, findInEnv(value, env));
         let optionalSpace = parseOptionalSpace(value.end);
         while (isBinOpToken(optionalSpace.end)) {
             value = parseBinOpUnitAst(value, optionalSpace.end)
@@ -494,14 +491,11 @@ const parseIdentityAst = (index) => {
     let identity = parseIdentity(index);
 
     if (isMatch(identity)) {
-        let identityAst = {
-            type: 'AST',
-            ast: new IdentityExprAst(identity.value),
-            start: index,
-            end: identity.end,
-        }
+        let ast = new IdentityExprAst(identity.value);
+        ast.start = index;
+        ast.end = identity.end;
 
-        return identityAst;
+        return ast;
     } else {
         return NOT_MATCH(index);
     }
@@ -523,7 +517,7 @@ const parseFunctionAst = env => (index) => {
                 let end = p0.end;
 
                 if (isMatch(type)) {
-                    let pType = findInEnv(type.ast, env)
+                    let pType = findInEnv(type, env)
 
                     if (isMatch(pType)) {
                         parameter.type = pType;
@@ -587,22 +581,19 @@ const parseFunctionAst = env => (index) => {
     let p0 = parse(p.end, [parseConst('('), parseOptionalSpace, parseParameters, parseOptionalSpace, parseConst(')'), parseOptionalSpace, parseConst('->'), parseOptionalSpace, parseConst('{'), parseOptionalSpace, parseStatementsAst(env), parseOptionalSpace, parseConst('}')]);
     if (isMatch(p0)) {
         console.log(p0);
-        return {
-            type: 'AST',
-            ast: new FunctionExprAst(p0.result[2].parameters, p0.result[10]),
-            start: index,
-            end: p0.end
-        }
+        let ast = new FunctionExprAst(p0.result[2].parameters, p0.result[10]);
+        ast.start = index;
+        ast.end = end;
+        return ast;
     } else {
         p0 = parse(p.end, [parseParameters, parseOptionalSpace, parseConst('->'), parseOptionalSpace, parseConst('{'), parseOptionalSpace, parseStatementsAst(env), parseOptionalSpace, parseConst('}')]);
         if (isMatch(p0)) {
             console.log(p0);
-            return {
-                type: 'AST',
-                ast: new FunctionExprAst(p0.result[0].parameters, p0.result[6]),
-                start: index,
-                end: p0.end
-            }
+            let ast = new FunctionExprAst(p0.result[0].parameters, p0.result[6]);
+            ast.start = index;
+            ast.end = p0.end;
+
+            return ast;
         } else {
             return NOT_MATCH(index);
         }
@@ -627,7 +618,7 @@ const parseSingleValueAst = env => (index, functionCall = true) => {
 
         let objectIndex = parse(optionalSpace.end, [parseConst('['), parseOptionalSpace, parseValueAst(env), parseOptionalSpace, parseConst(']')]);
         if (isMatch(objectIndex)) {
-            f.ast.index = objectIndex.result[2];
+            f.index = objectIndex.result[2];
             console.log(objectIndex)
             f.end = objectIndex.end;
         }
@@ -636,11 +627,169 @@ const parseSingleValueAst = env => (index, functionCall = true) => {
 
         if (isMatch(dot)) {
             const child = parseValueAst(env)(dot.end);
-            f.ast.child = child;
+            f.child = child;
             f.end = child.end;
         }
 
+        const parseFunctionCall = (env) => (ast, index) => {
+            const parseParameters = (index) => {
+                let parameters = []
+                //let p = parseOptionalSpace(index);
+                let p = parseValueAst(env)(index, false);
+                if (isMatch(p)) {
+                    while (isMatch(p)) {
+                        parameters.push(p)
+                        p = parse(p.end, [parseOptionalSpace, parseConst(','), parseOptionalSpace]);
+                        p = parseValueAst(env)(p.end, false);
+                    }
+
+                    return {
+                        type: 'PARAMETERS',
+                        parameters,
+                        start: index,
+                        end: p.end
+                    }
+                } else {
+                    return NOT_MATCH(index);
+                }
+            }
+
+            let parameterPrefix = parse(index, [parseOptionalSpace, parseConst('('), parseOptionalSpace]);
+            let parseParameterSuffix = NOT_MATCH(index);
+            //, parseParameters, parseConst(')')
+            //const parameterPrefix = parseOptionalSpace(f.end);
+            if (isMatch(parameterPrefix)) {
+                //while (isMatch(parameterPrefix)) {
+                //}
+                parseParameterSuffix = _index => parseConst(')')(_index)
+            } else {
+                let value = findInEnv(f, env);
+                if (value?.type === Ast.FUNCTION) {
+                    const start = ast.start;
+                    parameterPrefix = parseSpace(ast.end)
+                    parseParameterSuffix = parseOptionalSpace
+                    /*
+                    let space = parseSpace(f.end);
+                    if (isMatch(space)) {
+                        let nextValue = parseValueAst(end)(space.end);
+                        if (isMatch(nextValue)) {
+                            
+                        }
+                    }
+                    */
+                }
+            }
+
+            if (isMatch(parseParameterSuffix)) {
+                const parameters = parseParameters(parameterPrefix.end);
+                if (isMatch(parameters)) {
+                    const parameterSuffix = parseParameterSuffix(parameters.end);
+                    if (isMatch(parameterSuffix)) {
+                        let functionCallAst = new FunctionCallAst(ast, parameters);
+                        functionCallAst.start = index;
+                        functionCallAst.end = parameterSuffix.end;
+                        return functionCallAst
+                    } else {
+                        return NOT_MATCH(index);
+                    }
+                } else {
+                    return NOT_MATCH(index);
+                }
+            } else {
+                return NOT_MATCH(index);
+            }
+            if (isMatch(parameterPrefix)) {
+                while (isMatch(parameterPrefix)) {
+                    const parseParameters = (index) => {
+                        let parameters = []
+                        //let p = parseOptionalSpace(index);
+                        let p = parseValueAst(env)(index, false);
+                        if (isMatch(p)) {
+                            while (isMatch(p)) {
+                                parameters.push(p)
+                                p = parse(p.end, [parseOptionalSpace, parseConst(','), parseOptionalSpace]);
+                                p = parseValueAst(env)(p.end, false);
+                            }
+
+                            return {
+                                type: 'AST',
+                                parameters,
+                                start: index,
+                                end: p.end
+                            }
+                        } else {
+                            return NOT_MATCH(index);
+                        }
+                    }
+                    let parameters = parseParameters(parameterPrefix.end);
+                    if (isMatch(parameters)) {
+                        const start = f.start;
+                        //let parameterSuffix = parse(parameters.end, [parseOptionalSpace, parseConst(')')]);
+                        f = new FunctionCallAst(f, parameters);
+                        f.start = start;
+                        f.end = parameters.end;
+
+                        parameterPrefix = parse(f.end, [parseOptionalSpace, parseConst('<-'), parseOptionalSpace]);
+                        /*
+                        if (isMatch(parameterSuffix)) {
+                            f.ast = new FunctionCallAst(f.ast, parameters);
+                            f.end = parameterSuffix.end;
+                        } else {
+                            return NOT_MATCH(index);
+                        }
+                        */
+                    } else {
+                        return NOT_MATCH(index);
+                    }
+                }
+            } else {
+                //TODO function call f g
+                console.log(f);
+
+                let value = findInEnv(f, env);
+
+                if (value?.type === Ast.FUNCTION) {
+                    const start = f.start;
+                    let space = parseSpace(f.end);
+                    if (isMatch(space)) {
+                        while (isMatch(space)) {
+                            let parameter = parseValueAst(env)(space.end, false)
+                            f = new FunctionCallAst(f, parameter)
+                            f.end = parameter.end;
+                            space = parseSpace(f.end);
+                        }
+                    }
+
+                    f.start = start;
+                }
+            }
+        }
+
         if (functionCall) {
+            //const fun = findInEnv(f, env);
+            //if (fun?.type === Ast.FUNCTION) {
+                const start  =f.start;
+                let functionCall = parseFunctionCall(env)(f, f.end)
+                let nextFunctionCall = parseFunctionCall(env)(functionCall, functionCall.end)
+                if (isMatch(functionCall)) {
+                    while (isMatch(nextFunctionCall)) {
+                        //f = functionCall;
+                        nextFunctionCall = parseFunctionCall(env)(functionCall, functionCall.end)
+                        if (isMatch(nextFunctionCall)) {
+                            functionCall = nextFunctionCall
+                        } else {
+                            break;
+                        }
+                        //f.start = start;
+                    }
+
+                    f = functionCall;
+                    f.start = start;
+                }
+            //}
+        }
+
+        if (false) {
             let parameterPrefix = parse(f.end, [parseOptionalSpace, parseConst('<-'), parseOptionalSpace]);
             //const parameterPrefix = parseOptionalSpace(f.end);
             if (isMatch(parameterPrefix)) {
@@ -668,8 +817,10 @@ const parseSingleValueAst = env => (index, functionCall = true) => {
                     }
                     let parameters = parseParameters(parameterPrefix.end);
                     if (isMatch(parameters)) {
+                        const start = f.start;
                         //let parameterSuffix = parse(parameters.end, [parseOptionalSpace, parseConst(')')]);
-                        f.ast = new FunctionCallAst(f.ast, parameters);
+                        f = new FunctionCallAst(f, parameters);
+                        f.start = start;
                         f.end = parameters.end;
 
                         parameterPrefix = parse(f.end, [parseOptionalSpace, parseConst('<-'), parseOptionalSpace]);
@@ -688,8 +839,26 @@ const parseSingleValueAst = env => (index, functionCall = true) => {
             } else {
                 //TODO function call f g
                 console.log(f);
+
+                let value = findInEnv(f, env);
+
+                if (value?.type === Ast.FUNCTION) {
+                    const start = f.start;
+                    let space = parseSpace(f.end);
+                    if (isMatch(space)) {
+                        while (isMatch(space)) {
+                            let parameter = parseValueAst(env)(space.end, false)
+                            f = new FunctionCallAst(f, parameter)
+                            f.end = parameter.end;
+                            space = parseSpace(f.end);
+                        }
+                    }
+
+                    f.start = start;
+                }
             }
         }
+        
     }
 
     return f;
@@ -711,12 +880,11 @@ const parseNumberAst = (index) => {
             }
         }
 
-        return {
-            type: 'AST',
-            ast: new NumberExprAst(number),
-            start: index,
-            end: index + length,
-        };
+        let ast = new NumberExprAst(number);
+        ast.start = index;
+        ast.end = index + length;
+
+        return ast;
     } else {
         return NOT_MATCH(index);
     }
@@ -763,12 +931,11 @@ const parseStringAst = (index) => {
         length++;
         console.log(string);
 
-        return {
-            type: 'AST',
-            ast: new StringExprAst(string),
-            start: index,
-            end: index + length,
-        }
+        let ast = new StringExprAst(string);
+        ast.start = index;
+        ast.end = index + length;
+
+        return ast;
     } else {
         return NOT_MATCH(index);
     }
@@ -777,21 +944,18 @@ const parseStringAst = (index) => {
 const parseBooleanAst = (index) => {
     const trueResult = parseConst('true')(index);
     if (isMatch(trueResult)) {
-        return {
-            type: 'AST',
-            ast: new BooleanExprAst('true'),
-            start: index,
-            end: trueResult.end,
-        }
+        let ast = new BooleanExprAst('true');
+        ast.start = index;
+        ast.end = trueResult.end;
+        return ast
     } else {
         const falseResult = parseConst('false')(index);
         if (isMatch(falseResult)) {
-            return {
-                type: 'AST',
-                ast: new BooleanExprAst('false'),
-                start: index,
-                end: falseResult.end,
-            }
+            let ast = new BooleanExprAst('false');
+            ast.start = index;
+            ast.end = falseResult.end;
+
+            return ast;
         } else {
             return NOT_MATCH(index);
         }
@@ -801,12 +965,11 @@ const parseBooleanAst = (index) => {
 const parseParenthesis = env => (index) => {
     const result = parse(index, [parseConst('('), parseOptionalSpace, parseValueAst(env), parseOptionalSpace, parseConst(')')]);
     if (isMatch(result)) {
-        return {
-            type: 'AST',
-            ast: result.result[2].ast,
-            start: result.start,
-            end: result.end,
-        }
+        let ast = result.result[2];
+        ast.start = result.start;
+        ast.end = result.end;
+
+        return ast;
     } else {
         return NOT_MATCH(index)
     }
@@ -827,12 +990,10 @@ const parseStatementAst = env => (index) => {
                 if (isMatch(statementEnd)) {
                     const ast = new DeclareStmtAst(p1.result[3], p0.result[2], p2.result[3]);
                     //context.set(p0.result[2], { type: p1.result[3], value: p2.result[3] });
-                    return {
-                        type: 'AST',
-                        ast: ast,
-                        start: index,
-                        end: statementEnd.end,
-                    }
+                    ast.start = index;
+                    ast.end = statementEnd.end;
+
+                    return ast;
                 } else {
                     return NOT_MATCH(index);
                 }
@@ -841,12 +1002,11 @@ const parseStatementAst = env => (index) => {
                 if (isMatch(statementEnd)) {
                     const ast = new DeclareStmtAst(p1.result[3], p0.result[2], null);
                     //context.set(p0.result[2], { type: 'any', value: null })
-                    return {
-                        type: 'AST',
-                        ast: ast,
-                        start: index,
-                        end: statementEnd.end
-                    };
+
+                    ast.start = index;
+                    ast.end = statementEnd.end;
+
+                    return ast;
                 } else {
                     return NOT_MATCH(index);
                 }
@@ -859,12 +1019,10 @@ const parseStatementAst = env => (index) => {
                 if (isMatch(statementEnd)) {
                     const ast = new DeclareStmtAst(null, p0.result[2], p1.result[3]);
                     //context.set(p0.result[2], { type: 'any', value: p1.result[3] })
-                    return {
-                        type: 'AST',
-                        ast: ast,
-                        start: index,
-                        end: statementEnd.end,
-                    }
+                    ast.start = index;
+                    ast.end = statementEnd.end;
+
+                    return ast;
                 } else {
                     console.log(p1)
                     return NOT_MATCH(index)
@@ -883,19 +1041,24 @@ const parseStatementAst = env => (index) => {
                     const statementEnd = parse(p2.end, [parseStatementEnd]);
                     if (isMatch(statementEnd)) {
                         // identity = value
-                        return {
-                            type: 'AST',
-                            ast: new AssignStmtAst(p0, p2.result[1]),
-                            start: index,
-                            end: p2.end,
-                        };
+
+                        let ast =new AssignStmtAst(p0, p2.result[1]);
+                        ast.start = index;
+                        ast.end = p2.end;
+
+                        return ast;
                     } else {
                         console.log(`Parse failed: ${str.substring(p2.start, p2.start + 20)}`)
                         return NOT_MATCH(index)
                     }
                 }
             } else {
-                return p0
+                const statementEnd = parse(p0.end, [parseStatementEnd]);
+                if (isMatch(statementEnd)) {
+                    p0.end = statementEnd.end;
+                    return p0
+                }
+                
                 console.log(`Parse failed: ${str.substring(p1.start, p1.start + 20)}`)
                 return NOT_MATCH(index)
             }
@@ -917,12 +1080,11 @@ const parseStatementAst = env => (index) => {
                 if (isMatch(p1)) {
                     ast.elseBody = p1.result[4]
                 }
-                return {
-                    type: 'AST',
-                    ast: ast,
-                    start: p0.start,
-                    end: p1.end,
-                };
+
+                ast.start = p0.start;
+                ast.end = p1.end;
+
+                return ast;
             } else {
                 console.log(`Parse failed: ${str.substring(p0.start, p0.start + 20)}`)
                 return NOT_MATCH(index)
@@ -1033,10 +1195,10 @@ const parseStatementsAst = parentEnv => (index) => {
     let statement = parseStatementAst(env)(index);
     let end = index;
     while (isMatch(statement)) {
-        if (statement.ast.type === Ast.DECLARE) {
+        if (statement.type === Ast.DECLARE) {
             env.context.push({
-                variable: statement.ast.variable.value,
-                value: statement.ast.value
+                variable: statement.variable.value,
+                value: statement.value
             });
         }
         end = statement.end;
@@ -1046,16 +1208,16 @@ const parseStatementsAst = parentEnv => (index) => {
 
     console.log(env);
 
-    return {
-        type: 'AST',
-        ast: ast,
-        start: index,
-        end: end
-    }
+    ast.start = index;
+    ast.end = end;
+
+    return ast;
 }
 
 const findInEnv = (variable, env) => {
     if (variable.type === Ast.NUMBER) {
+        return variable.value;
+    } else if (variable.type === Ast.FUNCTION) {
         return variable.value;
     }
     while (env) {
