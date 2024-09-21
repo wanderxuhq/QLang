@@ -584,5 +584,7 @@ export {
     IdentityIndexExprAst,
     BinOpExprAst,
     IfStmtAst,
-    FunctionExprAst
+    FunctionExprAst,
+    FunctionCallAst,
+    ReturnStmtAst
 }
