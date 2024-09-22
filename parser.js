@@ -1,5 +1,5 @@
 import fs from 'fs';
-const source = fs.readFileSync('./demo/test-function.ql', 'utf-8');
+const source = fs.readFileSync('./demo/array.ql', 'utf-8');
 let str = source;
 
 import {
@@ -15,11 +15,13 @@ import {
     BinOpExprAst,
     IdentityIndexExprAst,
     IfStmtAst,
+    WhileStmtAst,
     FunctionExprAst,
     FunctionCallAst,
+    ObjectExprAst,
+    ArrayExprAst,
     ReturnStmtAst
 } from './ast.js';
-import { match } from 'assert';
 import { start } from 'repl';
 
 const NOT_MATCH = (index) => {
@@ -484,6 +486,8 @@ const parseValueAst = env => (index, functionCall = true) => {
             value = parseBinOpUnitAst(value, optionalSpace.end)
             optionalSpace = parseOptionalSpace(value.end);
         }
+    } else {
+        return NOT_MATCH(index)
     }
 
     return value;
@@ -599,6 +603,112 @@ const parseFunctionAst = env => (index) => {
     }
 }
 
+const parseObjectAst = env => (index) => {
+    const parseFields = env => (index) => {
+        const parseField = env => index => {
+            let p0 = parseIdentity(index)
+            // variable
+            if (isMatch(p0)) {
+                // variable: Type
+                let p1 = parse(p0.end, [parseOptionalSpace, parseColon, parseOptionalSpace, parseValueAst(env)])
+                if (isMatch(p1)) {
+                    // variable: Type = value
+                    const p2 = parse(p1.end, [parseOptionalSpace, parseEqual, parseOptionalSpace, parseValueAst(env)]);
+                    if (isMatch(p2)) {
+                        return {
+                            start: index,
+                            end: p2.end,
+                            type: p1.result[3],
+                            variable: p0,
+                            value: p2.result[3]
+                        }
+                    } else {
+                        return {
+                            start: index,
+                            end: p1.end,
+                            type: p1.result[3],
+                            variable: p0,
+                        }
+                    }
+                } else {
+                    p1 = parse(p0.end, [parseOptionalSpace, parseEqual, parseOptionalSpace, parseValueAst(env)])
+                    if (isMatch(p1)) {
+                        return {
+                            start: index,
+                            end: p1.end,
+                            variable: p0,
+                            value: p1.result[3]
+                        }
+                    } else {
+                        return {
+                            start: index,
+                            end: p0.end,
+                            variable: p0,
+                        }
+                    }
+                }
+            } else {
+                return NOT_MATCH(index)
+            }
+            
+        }
+        let field = parseField(env)(index);
+        if (isMatch(field)) {
+            let fields = []
+            while (isMatch(field)) {
+                fields.push(field);
+                let p = parse(field.end, [parseOptionalSpace, parseConst(','), parseOptionalSpace])
+                field = parseField(env)(p.end);
+            }
+
+            return {
+                start: index,
+                end:field.end,
+                fields: fields
+            };
+        } else {
+            return NOT_MATCH(index);
+        }
+    }
+    
+    const fields = parse(index, [parseConst('{'), parseOptionalSpace, parseFields(env), parseOptionalSpace, parseConst('}')])
+    if (isMatch(fields)) {
+        let ast = new ObjectExprAst(fields.result[2]);
+        ast.start = index;
+        ast.end = fields.end;
+        return ast
+    } else {
+        return NOT_MATCH(index)
+    }
+}
+
+const parseArrayAst = env => (index) => {
+    const parseArrayItems = env => (index) => {
+        let values = []
+        let value = parseValueAst(env)(index);
+        while (isMatch(value)) {
+            values.push(value);
+            let p = parse(value.end, [parseOptionalSpace, parseConst(','), parseOptionalSpace])
+            value = parseValueAst(env)(p.end)
+        }
+
+        return {
+            start: index,
+            end: value.end,
+            values: values
+        }
+    }
+    const values = parse(index, [parseConst('['), parseOptionalSpace, parseArrayItems(env), parseOptionalSpace, parseConst(']')]);
+
+    if (isMatch(values)) {
+        let ast = new ArrayExprAst(values.result[2]);
+        ast.start = index;
+        ast.end = values.end;
+        return ast
+    } else {
+        return NOT_MATCH(index);
+    }
+}
 
 const parseSingleValueAst = env => (index) => {
     let f = matchParse(index, [
@@ -607,6 +717,8 @@ const parseSingleValueAst = env => (index) => {
         parseBooleanAst,
         parseFunctionAst(env),
         parseIdentityAst,
+        parseObjectAst(env),
+        parseArrayAst(env),
         parseParenthesis(env)
     ]);
 
@@ -892,19 +1004,6 @@ const isTypeOf = (ast, type, env) => {
         console.log(fun);
         const value = runStatements(fun.body, env);
         return value.type == type;
-        console.log("runStatements:", runStatements(fun.body, env));
-        /*
-        for(const statement of fun.body.statements) {
-            if (statement.type === ast.DECLARE) {
-                
-            } else if (statement.type === Ast.ASSIGN) {
-
-            } else if (statement.type === Ast.RETURN) {
-                
-            }
-        }
-*/
-        ast.fun.body;
     }
 }
 
@@ -997,7 +1096,7 @@ const parseStatementAst = env => (index) => {
                 return NOT_MATCH(index)
             }
         } else {
-            const parseBodySeq = [parseConst('{'), parseOptionalSpace, parseStatementsAst(env), parseOptionalSpace, parseConst('}')];
+            let parseBodySeq = [parseConst('{'), parseOptionalSpace, parseStatementsAst(env), parseOptionalSpace, parseConst('}')];
             const parseIfSeq = [parseConst('if'), parseOptionalSpace, parseValueAst(env), parseOptionalSpace, ...parseBodySeq];
             p0 = parse(p.end, parseIfSeq)
             if (isMatch(p0)) {
@@ -1034,8 +1133,21 @@ const parseStatementAst = env => (index) => {
                         return NOT_MATCH(index);
                     }
                 } else {
-                    console.log(`Parse failed: ${str.substring(p0.start, p0.start + 20)}`)
-                    return NOT_MATCH(index)
+                    let parseBodySeq = [parseConst('{'), parseOptionalSpace, parseStatementsAst(env), parseOptionalSpace, parseConst('}')];
+                    const parseWhileSeq = [parseConst('while'), parseOptionalSpace, parseValueAst(env), parseOptionalSpace, ...parseBodySeq];
+                    p0 = parse(p.end, parseWhileSeq)
+                    if (isMatch(p0)) {
+                        //console.log(p0);
+                        let ast = new WhileStmtAst(p0.result[2], p0.result[6]);
+
+                        ast.start = p0.start;
+                        ast.end = p0.end;
+
+                        return ast;
+                    } else {
+                        console.log(`Parse failed: ${str.substring(index, index + 20)}`)
+                        return NOT_MATCH(index);
+                    }
                 }
             }
         }
@@ -1202,13 +1314,16 @@ const runStatement = (ast, env) => {
 */
 
 const runStatements = (ast, env) => {
+    env = {
+        context: new Map(),
+        parent: env
+    }
     for (const statement of ast.statements) {
         if (statement.type === Ast.DECLARE) {
             env.context.set(statement.variable.value, statement.value);
         } else if (statement.type === Ast.ASSIGN) {
             env.context.set(statement.variable.value, statement.value);
         } else if (statement.type === Ast.RETURN) {
-            //env.parent.context.set(ast.variable.value, ast.value);
             return findInEnv(statement.value, env);
         }
         //runStatement(ast, env);
