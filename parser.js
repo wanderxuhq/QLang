@@ -11,9 +11,7 @@ import {
     StringExprAst,
     BooleanExprAst,
     IdentityExprAst,
-    IdentityPathExprAst,
     BinOpExprAst,
-    IdentityIndexExprAst,
     IfStmtAst,
     WhileStmtAst,
     FunctionExprAst,
@@ -93,7 +91,6 @@ const parseSpace = (index) => {
                 comment = parseComment(_index);
                 if (isMatch(comment)) {
                     _index = comment.end;
-                    //char = str.substring(_index, _index + 1);
                     console.log('comment1: ', str.substring(comment.start, comment.end));
                     char = str.substring(_index, _index + 1);
                 }
@@ -156,7 +153,6 @@ const parseSpaceOnly = (index) => {
                     _index = comment.end;
                     console.log('comment3: ', str.substring(index, _index));
                     char = str.substring(_index, _index + 1);
-                    //char = str.substring(_index, _index + 1);
                 }
             }
         }
@@ -459,14 +455,11 @@ const parseValueAst = env => (index, functionCall = true) => {
             let nextBinOpToken = parseBinOpToken(nOptionalSpace.end);
 
             let tmp = rhs;
-            //let length = rhs.length;
             while (isMatch(nextBinOpToken) && getBinOpPrecedence(op.type) < getBinOpPrecedence(nextBinOpToken.type)) {
-                //next = token
                 tmp = rhs;
                 rhs = parseBinOpUnitAst(rhs, rhs.end)
                 nOptionalSpace = parseOptionalSpace(rhs.end);
                 nextBinOpToken = parseBinOpToken(nOptionalSpace.end);
-                //length += rhs.length;
             }
 
             let ast = new BinOpExprAst(op, lhs, rhs);
@@ -480,7 +473,6 @@ const parseValueAst = env => (index, functionCall = true) => {
 
     let value = parseSingleValueAst(env)(index, functionCall)
     if (isMatch(value)) {
-        //console.log(`findInEnv: ${value.value}`, findInEnv(value, env));
         let optionalSpace = parseOptionalSpace(value.end);
         while (isBinOpToken(optionalSpace.end)) {
             value = parseBinOpUnitAst(value, optionalSpace.end)
@@ -521,7 +513,6 @@ const parseFunctionAst = env => (index) => {
                     variable: variable.value
                 }
                 let type = parseIdentityAst(p0.end);
-                //let identityEnd = parse(type.end, [parseOptionalSpace, parseConst(',')]);
 
                 if (isMatch(type)) {
                     let pType = findInEnv(type, env)
@@ -545,15 +536,6 @@ const parseFunctionAst = env => (index) => {
                         parameter.end = pType.end
                     }
                 }
-
-                /*
-                let pType = parseValueAst(env)(p0.end)
-                if (isMatch(pType)) {
-                    parameter.type = pType
-
-                    end = pType.end
-                }
-                */
 
                 return parameter;
             } else {
@@ -583,7 +565,6 @@ const parseFunctionAst = env => (index) => {
 
     let p0 = parse(p.end, [parseConst('('), parseOptionalSpace, parseParameters, parseOptionalSpace, parseConst(')'), parseOptionalSpace, parseConst('->'), parseOptionalSpace, parseConst('{'), parseOptionalSpace, parseStatementsAst(env), parseOptionalSpace, parseConst('}')]);
     if (isMatch(p0)) {
-        //console.log(p0);
         let ast = new FunctionExprAst(p0.result[2].parameters, p0.result[10]);
         ast.start = index;
         ast.end = p0.end;
@@ -591,7 +572,6 @@ const parseFunctionAst = env => (index) => {
     } else {
         p0 = parse(p.end, [parseParameters, parseOptionalSpace, parseConst('->'), parseOptionalSpace, parseConst('{'), parseOptionalSpace, parseStatementsAst(env), parseOptionalSpace, parseConst('}')]);
         if (isMatch(p0)) {
-            //console.log(p0);
             let ast = new FunctionExprAst(p0.result[0].parameters, p0.result[6]);
             ast.start = index;
             ast.end = p0.end;
@@ -723,14 +703,11 @@ const parseSingleValueAst = env => (index) => {
     ]);
 
     if (isMatch(f)) {
-        //parseValuePathAst(env)(f)(f.index);
-
         let optionalSpace = parseOptionalSpace(f.end);
 
         let objectIndex = parse(optionalSpace.end, [parseConst('['), parseOptionalSpace, parseValueAst(env), parseOptionalSpace, parseConst(']')]);
         if (isMatch(objectIndex)) {
             f.index = objectIndex.result[2];
-            //console.log(objectIndex)
             f.end = objectIndex.end;
         }
 
@@ -744,20 +721,16 @@ const parseSingleValueAst = env => (index) => {
 
         const parseFunctionCall = (env) => (ast, index) => {
             const parseParameters = (index) => {
-                //console.log(ast)
                 let parameters = []
-                //let p = parseOptionalSpace(index);
                 let p = parseValueAst(env)(index, true);
                 if (isMatch(p)) {
                     env = {
                         context: new Map(),
-                        //context.set('String', { name: 'String', type: 'Type' });
                         parent: env
                     }
                     const fun = findInEnv(ast, env)
                     
                     if (isTypeOf(ast, Ast.FUNCTION, env)) {
-                        //const parameter of fun.parameters
                         for (let i = 0; i < fun.parameters.length; i++) {
                             if (!isMatch(p)) {
                                 console.log("Parameter mismatch")
@@ -796,27 +769,13 @@ const parseSingleValueAst = env => (index) => {
 
             let parameterPrefix = parse(index, [parseOptionalSpace, parseConst('('), parseOptionalSpace]);
             let parseParameterSuffix = NOT_MATCH(index);
-            //, parseParameters, parseConst(')')
-            //const parameterPrefix = parseOptionalSpace(f.end);
             if (isMatch(parameterPrefix)) {
-                //while (isMatch(parameterPrefix)) {
-                //}
                 parseParameterSuffix = _index => parseConst(')')(_index)
             } else {
                 let value = findInEnv(f, env);
                 if (value?.type === Ast.FUNCTION) {
-                    const start = ast.start;
                     parameterPrefix = parseSpace(ast.end)
                     parseParameterSuffix = parseConst('')
-                    /*
-                    let space = parseSpace(f.end);
-                    if (isMatch(space)) {
-                        let nextValue = parseValueAst(end)(space.end);
-                        if (isMatch(nextValue)) {
-                            
-                        }
-                    }
-                    */
                 }
             }
 
@@ -841,42 +800,27 @@ const parseSingleValueAst = env => (index) => {
             }
         }
 
-        //if (functionCall) {
-            //const fun = findInEnv(f, env);
             if (isTypeOf(f, Ast.FUNCTION, env)) {
                 const start  =f.start;
-                //let functionCall1 = parseFunctionCall(env)(f, f.end)
                 let functionCall = parseFunctionCall(env)(f, f.end)
-                if (isMatch(functionCall)) {
-                    //TODO Type Inference
+                //TODO Type Inference
                     
-                    if (isTypeOf(functionCall, Ast.FUNCTION, env)) {
-                        let nextFunctionCall = parseFunctionCall(env)(functionCall, functionCall.end)
-                        while (isMatch(nextFunctionCall)) {
-                            //f = functionCall;
-                            nextFunctionCall = parseFunctionCall(env)(functionCall, functionCall.end)
-                            if (isMatch(nextFunctionCall)) {
-                                functionCall = nextFunctionCall
-                            } else {
-                                break;
-                            }
-                            /*
-                            if (isTypeOf(nextFunctionCall, Ast.FUNCTION, env)) {
-                                
-                            } else {
-                                break;
-                            }
-                            */
-                            //f.start = start;
+                if (isTypeOf(functionCall, Ast.FUNCTION, env)) {
+                    let nextFunctionCall = parseFunctionCall(env)(functionCall, functionCall.end)
+                    while (isMatch(nextFunctionCall)) {
+                        nextFunctionCall = parseFunctionCall(env)(functionCall, functionCall.end)
+                        if (isMatch(nextFunctionCall)) {
+                            functionCall = nextFunctionCall
+                        } else {
+                            break;
                         }
                     }
-                    
-
-                    f = functionCall;
-                    f.start = start;
                 }
+                
+
+                f = functionCall;
+                f.start = start;
             }
-        //}
         
     }
 
@@ -944,11 +888,8 @@ const parseStringAst = (index) => {
             }
 
             char = str.substring(_index, _index + 1);
-
-            //_index++;
         }
         length++;
-        //console.log(string);
 
         let ast = new StringExprAst(string);
         ast.start = index;
@@ -1137,7 +1078,6 @@ const parseStatementAst = env => (index) => {
                     const parseWhileSeq = [parseConst('while'), parseOptionalSpace, parseValueAst(env), parseOptionalSpace, ...parseBodySeq];
                     p0 = parse(p.end, parseWhileSeq)
                     if (isMatch(p0)) {
-                        //console.log(p0);
                         let ast = new WhileStmtAst(p0.result[2], p0.result[6]);
 
                         ast.start = p0.start;
@@ -1153,97 +1093,6 @@ const parseStatementAst = env => (index) => {
         }
         return NOT_MATCH(index);
     }
-
-
-    /*
-     //console.dir(token);
-     if (token.type === Token.DECLARE) { // let
-         let t1 = getToken();
-         if (t1.type === Token.IDENTITY) { //id
-             let t2 = getToken();
-             if (t2.type === Token.EQUAL) { // =
-                 let t3 = getToken()
-                 if (isValueToken(t3)) {
-                     let valueAst = parseValue()
-                     if (isBinOpToken(token)) {
-                         valueAst = parseBinOp(valueAst)
-                     }
-                     const ast = new DeclareStmtAst(null, t1.value, valueAst);
-                     //TODO exp
- 
-                     //getToken(false)
-                     return ast;
-                 }
-             } else if (t2.type === Token.COLON) { // :
-                 let t4 = getToken()
-                 if (t4.type === Token.IDENTITY) { // type
-                     let t5 = getToken()
-                     if (t5.type === Token.EQUAL) { // =
-                         let t6 = getToken();
-                         if (isValueToken(t6)) {
-                             const ast = new DeclareStmtAst(t4.value, t1.value, parseValue());
-                             //TODO exp
-                             //getToken(false);
-                             return ast;
-                         }
-                     }
- 
-                 }
-             } else {
-                 return new DeclareStmtAst(null, t1.value, null);
-             }
-         }
-         //console.dir(t);
-     } else if (token.type === Token.IDENTITY) {
-         const valueAst = parseBinOp(parseValue());
- 
-         //const variable = parseBinOp(parseValue())
-         if (token.type === Token.EQUAL) {
-             getToken()
-             const value = parseBinOp(parseValue())
- 
-             return new AssignStmtAst(valueAst, value)
-         }
-         return valueAst;
-     } else if (token.type === Token.IF) {
-         getToken();
- 
-         const matchBodies = [];
-         const value = parseValue();
-         matchBodies.push(new IfUnitStmtAst(parseBinOp(value), parseBlock()));
-         let elseBody;
-         if (token.type === Token.ELSE) {
-             while (token.type === Token.ELSE) {
-                 getToken();
-                 if (token.type === Token.IF) {
-                     getToken();
-                     matchBodies.push(new IfUnitStmtAst(parseBinOp(parseValue()), parseBlock()));
-                     //getToken()
-                 } else {
-                     elseBody = parseBlock();
-                     //getToken();
-                     break;
-                 }
-                 //getToken();
-             }
-         } else {
-             getToken()
-         }
- 
-         return new IfStmtAst(matchBodies, elseBody);
-     } else if (token.type === Token.WHILE) {
-         getToken();
- 
-         const condition = parseBinOp(parseValue());
-         return new WhileStmtAst(condition, parseBlock())
-     } else if (token.type === Token.RETURN) {
-         getToken()
-         return new ReturnStmtAst(parseBinOp(parseValue()))
-     } else {
-         console.log("token", token)
-         throw new Error()
-     }
-         */
 }
 
 const parseStatementsAst = parentEnv => (index) => {
