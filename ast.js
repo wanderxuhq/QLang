@@ -584,7 +584,10 @@ export {
     IdentityIndexExprAst,
     BinOpExprAst,
     IfStmtAst,
+    WhileStmtAst,
     FunctionExprAst,
     FunctionCallAst,
+    ObjectExprAst,
+    ArrayExprAst,
     ReturnStmtAst
 }
