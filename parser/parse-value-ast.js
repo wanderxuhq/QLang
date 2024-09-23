@@ -502,23 +502,23 @@ const parseSingleValueAst = env => str => (index) => {
             let functionCall = parseFunctionCall(env)(str)(f, f.end)
             //TODO Type Inference
 
-            if (isTypeOf(functionCall, Ast.FUNCTION, env)) {
-                let nextFunctionCall = parseFunctionCall(env)(str)(functionCall, functionCall.end)
-                while (isMatch(nextFunctionCall)) {
-                    nextFunctionCall = parseFunctionCall(env)(str)(functionCall, functionCall.end)
-                    if (isMatch(nextFunctionCall)) {
-                        functionCall = nextFunctionCall
-                    } else {
-                        break;
+            if (isMatch(functionCall)) {
+                if (isTypeOf(functionCall, Ast.FUNCTION, env)) {
+                    let nextFunctionCall = parseFunctionCall(env)(str)(functionCall, functionCall.end)
+                    while (isMatch(nextFunctionCall)) {
+                        nextFunctionCall = parseFunctionCall(env)(str)(functionCall, functionCall.end)
+                        if (isMatch(nextFunctionCall)) {
+                            functionCall = nextFunctionCall
+                        } else {
+                            break;
+                        }
                     }
                 }
+
+                f = functionCall;
+                f.start = start;
             }
-
-
-            f = functionCall;
-            f.start = start;
         }
-
     }
 
     return f;
