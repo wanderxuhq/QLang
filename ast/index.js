@@ -1,4 +1,3 @@
-
 class Ast {
     type
     index
@@ -9,16 +8,6 @@ class Ast {
 
     constructor(type) {
         this.type = type
-        //this.row = row
-        //this.col = col
-        //this.index = index
-        /*
-        this.context = {
-            scope: new Map(),
-            object: new Map(),
-            parameter: new Map()
-        }
-        */
     }
 
     static STATEMENTS = 'STATEMENTS';
@@ -68,7 +57,6 @@ class Ast {
                 level: "object",
                 value: this.context.object.get(variable)
             }
-            //console.log(variable, result)
             return result
         } else {
             let parent = this.parent
@@ -80,7 +68,6 @@ class Ast {
                         level: depth,
                         value: parent.context.scope.get(variable)
                     }
-                    //console.log(variable, result)
                     return result
                 }
                 parent = parent.parent
@@ -212,24 +199,6 @@ class IfStmtAst extends Ast {
         return {
             type: Ast.IF,
             //TODO
-        }
-    }
-}
-
-class IfUnitStmtAst extends Ast {
-    condition
-    body
-    constructor(condition, body) {
-        super(Ast.IF_UNIT)
-        this.condition = condition
-        this.body = body
-    }
-
-    toObject() {
-        return {
-            type: "IF_UNIT",
-            condition: this.condition,
-            body: this.body
         }
     }
 }
@@ -467,50 +436,6 @@ class FunctionExprAst extends ExprAst {
             type: Ast.FUNCTION,
             parameters: clone(this.parameters),
             body: this.body.toValue()
-        }
-    }
-}
-
-class CommaListAstSnip extends ExprAst {
-    value
-    constructor(value) {
-        super(Ast.COMMA_LIST)
-        this.value = value
-    }
-
-    toObject() {
-        return {
-            type: Ast.COMMA_LIST,
-            value: this.value
-        }
-    }
-
-    toValue() {
-        return {
-            type: Ast.COMMA_LIST,
-            value: this.value.map(item => item.toValue())
-        }
-    }
-}
-
-class ParenthesisListAstSnip extends ExprAst {
-    value
-    constructor(value) {
-        super(Ast.PARENTHESIS_LIST)
-        this.value = value
-    }
-
-    toObject() {
-        return {
-            type: Ast.PARENTHESIS_LIST,
-            value: this.value
-        }
-    }
-
-    toValue() {
-        return {
-            type: Ast.PARENTHESIS_LIST,
-            value: this.value.toValue()
         }
     }
 }
