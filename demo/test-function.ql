@@ -1,3 +1,4 @@
+/*
 let f = x -> {
     let k = 1;
     return y -> {
@@ -11,4 +12,16 @@ let g = (y,z,a) -> {
     return 2;
 };
 
-f 0 1;
+f 1;
+*/
+let x = (y) -> {
+    return (z) -> {
+        return (a) -> {
+            return (b) -> {
+                return y + z * a+b;
+            }
+        }
+    }
+}
+
+x 1 2 3 4

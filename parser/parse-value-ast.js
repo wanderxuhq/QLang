@@ -25,76 +25,84 @@ import {
     ArrayExprAst,
 } from '../ast/index.js';
 
-const parseValueAst = env => str => (index) => {
-    const binOpPrecedence = (() => {
-        const map = new Map();
+const binOpPrecedence = (() => {
+    const map = new Map();
 
-        map.set('||', 10);
-        map.set('&&', 20);
-        map.set('|', 30);
-        map.set('^', 40);
-        map.set('&', 50);
-        map.set('==', 60);
-        map.set('<=', 60);
-        map.set('<', 60);
-        map.set('>=', 60);
-        map.set('>', 60);
-        map.set('!=', 60);
-        map.set('+', 70);
-        map.set('-', 70);
-        map.set('*', 80);
-        map.set('/', 80);
-        map.set('%', 80);
+    map.set('||', 10);
+    map.set('&&', 20);
+    map.set('|', 30);
+    map.set('^', 40);
+    map.set('&', 50);
+    map.set('==', 60);
+    map.set('<=', 60);
+    map.set('<', 60);
+    map.set('>=', 60);
+    map.set('>', 60);
+    map.set('!=', 60);
+    map.set('+', 70);
+    map.set('-', 70);
+    map.set('*', 80);
+    map.set('/', 80);
+    map.set('%', 80);
 
-        return map;
-    })();
-    const isBinOpToken = (index) => {
-        return isMatch(parseBinOpToken(str)(index));
+    return map;
+})();
+const isBinOpToken = str => (index) => {
+    return isMatch(parseBinOpToken(str)(index));
+}
+const getBinOpPrecedence = (op) => {
+    return binOpPrecedence.get(op);
+}
+const parseBinOpToken = (str) => (index) => {
+    for (const [key, value] of binOpPrecedence) {
+        const binOpToken = parseConst(key)(str)(index)
+        if (isMatch(binOpToken) && !isMatch(parseConst('//')(str)(index)) && !isMatch(parseConst('/*')(str)(index)) && !isMatch(parseConst('->')(str)(index)) && !isMatch(parseConst('<-')(str)(index))) {
+            return binOpToken;
+        }
     }
-    const getBinOpPrecedence = (op) => {
-        return binOpPrecedence.get(op);
-    }
-    const parseBinOpToken = (str) => (index) => {
-        for (const [key, value] of binOpPrecedence) {
-            const binOpToken = parseConst(key)(str)(index)
-            if (isMatch(binOpToken) && !isMatch(parseConst('//')(str)(index)) && !isMatch(parseConst('/*')(str)(index)) && !isMatch(parseConst('->')(str)(index)) && !isMatch(parseConst('<-')(str)(index))) {
-                return binOpToken;
-            }
+
+    return notMatch(index);
+}
+const parseBinOpUnitAst = signature => env => str => (lhs, index) => {
+    const lOptionalSpace = parseOptionalSpace(str)(index);
+    const op = parseBinOpToken(str)(lOptionalSpace.end);
+    if (isMatch(op)) {
+        const rOptionalSpace = parseOptionalSpace(str)(op.end);
+        let rhs = parseSingleValueAst(signature)(env)(str)(rOptionalSpace.end);
+        let nOptionalSpace = parseOptionalSpace(str)(rhs.end);
+        let nextBinOpToken = parseBinOpToken(str)(nOptionalSpace.end);
+
+        let tmp = rhs;
+        while (isMatch(nextBinOpToken) && getBinOpPrecedence(op.type) < getBinOpPrecedence(nextBinOpToken.type)) {
+            tmp = rhs;
+            rhs = parseBinOpUnitAst(signature)(env)(str)(rhs, rhs.end)
+            nOptionalSpace = parseOptionalSpace(str)(rhs.end);
+            nextBinOpToken = parseBinOpToken(str)(nOptionalSpace.end);
         }
 
+        let ast = new BinOpExprAst(op, lhs, rhs);
+        ast.start = index;
+        ast.end = rhs.end;
+        return ast;
+    } else {
         return notMatch(index);
     }
-    const parseBinOpUnitAst = str => (lhs, index) => {
-        const lOptionalSpace = parseOptionalSpace(str)(index);
-        const op = parseBinOpToken(str)(lOptionalSpace.end);
-        if (isMatch(op)) {
-            const rOptionalSpace = parseOptionalSpace(str)(op.end);
-            let rhs = parseSingleValueAst(env)(str)(rOptionalSpace.end);
-            let nOptionalSpace = parseOptionalSpace(str)(rhs.end);
-            let nextBinOpToken = parseBinOpToken(str)(nOptionalSpace.end);
+}
 
-            let tmp = rhs;
-            while (isMatch(nextBinOpToken) && getBinOpPrecedence(op.type) < getBinOpPrecedence(nextBinOpToken.type)) {
-                tmp = rhs;
-                rhs = parseBinOpUnitAst(str)(rhs, rhs.end)
-                nOptionalSpace = parseOptionalSpace(str)(rhs.end);
-                nextBinOpToken = parseBinOpToken(str)(nOptionalSpace.end);
-            }
+const parseSignature = env => str => (index) => {
+    return parseValue(true)(env)(str)(index);
+}
 
-            let ast = new BinOpExprAst(op, lhs, rhs);
-            ast.start = index;
-            ast.end = rhs.end;
-            return ast;
-        } else {
-            return notMatch(index);
-        }
-    }
+const parseValueAst = env => str => (index) => {
+    return parseValue(false)(env)(str)(index);
+}
 
-    let value = parseSingleValueAst(env)(str)(index)
+const parseValue = signature => env => str => (index) => {
+    let value = parseSingleValueAst(signature)(env)(str)(index)
     if (isMatch(value)) {
         let optionalSpace = parseOptionalSpace(str)(value.end);
-        while (isBinOpToken(optionalSpace.end)) {
-            value = parseBinOpUnitAst(str)(value, optionalSpace.end)
+        while (isBinOpToken(str)(optionalSpace.end)) {
+            value = parseBinOpUnitAst(signature)(env)(str)(value, optionalSpace.end)
             optionalSpace = parseOptionalSpace(str)(value.end);
         }
     } else {
@@ -244,7 +252,7 @@ const parseObjectAst = env => str => (index) => {
                     // variable: Type = value
                     const p2 = parseSeq(str)(p1.end, [
                         parseOptionalSpace,
-                        parseEqual,
+                        parseConst('='),
                         parseOptionalSpace,
                         parseValueAst(env)
                     ]);
@@ -267,7 +275,7 @@ const parseObjectAst = env => str => (index) => {
                 } else {
                     p1 = parseSeq(str)(p0.end, [
                         parseOptionalSpace,
-                        parseEqual,
+                        parseConst('='),
                         parseOptionalSpace,
                         parseValueAst(env)])
                     if (isMatch(p1)) {
@@ -368,7 +376,7 @@ const parseArrayAst = env => str => (index) => {
     }
 }
 
-const parseSingleValueAst = env => str => (index) => {
+const parseSingleValueAst = signature => env => str => (index) => {
     let f = matchParse(str)(index, [
         parseNumberAst,
         parseStringAst,
@@ -418,7 +426,7 @@ const parseSingleValueAst = env => str => (index) => {
                     if (isTypeOf(ast, Ast.FUNCTION, env)) {
                         for (let i = 0; i < fun.parameters.length; i++) {
                             if (!isMatch(p)) {
-                                console.log("Parameter mismatch")
+                                //console.log("Parameter mismatch")
                                 return notMatch(index)
                             }
                             const parameter = fun.parameters[i];
@@ -434,7 +442,7 @@ const parseSingleValueAst = env => str => (index) => {
                         }
 
                         if (isMatch(p)) {
-                            console.log("Parameter mismatch:", p)
+                            //console.log("Parameter mismatch:", p)
                         }
                     } else {
                         while (isMatch(p)) {
@@ -497,13 +505,17 @@ const parseSingleValueAst = env => str => (index) => {
             }
         }
 
-        if (isTypeOf(f, Ast.FUNCTION, env)) {
+        //TODO check function parameters
+        if (!signature && isTypeOf(f, Ast.FUNCTION, env)) {
+        //if (true) {
             const start = f.start;
             let functionCall = parseFunctionCall(env)(str)(f, f.end)
             //TODO Type Inference
 
             if (isMatch(functionCall)) {
                 if (isTypeOf(functionCall, Ast.FUNCTION, env)) {
+                //TODO check function parameters
+                //if (true) {
                     let nextFunctionCall = parseFunctionCall(env)(str)(functionCall, functionCall.end)
                     while (isMatch(nextFunctionCall)) {
                         nextFunctionCall = parseFunctionCall(env)(str)(functionCall, functionCall.end)
@@ -540,7 +552,7 @@ const parseNumberAst = str => (index) => {
             }
         }
 
-        let ast = new NumberExprAst(number);
+        let ast = new NumberExprAst(new Number(number).valueOf());
         ast.start = index;
         ast.end = index + length;
 
@@ -565,6 +577,7 @@ const parseStringAst = str => (index) => {
             if (char === '\\') {
                 _index++;
                 length++
+                char = str.substring(_index, _index + 1);
                 if (char === 'n') {
                     string += '\n'
                     _index++;
@@ -601,14 +614,14 @@ const parseStringAst = str => (index) => {
 const parseBooleanAst = str => (index) => {
     const trueResult = parseConst('true')(str)(index);
     if (isMatch(trueResult)) {
-        let ast = new BooleanExprAst('true');
+        let ast = new BooleanExprAst(true);
         ast.start = index;
         ast.end = trueResult.end;
         return ast
     } else {
         const falseResult = parseConst('false')(str)(index);
         if (isMatch(falseResult)) {
-            let ast = new BooleanExprAst('false');
+            let ast = new BooleanExprAst(false);
             ast.start = index;
             ast.end = falseResult.end;
 

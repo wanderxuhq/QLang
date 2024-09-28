@@ -30,11 +30,11 @@ const parseStatementAst = env => str => (index) => {
         // let variable: Type
         let p1 = parseSeq(str)(p0.end, [parseOptionalSpace, parseConst(':'), parseOptionalSpace, parseValueAst(env)]);
         if (isMatch(p1)) {
-            // let variable: Type = value
             const p2 = parseSeq(str)(p1.end, [parseOptionalSpace, parseConst('='), parseOptionalSpace, parseValueAst(env)]);
             if (isMatch(p2)) {
                 const statementEnd = parseStatementEnd(str)(p2.end);
                 if (isMatch(statementEnd)) {
+                    // let variable: Type = value
                     const ast = new DeclareStmtAst(p1.result[3], p0.result[2], p2.result[3]);
                     //context.set(p0.result[2], { type: p1.result[3], value: p2.result[3] });
                     ast.start = index;
@@ -47,6 +47,7 @@ const parseStatementAst = env => str => (index) => {
             } else {
                 const statementEnd = parseStatementEnd(str)(p1.end);
                 if (isMatch(statementEnd)) {
+                    // let variable: Type
                     const ast = new DeclareStmtAst(p1.result[3], p0.result[2], null);
                     //context.set(p0.result[2], { type: 'any', value: null })
 
@@ -61,9 +62,9 @@ const parseStatementAst = env => str => (index) => {
         } else {
             p1 = parseSeq(str)(p0.end, [parseOptionalSpace, parseConst('='), parseOptionalSpace, parseValueAst(env)])
             if (isMatch(p1)) {
-                // let variable = value
                 const statementEnd = parseStatementEnd(str)(p1.end);
                 if (isMatch(statementEnd)) {
+                    // let variable = value
                     const ast = new DeclareStmtAst(null, p0.result[2], p1.result[3]);
                     //context.set(p0.result[2], { type: 'any', value: p1.result[3] })
                     ast.start = index;
@@ -95,7 +96,7 @@ const parseStatementAst = env => str => (index) => {
 
                         return ast;
                     } else {
-                        console.log(`Parse failed: ${str.substring(p2.start, p2.start + 20)}`)
+                        //console.log(`Parse failed: ${str.substring(p2.start, p2.start + 20)}`)
                         return notMatch(index)
                     }
                 }
@@ -107,11 +108,11 @@ const parseStatementAst = env => str => (index) => {
                     return p0
                 }
 
-                console.log(`Parse failed: ${str.substring(p1.start, p1.start + 20)}`)
+                //console.log(`Parse failed: ${str.substring(p1.start, p1.start + 20)}`)
                 return notMatch(index)
             }
         } else {
-            let parseBodySeq = [parseConst('{'), parseOptionalSpace, parseStatementsAst(env), parseOptionalSpace, parseConst('}')(str)];
+            let parseBodySeq = [parseConst('{'), parseOptionalSpace, parseStatementsAst(env), parseOptionalSpace, parseConst('}')];
             const parseIfSeq = [parseConst('if'), parseOptionalSpace, parseValueAst(env), parseOptionalSpace, ...parseBodySeq];
             p0 = parseSeq(str)(p.end, parseIfSeq)
             if (isMatch(p0)) {
@@ -158,7 +159,7 @@ const parseStatementAst = env => str => (index) => {
 
                         return ast;
                     } else {
-                        console.log(`Parse failed: ${str.substring(index, index + 20)}`)
+                        //console.log(`Parse failed: ${str.substring(index, index + 20)}`)
                         return notMatch(index);
                     }
                 }
@@ -178,6 +179,7 @@ const parseStatementsAst = parentEnv => str => (index) => {
     let statement = parseStatementAst(env)(str)(index);
     let end = index;
     while (isMatch(statement)) {
+        //TODO 2 step parse declare
         if (statement.type === Ast.DECLARE) {
             env.context.set(statement.variable.value,
                 statement.value

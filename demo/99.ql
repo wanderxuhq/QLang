@@ -1,4 +1,3 @@
-let print = (x) {}
 let i=1
 while i<=9 {
 	let j=1
