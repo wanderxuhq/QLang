@@ -21,7 +21,7 @@ const parseSpaceAndNewline = str => index => {
                 comment = parseComment(str)(_index);
                 if (isMatch(comment)) {
                     _index = comment.end;
-                    console.log('comment1: ', str.substring(comment.start, comment.end));
+                    //console.log('comment1: ', str.substring(comment.start, comment.end));
                     char = str.substring(_index, _index + 1);
                 }
             }
@@ -34,7 +34,7 @@ const parseSpaceAndNewline = str => index => {
         }
     } else if (isMatch(comment)) {
         const optionalSpaceAndNewline = parseOptionalSpaceAndNewline(str)(comment.end);
-        console.log('comment2: ', str.substring(index, optionalSpaceAndNewline.end));
+        //console.log('comment2: ', str.substring(index, optionalSpaceAndNewline.end));
         return {
             type: 'SPACE',
             start: index,
@@ -81,7 +81,7 @@ const parseSpace = str => index => {
                 comment = parseComment(str)(_index);
                 if (isMatch(comment)) {
                     _index = comment.end;
-                    console.log('comment3: ', str.substring(index, _index));
+                    //console.log('comment3: ', str.substring(index, _index));
                     char = str.substring(_index, _index + 1);
                 }
             }
@@ -93,7 +93,7 @@ const parseSpace = str => index => {
             value: space
         }
     } else if (isMatch(comment)) {
-        console.log('comment4: ', str.substring(index, comment.end));
+        //console.log('comment4: ', str.substring(index, comment.end));
         return {
             type: 'SPACE',
             start: index,

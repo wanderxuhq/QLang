@@ -9,9 +9,11 @@ const findInEnv = (variable, env) => {
         return variable;
     } else if (variable.type === Ast.FUNCTION_CALL) {
         const fun = findInEnv(variable.fun, env);
-        console.log(fun);
-        const value = runStatements(fun.body, env);
-        return value;
+        //console.log(fun);
+        if (!fun.system) {
+            const value = runStatements(fun.body, env);
+            return value;
+        }
     }
 
     while (env) {
