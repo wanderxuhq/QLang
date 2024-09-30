@@ -34,7 +34,7 @@ const parseComment = str => index => {
                 type: 'COMMENT',
                 start: index,
                 end: endComment.end,
-                comment: comment
+                comment: ''
             }
         }
     } else {
