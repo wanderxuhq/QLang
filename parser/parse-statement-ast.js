@@ -7,7 +7,9 @@ import {
     parseSpaceOnly,
     parseOptionalSpaceOnly,
     parseNewLine,
-    parseOptionalNewLine
+    parseOptionalNewLine,
+    parseOptionalNewLines,
+    parseEmptyLines
 } from './parse-space.js';
 import { parseIdentity } from './parse-identity.js';
 import { parseValueAst } from './parse-value-ast.js';
@@ -23,14 +25,15 @@ import {
 
 const parseStatementAst = env => str => (index) => {
     const p = parseOptionalSpace(str)(index);
+    const leadSpace = p.length;
     let p0 = parseSeq(str)(p.end, [parseConst('let'), parseSpace, parseIdentity]);
 
     // let variable
     if (isMatch(p0)) {
         // let variable: Type
-        let p1 = parseSeq(str)(p0.end, [parseOptionalSpace, parseConst(':'), parseOptionalSpace, parseValueAst(env)]);
+        let p1 = parseSeq(str)(p0.end, [parseOptionalSpace, parseConst(':'), parseOptionalSpace, parseValueAst(leadSpace)(env)]);
         if (isMatch(p1)) {
-            const p2 = parseSeq(str)(p1.end, [parseOptionalSpace, parseConst('='), parseOptionalSpace, parseValueAst(env)]);
+            const p2 = parseSeq(str)(p1.end, [parseOptionalSpace, parseConst('='), parseOptionalSpace, parseValueAst(leadSpace)(env)]);
             if (isMatch(p2)) {
                 const statementEnd = parseStatementEnd(str)(p2.end);
                 if (isMatch(statementEnd)) {
@@ -60,7 +63,7 @@ const parseStatementAst = env => str => (index) => {
                 }
             }
         } else {
-            p1 = parseSeq(str)(p0.end, [parseOptionalSpace, parseConst('='), parseOptionalSpace, parseValueAst(env)])
+            p1 = parseSeq(str)(p0.end, [parseOptionalSpace, parseConst('='), parseOptionalSpace, parseValueAst(leadSpace)(env)])
             if (isMatch(p1)) {
                 const statementEnd = parseStatementEnd(str)(p1.end);
                 if (isMatch(statementEnd)) {
@@ -80,11 +83,11 @@ const parseStatementAst = env => str => (index) => {
             }
         }
     } else {
-        p0 = parseValueAst(env)(str)(p.end);
+        p0 = parseValueAst(leadSpace)(env)(str)(p.end);
         if (isMatch(p0)) {
             let p1 = parseSeq(str)(p0.end, [parseOptionalSpace, parseConst('=')]);
             if (isMatch(p1)) {
-                let p2 = parseSeq(str)(p1.end, [parseOptionalSpace, parseValueAst(env)]);
+                let p2 = parseSeq(str)(p1.end, [parseOptionalSpace, parseValueAst(leadSpace)(env)]);
                 if (isMatch(p2)) {
                     const statementEnd = parseStatementEnd(str)(p2.end);
                     if (isMatch(statementEnd)) {
@@ -113,7 +116,7 @@ const parseStatementAst = env => str => (index) => {
             }
         } else {
             let parseBodySeq = [parseConst('{'), parseOptionalSpace, parseStatementsAst(env), parseOptionalSpace, parseConst('}')];
-            const parseIfSeq = [parseConst('if'), parseOptionalSpace, parseValueAst(env), parseOptionalSpace, ...parseBodySeq];
+            const parseIfSeq = [parseConst('if'), parseOptionalSpace, parseValueAst(leadSpace)(env), parseOptionalSpace, ...parseBodySeq];
             p0 = parseSeq(str)(p.end, parseIfSeq)
             if (isMatch(p0)) {
                 let ast = new IfStmtAst([{ condition: p0.result[2], body: p0.result[6] }]);
@@ -134,7 +137,7 @@ const parseStatementAst = env => str => (index) => {
 
                 return ast;
             } else {
-                p0 = parseSeq(str)(p.end, [parseConst('return'), parseSpace, parseValueAst(env)])
+                p0 = parseSeq(str)(p.end, [parseConst('return'), parseSpace, parseValueAst(leadSpace)(env)])
                 if (isMatch(p0)) {
                     const statementEnd = parseStatementEnd(str)(p0.end);
                     if (isMatch(statementEnd)) {
@@ -149,7 +152,7 @@ const parseStatementAst = env => str => (index) => {
                     }
                 } else {
                     let parseBodySeq = [parseConst('{'), parseOptionalSpace, parseStatementsAst(env), parseOptionalSpace, parseConst('}')];
-                    const parseWhileSeq = [parseConst('while'), parseOptionalSpace, parseValueAst(env), parseOptionalSpace, ...parseBodySeq];
+                    const parseWhileSeq = [parseConst('while'), parseOptionalSpace, parseValueAst(leadSpace)(env), parseOptionalSpace, ...parseBodySeq];
                     p0 = parseSeq(str)(p.end, parseWhileSeq)
                     if (isMatch(p0)) {
                         let ast = new WhileStmtAst(p0.result[2], p0.result[6]);
@@ -176,8 +179,10 @@ const parseStatementsAst = parentEnv => str => (index) => {
         context: new Map()
     };
     //let context = new Map();
-    let statement = parseStatementAst(env)(str)(index);
-    let end = index;
+    //let p = parseOptionalSpace(str)(index)
+    let p = parseEmptyLines(str)(index);
+    let end = p.end;
+    let statement = parseStatementAst(env)(str)(p.end);
     while (isMatch(statement)) {
         //TODO 2 step parse declare
         if (statement.type === Ast.DECLARE) {
