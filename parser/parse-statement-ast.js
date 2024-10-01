@@ -35,49 +35,33 @@ const parseStatementAst = env => str => (index) => {
         if (isMatch(p1)) {
             const p2 = parseSeq(str)(p1.end, [parseOptionalSpace, parseConst('='), parseOptionalSpace, parseValueAst(leadSpace)(env)]);
             if (isMatch(p2)) {
-                const statementEnd = parseStatementEnd(str)(p2.end);
-                if (isMatch(statementEnd)) {
-                    // let variable: Type = value
-                    const ast = new DeclareStmtAst(p1.result[3], p0.result[2], p2.result[3]);
-                    //context.set(p0.result[2], { type: p1.result[3], value: p2.result[3] });
-                    ast.start = index;
-                    ast.end = statementEnd.end;
+                // let variable: Type = value
+                const ast = new DeclareStmtAst(p1.result[3], p0.result[2], p2.result[3]);
+                //context.set(p0.result[2], { type: p1.result[3], value: p2.result[3] });
+                ast.start = index;
+                ast.end = p2.end;
 
-                    return ast;
-                } else {
-                    return notMatch(index);
-                }
+                return ast;
             } else {
-                const statementEnd = parseStatementEnd(str)(p1.end);
-                if (isMatch(statementEnd)) {
-                    // let variable: Type
-                    const ast = new DeclareStmtAst(p1.result[3], p0.result[2], null);
-                    //context.set(p0.result[2], { type: 'any', value: null })
+                // let variable: Type
+                const ast = new DeclareStmtAst(p1.result[3], p0.result[2], null);
+                //context.set(p0.result[2], { type: 'any', value: null })
 
-                    ast.start = index;
-                    ast.end = statementEnd.end;
+                ast.start = index;
+                ast.end = p1.end;
 
-                    return ast;
-                } else {
-                    return notMatch(index);
-                }
+                return ast;
             }
         } else {
             p1 = parseSeq(str)(p0.end, [parseOptionalSpace, parseConst('='), parseOptionalSpace, parseValueAst(leadSpace)(env)])
             if (isMatch(p1)) {
-                const statementEnd = parseStatementEnd(str)(p1.end);
-                if (isMatch(statementEnd)) {
-                    // let variable = value
-                    const ast = new DeclareStmtAst(null, p0.result[2], p1.result[3]);
-                    //context.set(p0.result[2], { type: 'any', value: p1.result[3] })
-                    ast.start = index;
-                    ast.end = statementEnd.end;
+                // let variable = value
+                const ast = new DeclareStmtAst(null, p0.result[2], p1.result[3]);
+                //context.set(p0.result[2], { type: 'any', value: p1.result[3] })
+                ast.start = index;
+                ast.end = p1.end;
 
-                    return ast;
-                } else {
-                    //console.log(p1)
-                    return notMatch(index)
-                }
+                return ast;
             } else {
                 return notMatch(index)
             }
@@ -89,30 +73,19 @@ const parseStatementAst = env => str => (index) => {
             if (isMatch(p1)) {
                 let p2 = parseSeq(str)(p1.end, [parseOptionalSpace, parseValueAst(leadSpace)(env)]);
                 if (isMatch(p2)) {
-                    const statementEnd = parseStatementEnd(str)(p2.end);
-                    if (isMatch(statementEnd)) {
-                        // identity = value
+                    // identity = value
 
-                        let ast = new AssignStmtAst(p0, p2.result[1]);
-                        ast.start = index;
-                        ast.end = p2.end;
+                    let ast = new AssignStmtAst(p0, p2.result[1]);
+                    ast.start = index;
+                    ast.end = p2.end;
 
-                        return ast;
-                    } else {
-                        //console.log(`Parse failed: ${str.substring(p2.start, p2.start + 20)}`)
-                        return notMatch(index)
-                    }
+                    return ast;
+                } else {
+                    return notMatch(index);
                 }
             } else {
                 //variable
-                const statementEnd = parseStatementEnd(str)(p0.end);
-                if (isMatch(statementEnd)) {
-                    p0.end = statementEnd.end;
-                    return p0
-                }
-
-                //console.log(`Parse failed: ${str.substring(p1.start, p1.start + 20)}`)
-                return notMatch(index)
+                return p0
             }
         } else {
             let parseBodySeq = [parseConst('{'), parseOptionalSpace, parseStatementsAst(env), parseOptionalSpace, parseConst('}')];
@@ -139,17 +112,12 @@ const parseStatementAst = env => str => (index) => {
             } else {
                 p0 = parseSeq(str)(p.end, [parseConst('return'), parseSpace, parseValueAst(leadSpace)(env)])
                 if (isMatch(p0)) {
-                    const statementEnd = parseStatementEnd(str)(p0.end);
-                    if (isMatch(statementEnd)) {
-                        const ast = new ReturnStmtAst(p0.result[2]);
-                        //context.set(p0.result[2], { type: p1.result[3], value: p2.result[3] });
-                        ast.start = p0.start;
-                        ast.end = statementEnd.end;
+                    const ast = new ReturnStmtAst(p0.result[2]);
+                    //context.set(p0.result[2], { type: p1.result[3], value: p2.result[3] });
+                    ast.start = p0.start;
+                    ast.end = p0.end;
 
-                        return ast;
-                    } else {
-                        return notMatch(index);
-                    }
+                    return ast;
                 } else {
                     let parseBodySeq = [parseConst('{'), parseOptionalSpace, parseStatementsAst(env), parseOptionalSpace, parseConst('}')];
                     const parseWhileSeq = [parseConst('while'), parseOptionalSpace, parseValueAst(leadSpace)(env), parseOptionalSpace, ...parseBodySeq];
@@ -181,21 +149,28 @@ const parseStatementsAst = parentEnv => str => (index) => {
     //let context = new Map();
     //let p = parseOptionalSpace(str)(index)
     let p = parseEmptyLines(str)(index);
-    let end = p.end;
     let statement = parseStatementAst(env)(str)(p.end);
-    while (isMatch(statement)) {
-        //TODO 2 step parse declare
-        if (statement.type === Ast.DECLARE) {
-            env.context.set(statement.variable.value,
-                statement.value
-            );
-        }
-        end = statement.end;
-        ast.statements.push(statement);
-        statement = parseStatementAst(env)(str)(statement.end);
-    }
+    let end = index;
+    if (isMatch(statement)) {
+        while (isMatch(statement)) {
+            if (statement.type === Ast.DECLARE) {
+                env.context.set(statement.variable.value,
+                    statement.value
+                );
+            }
+            end = statement.end;
+            ast.statements.push(statement);
 
-    //console.log(env);
+            const statementEnd = parseStatementEnd(str)(statement.end);
+            if (isMatch(statementEnd)) {
+                end = statementEnd.end;
+            } else {
+                break;
+            }
+
+            statement = parseStatementAst(env)(str)(end);
+        }
+    }
 
     ast.start = index;
     ast.end = end;
