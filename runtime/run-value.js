@@ -3,7 +3,7 @@ import {
     NumberExprAst,
     BooleanExprAst
 } from '../ast/index.js';
-import {notMatch} from '../parser/match.js';
+import { notMatch } from '../parser/match.js';
 import runStatements from './run-statements.js';
 
 const runValue = env => ast => {
@@ -27,16 +27,22 @@ const runValue = env => ast => {
 
         let fun = runValue(env)(ast.fun)
         for (let i = 0; i < ast.parameters.length; i++) {
-            let parameters = runValue(env)(ast.parameters[i].parameters);
-
-            for (let j = 0; j < fun.parameters.length; j++) {
-                const parameter = fun.parameters[j];
-                env.context.set(parameter.variable, runValue(env)(parameters[j]));
-            }
             if (!fun.system) {
+                for (let j = 0; j < fun.parameters.length; j++) {
+                    env.context.set(
+                        fun.parameters[j].variable,
+                        runValue(env)(ast.parameters[i].parameters[j])
+                    );
+                }
                 fun = runStatements(env)(fun.body);
             } else {
-                return fun.call.apply(this, parameters.map(e => runValue(env)(e).value));
+                let parameters = [];
+                for (let j = 0; j < fun.parameters.length; j++) {
+                    parameters.push(
+                        runValue(env)(ast.parameters[i].parameters[j])
+                    );
+                }
+                fun = fun.call.apply(this, parameters.map(e => e.value));
             }
         }
 
@@ -57,7 +63,7 @@ const runValue = env => ast => {
             env.context.set(parameter.variable, runValue(env)(ast.parameters.parameters[i]));
         }
         */
-        
+
     } else if (ast.type === Ast.BIN_OP) {
         if (ast.op === '+') {
             return new NumberExprAst(runValue(env)(ast.lhs).value + runValue(env)(ast.rhs).value);
