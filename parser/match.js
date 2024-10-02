@@ -11,6 +11,14 @@ const isMatch = (snip) => {
     return snip.type !== 'NOT_MATCH';
 }
 
+const parseFail = message => source => (start, end) => {
+    console.log(`Parse failed: ${message}: ${source.substring(start, end)}`)
+    return {
+        type: 'PARSE_FAILE',
+        start: start,
+        end: end
+    }
+}
 export {
-    notMatch, isMatch
+    notMatch, isMatch, parseFail
 }
