@@ -1,5 +1,5 @@
 import { parseConst } from './parse-const.js';
-import { notMatch, isMatch } from './match.js';
+import { notMatch, isMatch, parseFail } from './match.js';
 import { matchParse, parseSeq } from './helper.js';
 import {
     parseSpace,
@@ -45,7 +45,6 @@ const parseStatementAst = env => str => (index) => {
             } else {
                 // let variable: Type
                 const ast = new DeclareStmtAst(p1.result[3], p0.result[2], null);
-                //context.set(p0.result[2], { type: 'any', value: null })
 
                 ast.start = index;
                 ast.end = p1.end;
@@ -57,7 +56,6 @@ const parseStatementAst = env => str => (index) => {
             if (isMatch(p1)) {
                 // let variable = value
                 const ast = new DeclareStmtAst(null, p0.result[2], p1.result[3]);
-                //context.set(p0.result[2], { type: 'any', value: p1.result[3] })
                 ast.start = index;
                 ast.end = p1.end;
 
@@ -75,11 +73,15 @@ const parseStatementAst = env => str => (index) => {
                 if (isMatch(p2)) {
                     // identity = value
 
-                    let ast = new AssignStmtAst(p0, p2.result[1]);
-                    ast.start = index;
-                    ast.end = p2.end;
+                    if (p0.type === Ast.IDENTITY) {
+                        let ast = new AssignStmtAst(p0, p2.result[1]);
+                        ast.start = index;
+                        ast.end = p2.end;
+                        return ast;
+                    } else {
+                        return parseFail(`Assign left side "${p0.value}" cannot be "${p0.type}"`)(str)(index, p2.end);
+                    }
 
-                    return ast;
                 } else {
                     return notMatch(index);
                 }
