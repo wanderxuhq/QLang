@@ -26,6 +26,7 @@ import {
     ArrayExprAst,
 } from '../ast/index.js';
 import { parseComment } from './parse-comment.js';
+import { parseImport } from './parse-module.js';
 
 const binOpPrecedence = (() => {
     const map = new Map();
@@ -370,28 +371,39 @@ const parseArrayAst = leadspace => env => str => (index) => {
 }
 
 const addIndexAndChild = ast => leadspace => env => (str) => (index) => {
-    let optionalSpace = parseOptionalSpace(str)(ast.end);
+    let match = true;
+    ast.children = [];
+    while(match) {
+        let optionalSpace = parseOptionalSpace(str)(ast.end);
 
-    let objectIndex = parseSeq(str)(optionalSpace.end,
-        [
-            parseConst('['),
-            parseOptionalSpace,
-            parseValueAst(leadspace)(env),
-            parseOptionalSpace,
-            parseConst(']')
-        ]);
-    if (isMatch(objectIndex)) {
-        ast.index = objectIndex.result[2];
-        ast.end = objectIndex.end;
-    }
+        let objectIndex = parseSeq(str)(optionalSpace.end,
+            [
+                parseConst('['),
+                parseOptionalSpace,
+                parseValueAst(leadspace)(env),
+                parseOptionalSpace,
+                parseConst(']')
+            ]);
+        if (isMatch(objectIndex)) {
+            ast.children.push({
+                type: 'INDEX',
+                value: objectIndex.result[2]
+            })
+            ast.end = objectIndex.end;
+        } else {
+            const dot = parseConst('.')(str)(optionalSpace.end);
 
-    const dot = parseConst('.')(str)(ast.end);
-
-    if (isMatch(dot)) {
-
-        const child = parseIdentityAst(str)(dot.end);//parseValueAst(env)(str)(dot.end);
-        ast.child = child;
-        ast.end = child.end;
+            if (isMatch(dot)) {
+                const child = parseIdentityAst(str)(dot.end);//parseValueAst(env)(str)(dot.end);
+                ast.children.push({
+                    type: 'FIELD',
+                    value: child
+                })
+                ast.end = child.end;
+            } else {
+                match = false;
+            }
+        }
     }
 }
 
@@ -404,7 +416,8 @@ const parseSingleValueAst = option => leadspace => env => str => (index) => {
         parseIdentityAst,
         parseObjectAst(leadspace)(env),
         parseArrayAst(leadspace)(env),
-        parseParenthesis(leadspace)(env)
+        parseParenthesis(leadspace)(env),
+        parseImport
     ]);
 
     if (isMatch(f)) {
@@ -692,5 +705,6 @@ const parseParenthesis = leadspace => env => str => (index) => {
 }
 
 export {
-    parseValueAst
+    parseValueAst,
+    parseStringAst
 }

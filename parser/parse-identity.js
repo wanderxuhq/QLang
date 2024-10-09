@@ -23,7 +23,9 @@ const parseIdentity = str => (index) => {
             id !== 'while' &&
             id !== 'return' &&
             id !== 'true' &&
-            id !== 'false'
+            id !== 'false' &&
+            id !== 'import' &&
+            id !== 'export'
         ) {
             return {
                 type: 'IDENTITY',
