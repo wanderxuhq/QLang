@@ -11,11 +11,17 @@ const runValue = env => ast => {
         //TODO
         let result = findInEnv(ast, env);
 
-        if (ast.index) {
-            result = result.value.values[runValue(env)(ast.index).value]
-        }
-        if (ast.child) {
-            result = result.fields.fields.find(e => e.variable.value === ast.child.value).value;
+        for(const child of ast.children) {
+            if (child.type === 'INDEX') {
+                result = runValue(env)(result.value.values[runValue(env)(child.value).value])
+            } else if (child.type === 'FIELD') {
+                env = {
+                    parent: env,
+                    context: new Map()
+                };
+                env.context.set('this', result)
+                result = runValue(env)(result.fields.fields.find(e => e.variable.value === child.value.value).value);
+            }
         }
 
         return result;
@@ -46,12 +52,27 @@ const runValue = env => ast => {
             }
         }
 
+        for(const child of ast.children) {
+            if (child.type === 'INDEX') {
+                fun = runValue(env)(fun.value.values[runValue(env)(child.value).value])
+            } else if (child.type === 'FIELD') {
+                env = {
+                    parent: env,
+                    context: new Map()
+                };
+                env.context.set('this', fun)
+                fun = runValue(env)(fun.fields.fields.find(e => e.variable.value === child.value.value).value);
+            }
+        }
+
+        /*
         if (ast.index) {
             fun = runValue(env)(fun.value.values[runValue(env)(ast.index).value])
         }
         if (ast.child) {
             fun = fun.fields.fields.find(e => e.variable.value === ast.child.value).value;
         }
+        */
 
         return fun;
 
@@ -84,6 +105,13 @@ const runValue = env => ast => {
         } else if (ast.op === '||') {
             return new BooleanExprAst(runValue(env)(ast.lhs).value || runValue(env)(ast.rhs).value);
         }
+    } else if (ast.type === Ast.OBJECT) {
+        env = {
+            parent: env,
+            context: new Map()
+        };
+        //env.context.set('this', ast);
+        return ast;
     } else {
         return ast;
     }
