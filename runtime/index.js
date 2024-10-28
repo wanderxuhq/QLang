@@ -10,4 +10,4 @@ context.set('print', { type: 'FUNCTION', system: true, call: e => {
     process.stdout.write(e + '')
 }, parameters: [{variable: 'p'}] });
 
-runStatements({ context: context })(parse('./demo/exp.ql'));
+runStatements({ context: context, scope: new Map() })(parse('./demo/obj2.ql'));

@@ -32,6 +32,7 @@ class Ast {
     static PARENTHESIS_LIST = 'PARENTHESIS_LIST';
     static COMMA_LIST = 'COMMA_LIST';
     static BIN_OP = 'BIN_OP';
+    static VALUE = 'VALUE';
 
     accept(visitor) {
         return visitor.visit(this)
@@ -233,7 +234,14 @@ class WhileStmtAst extends Ast {
 class ExprAst extends Ast {
 }
 
-class NumberExprAst extends ExprAst {
+class ValueAst extends Ast {
+    constructor(subType) {
+        super(Ast.VALUE)
+        this.subType = subType
+    }
+}
+
+class NumberValueAst extends ValueAst {
     value
     constructor(value) {
         super(Ast.NUMBER)
@@ -255,7 +263,7 @@ class NumberExprAst extends ExprAst {
     }
 }
 
-class BooleanExprAst extends ExprAst {
+class BooleanValueAst extends ValueAst {
     value
     constructor(value) {
         super(Ast.BOOLEAN)
@@ -277,7 +285,7 @@ class BooleanExprAst extends ExprAst {
     }
 }
 
-class StringExprAst extends ExprAst {
+class StringValueAst extends ValueAst {
     value
     constructor(value) {
         super(Ast.STRING)
@@ -299,7 +307,7 @@ class StringExprAst extends ExprAst {
     }
 }
 
-class ObjectExprAst extends ExprAst {
+class ObjectValueAst extends ValueAst {
     fields
     constructor(fields) {
         super(Ast.OBJECT)
@@ -327,7 +335,7 @@ class ObjectExprAst extends ExprAst {
     }
 }
 
-class IdentityExprAst extends ExprAst {
+class IdentityValueAst extends ValueAst {
     value
     constructor(value) {
         super(Ast.IDENTITY)
@@ -371,7 +379,7 @@ class IdentityPathExprAst extends ExprAst {
     }
 }
 
-class ArrayExprAst extends ExprAst {
+class ArrayValueAst extends ValueAst {
     constructor(value) {
         super(Ast.ARRAY)
         this.value = value
@@ -414,7 +422,7 @@ class IdentityIndexExprAst extends ExprAst {
     }
 }
 
-class FunctionExprAst extends ExprAst {
+class FunctionValueAst extends ValueAst {
     parameters
     body
     constructor(parameters, body) {
@@ -440,7 +448,7 @@ class FunctionExprAst extends ExprAst {
     }
 }
 
-class FunctionCallAst extends ExprAst {
+class FunctionCallAst extends ValueAst {
     fun
     parameters
     constructor(fun, parameters) {
@@ -466,7 +474,7 @@ class FunctionCallAst extends ExprAst {
     }
 }
 
-class BinOpExprAst extends ExprAst {
+class BinOpValueAst extends ValueAst {
     op
     lhs
     rhs
@@ -501,18 +509,19 @@ export {
     StmtsAst,
     DeclareStmtAst,
     AssignStmtAst,
-    NumberExprAst,
-    StringExprAst,
-    BooleanExprAst,
-    IdentityExprAst,
+    ValueAst,
+    NumberValueAst,
+    StringValueAst,
+    BooleanValueAst,
+    IdentityValueAst,
     IdentityPathExprAst,
     IdentityIndexExprAst,
-    BinOpExprAst,
+    BinOpValueAst,
     IfStmtAst,
     WhileStmtAst,
-    FunctionExprAst,
+    FunctionValueAst,
     FunctionCallAst,
-    ObjectExprAst,
-    ArrayExprAst,
+    ObjectValueAst,
+    ArrayValueAst,
     ReturnStmtAst
 }
