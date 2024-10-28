@@ -15,18 +15,19 @@ import {
 
 import {
     Ast,
-    NumberExprAst,
-    StringExprAst,
-    BooleanExprAst,
-    IdentityExprAst,
-    BinOpExprAst,
-    FunctionExprAst,
+    NumberValueAst,
+    StringValueAst,
+    BooleanValueAst,
+    IdentityValueAst,
+    BinOpValueAst,
+    FunctionValueAst,
     FunctionCallAst,
-    ObjectExprAst,
-    ArrayExprAst,
+    ObjectValueAst,
+    ArrayValueAst,
 } from '../ast/index.js';
 import { parseComment } from './parse-comment.js';
 import { parseImport } from './parse-module.js';
+import { createEnv } from '../env.js';
 
 const binOpPrecedence = (() => {
     const map = new Map();
@@ -83,7 +84,7 @@ const parseBinOpUnitAst = option => leadspace => env => str => (lhs, index) => {
             nextBinOpToken = parseBinOpToken(str)(nOptionalSpace.end);
         }
 
-        let ast = new BinOpExprAst(op, lhs, rhs);
+        let ast = new BinOpValueAst(op, lhs, rhs);
         ast.start = index;
         ast.end = rhs.end;
         return ast;
@@ -118,7 +119,7 @@ const parseIdentityAst = str => (index) => {
     let identity = parseIdentity(str)(index);
 
     if (isMatch(identity)) {
-        let ast = new IdentityExprAst(identity.value);
+        let ast = new IdentityValueAst(identity.value);
         ast.start = index;
         ast.end = identity.end;
 
@@ -201,7 +202,7 @@ const parseFunctionAst = leadspace => env => str => (index) => {
             parseConst('}')
         ]);
     if (isMatch(p0)) {
-        let ast = new FunctionExprAst(p0.result[2].parameters, p0.result[10]);
+        let ast = new FunctionValueAst(p0.result[2].parameters, p0.result[10]);
         ast.start = index;
         ast.end = p0.end;
         return ast;
@@ -218,7 +219,7 @@ const parseFunctionAst = leadspace => env => str => (index) => {
             parseConst('}')
         ]);
         if (isMatch(p0)) {
-            let ast = new FunctionExprAst(p0.result[0].parameters, p0.result[6]);
+            let ast = new FunctionValueAst(p0.result[0].parameters, p0.result[6]);
             ast.start = index;
             ast.end = p0.end;
 
@@ -311,7 +312,7 @@ const parseObjectAst = leadspace => env => str => (index) => {
                 fields: fields
             };
         } else {
-            return notMatch(index);
+            return parseOptionalSpace(str)(index);
         }
     }
 
@@ -323,7 +324,7 @@ const parseObjectAst = leadspace => env => str => (index) => {
         parseConst('}')
     ])
     if (isMatch(fields)) {
-        let ast = new ObjectExprAst(fields.result[2]);
+        let ast = new ObjectValueAst(fields.result[2]);
         ast.start = index;
         ast.end = fields.end;
         return ast
@@ -361,7 +362,7 @@ const parseArrayAst = leadspace => env => str => (index) => {
     ]);
 
     if (isMatch(values)) {
-        let ast = new ArrayExprAst(values.result[2]);
+        let ast = new ArrayValueAst(values.result[2]);
         ast.start = index;
         ast.end = values.end;
         return ast
@@ -421,85 +422,102 @@ const parseSingleValueAst = option => leadspace => env => str => (index) => {
     ]);
 
     if (isMatch(f)) {
-        addIndexAndChild(f)(leadspace)(env)(str)(f.end)
+        const root = f;
+        let end = f.end;
+        if (f.subType === Ast.IDENTITY) {
+            let match = true;
+            while(match) {
+                let optionalSpace = parseOptionalSpace(str)(end);
 
-        const parseCommonFunctionCall = leadspace => (env) => (str) => (index) => {
-            const parseParameters = (str) => (index) => {
-                let parameters = []
-                let p = parseValueAst(leadspace)(env)(str)(index, true);
-                if (isMatch(p)) {
-                    env = {
-                        context: new Map(),
-                        parent: env
-                    }
-                    parameters.push(p)
-
-                    p = parseSeq(str)(p.end, [
+                let objectIndex = parseSeq(str)(optionalSpace.end,
+                    [
+                        parseConst('['),
                         parseOptionalSpace,
-                        parseConst(','),
+                        parseValueAst(leadspace)(env),
                         parseOptionalSpace,
-                        parseValueAst(leadspace)(env)
+                        parseConst(']')
                     ]);
+                if (isMatch(objectIndex)) {
+                    f.child = objectIndex.result[2];
+                    f.child.childType = 'INDEX'
+                    f = f.child;
+                    end = objectIndex.end;
+                } else {
+                    const objectField = parseSeq(str)(optionalSpace.end,
+                        [
+                            parseConst('.'),
+                            parseOptionalSpace,
+                            parseIdentityAst
+                        ]);
 
-                    if (isMatch(p)) {
-                        while (isMatch(p)) {
-                            parameters.push(p)
-                            p = parseSeq(str)(p.end, [
-                                parseOptionalSpace,
-                                parseConst(','),
-                                parseOptionalSpace,
-                                parseValueAst(leadspace)(env)
-                            ]);
-                            /*
-                            if (isMatch(p)) {
-                                p = parseValueAst(env)(str)(p.end, true);
-                            } else {
-                                break;
-                            }
-                            */
+                    if (isMatch(objectField)) {
+                        const child = objectField.result[2]; //parseIdentityAst(str)(dot.end);//parseValueAst(env)(str)(dot.end);
+                        f.child = child;
+                        f.child.childType = 'FIELD';
+                        f = f.child;
+                        end = objectField.end;
+                    } else {
+                        match = false;
+                    }
+                }
+
+                let functionCall = parseCommonFunctionCall(leadspace)(env)(str)(end)
+                if (isMatch(functionCall)) {
+                    let funParameters = [];
+                    funParameters.push(functionCall);
+                    end = functionCall.end;
+                    let nextFunctionCall = parseCommonFunctionCall(leadspace)(env)(str)(end)
+                    while (isMatch(nextFunctionCall)) {
+                        nextFunctionCall = parseCommonFunctionCall(leadspace)(env)(str)(end)
+                        if (isMatch(nextFunctionCall)) {
+                            end = nextFunctionCall.end;
+                            funParameters.push(nextFunctionCall);
+                        } else {
+                            break;
                         }
                     }
 
-                    return {
-                        type: 'PARAMETERS',
-                        parameters,
-                        start: index,
-                        end: p.end
-                    }
+                    f.arguments = funParameters;
+                    f.end = end;
+                    match = true;
                 } else {
-                    return notMatch(index);
+                    if (option.functionCall) {
+                        
+                    }
                 }
             }
-
-            let parameterPrefix = parseSeq(str)(index, [
-                parseOptionalSpace,
-                parseConst('('),
-                parseOptionalSpace
-            ]);
-            let parseParameterSuffix = null;
-            if (isMatch(parameterPrefix)) {
-                parseParameterSuffix = str => _index => parseConst(')')(str)(_index);
-                const parameters = parseParameters(str)(parameterPrefix.end);
-                if (isMatch(parameters)) {
-                    const parameterSuffix = parseParameterSuffix(str)(parameters.end);
-                    if (isMatch(parameterSuffix)) {
-                        parameters.start = index;
-                        parameters.end = parameterSuffix.end;
-                        return parameters
+            root.end = end;
+        } else {
+            let functionCall = parseCommonFunctionCall(leadspace)(env)(str)(end)
+            if (isMatch(functionCall)) {
+                let funParameters = [];
+                funParameters.push(functionCall);
+                end = functionCall.end;
+                let nextFunctionCall = parseCommonFunctionCall(leadspace)(env)(str)(end)
+                while (isMatch(nextFunctionCall)) {
+                    nextFunctionCall = parseCommonFunctionCall(leadspace)(env)(str)(end)
+                    if (isMatch(nextFunctionCall)) {
+                        end = nextFunctionCall.end;
+                        funParameters.push(nextFunctionCall);
                     } else {
-                        return notMatch(index);
+                        break;
                     }
-                } else {
-                    return notMatch(index);
                 }
+
+                f.arguments = funParameters;
+                f.end = end;
             } else {
-                return notMatch(index);
+                if (option.functionCall) {
+                    
+                }
             }
         }
 
-        const parseSpaceFunctionCall = leadspace => (env) => (str) => (index) => {
-        }
+        return root;
 
+        //addIndexAndChild(f)(leadspace)(env)(str)(f.end)
+
+        /*
         const start = f.start;
         let functionCall = parseCommonFunctionCall(leadspace)(env)(str)(f.end)
         //TODO Type Inference
@@ -525,66 +543,142 @@ const parseSingleValueAst = option => leadspace => env => str => (index) => {
             addIndexAndChild(f)(leadspace)(env)(str)(end);
         } else {
             if (option.functionCall) {
-                const parseLeadSpace = leadspace => (str) => (index) => {
-                    let space = parseSpaceOnly(str)(index);
-                    let newLine = parseNewLine(str)(space.end);
-                    if (isMatch(newLine)) {
-                        while(isMatch(newLine)) {
-                            newLine = parseSeq(str)(newLine.end, [parseOptionalSpaceOnly, parseNewLine]);
-                        }
-                        let optionalSpace = parseOptionalSpace(str)(newLine.end);
-                        if (optionalSpace.length > leadspace) {
-                            return optionalSpace;
-                        } else {
-                            return notMatch(index);
-                        }
-                    } else {
-                        if (isMatch(space) && space.length && space.length > 0) {
-                            return space
-                        } else {
-                            return notMatch(index);
-                        }
-                    }
-                }
+                
+            }
+        }
 
-                let parameter = parseSeq(str)(f.end, [parseLeadSpace(leadspace), parseValue({ functionCall: false })(leadspace)(env)])
+        */
+    } else {
+        return notMatch(index);
+    }
+}
+
+const parseCommonFunctionCall = leadspace => (env) => (str) => (index) => {
+    const parseParameters = (str) => (index) => {
+        let parameters = []
+        let p = parseValueAst(leadspace)(env)(str)(index, true);
+        if (isMatch(p)) {
+            env = createEnv(env);
+            parameters.push(p)
+
+            p = parseSeq(str)(p.end, [
+                parseOptionalSpace,
+                parseConst(','),
+                parseOptionalSpace,
+                parseValueAst(leadspace)(env)
+            ]);
+
+            if (isMatch(p)) {
+                while (isMatch(p)) {
+                    parameters.push(p.result[3])
+                    p = parseSeq(str)(p.end, [
+                        parseOptionalSpace,
+                        parseConst(','),
+                        parseOptionalSpace,
+                        parseValueAst(leadspace)(env)
+                    ]);
+                    /*
+                    if (isMatch(p)) {
+                        p = parseValueAst(env)(str)(p.end, true);
+                    } else {
+                        break;
+                    }
+                    */
+                }
+            }
+
+            return {
+                type: 'PARAMETERS',
+                parameters,
+                start: index,
+                end: p.end
+            }
+        } else {
+            return notMatch(index);
+        }
+    }
+
+    let parameterPrefix = parseSeq(str)(index, [
+        parseOptionalSpace,
+        parseConst('('),
+        parseOptionalSpace
+    ]);
+    let parseParameterSuffix = null;
+    if (isMatch(parameterPrefix)) {
+        parseParameterSuffix = str => _index => parseConst(')')(str)(_index);
+        const parameters = parseParameters(str)(parameterPrefix.end);
+        if (isMatch(parameters)) {
+            const parameterSuffix = parseParameterSuffix(str)(parameters.end);
+            if (isMatch(parameterSuffix)) {
+                parameters.start = index;
+                parameters.end = parameterSuffix.end;
+                return parameters
+            } else {
+                return notMatch(index);
+            }
+        } else {
+            return notMatch(index);
+        }
+    } else {
+        return notMatch(index);
+    }
+}
+
+const parseLeadSpace = leadspace => (str) => (index) => {
+    let space = parseSpaceOnly(str)(index);
+    let newLine = parseNewLine(str)(space.end);
+    if (isMatch(newLine)) {
+        while(isMatch(newLine)) {
+            newLine = parseSeq(str)(newLine.end, [parseOptionalSpaceOnly, parseNewLine]);
+        }
+        let optionalSpace = parseOptionalSpace(str)(newLine.end);
+        if (optionalSpace.length > leadspace) {
+            return optionalSpace;
+        } else {
+            return notMatch(index);
+        }
+    } else {
+        if (isMatch(space) && space.length && space.length > 0) {
+            return space
+        } else {
+            return notMatch(index);
+        }
+    }
+}
+
+const parseSpaceFunctinoCall = leadspace => (env) => (str) => (index) => {
+    let parameter = parseSeq(str)(index, [parseLeadSpace(leadspace), parseValue({ functionCall: false })(leadspace)(env)])
+    if (isMatch(parameter)) {
+        let funParameters = [];
+        funParameters.push({
+            type: 'PARAMETERS',
+            parameters: [parameter.result[1]],
+            start: index,
+            end: parameter.end
+        });
+        let end = parameter.end;
+        while (isMatch(parameter)) {
+                parameter = parseSeq(str)(parameter.end, [parseLeadSpace(leadspace), parseValue({ functionCall: false })(leadspace)(env)]);
                 if (isMatch(parameter)) {
-                    let funParameters = [];
+                    end = parameter.end;
                     funParameters.push({
                         type: 'PARAMETERS',
                         parameters: [parameter.result[1]],
                         start: index,
                         end: parameter.end
                     });
-                    let end = parameter.end;
-                    while (isMatch(parameter)) {
-                            parameter = parseSeq(str)(parameter.end, [parseLeadSpace(leadspace), parseValue({ functionCall: false })(leadspace)(env)]);
-                            if (isMatch(parameter)) {
-                                end = parameter.end;
-                                funParameters.push({
-                                    type: 'PARAMETERS',
-                                    parameters: [parameter.result[1]],
-                                    start: index,
-                                    end: parameter.end
-                                });
-                                end = parameter.end;
-                            } else {
-                                break;
-                            }
-                    }
-
-                    f = new FunctionCallAst(f, funParameters);
-                    f.start = start;
-                    f.end = end;
-                    addIndexAndChild(f)(leadspace)(env)(str)(end);
-                    //}
+                    end = parameter.end;
+                } else {
+                    break;
                 }
-            }
         }
 
-
+        f = new FunctionCallAst(f, funParameters);
+        f.start = start;
+        f.end = end;
+        addIndexAndChild(f)(leadspace)(env)(str)(end);
+        //}
     }
-    return f;
 }
 
 const parseNumberAst = str => (index) => {
@@ -604,7 +698,7 @@ const parseNumberAst = str => (index) => {
             }
         }
 
-        let ast = new NumberExprAst(new Number(number).valueOf());
+        let ast = new NumberValueAst(new Number(number).valueOf());
         ast.start = index;
         ast.end = index + length;
 
@@ -653,7 +747,7 @@ const parseStringAst = str => (index) => {
         }
         length++;
 
-        let ast = new StringExprAst(string);
+        let ast = new StringValueAst(string);
         ast.start = index;
         ast.end = index + length;
 
@@ -666,14 +760,14 @@ const parseStringAst = str => (index) => {
 const parseBooleanAst = str => (index) => {
     const trueResult = parseConst('true')(str)(index);
     if (isMatch(trueResult)) {
-        let ast = new BooleanExprAst(true);
+        let ast = new BooleanValueAst(true);
         ast.start = index;
         ast.end = trueResult.end;
         return ast
     } else {
         const falseResult = parseConst('false')(str)(index);
         if (isMatch(falseResult)) {
-            let ast = new BooleanExprAst(false);
+            let ast = new BooleanValueAst(false);
             ast.start = index;
             ast.end = falseResult.end;
 

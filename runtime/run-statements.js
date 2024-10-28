@@ -8,15 +8,23 @@ const runStatements = env => ast => {
             env.context.set(statement.variable.value,
                 value
             );
+            if (statement.value.arguments) {
+                env.scope.set(statement.variable.value, env.scope.get('_temp'))
+            }
         } else if (statement.type === Ast.ASSIGN) {
             const value = runValue(env)(statement.value);
             env.context.set(statement.variable.value,
                 value
             );
+            if (statement.value.arguments) {
+                env.scope.set(statement.variable.value, env.scope.get('_temp'))
+            }
         } else if (statement.type === Ast.RETURN) {
             const value = runValue(env)(statement.value);
             return value;
         } else if (statement.type === Ast.FUNCTION_CALL) {
+            runValue(env)(statement);
+        } else if (statement.type === Ast.VALUE) {
             runValue(env)(statement);
         } else if (statement.type === Ast.IF) {
             runValue(env)(statement.matchBodies[0].condition)

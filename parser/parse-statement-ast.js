@@ -73,7 +73,7 @@ const parseStatementAst = env => str => (index) => {
                 if (isMatch(p2)) {
                     // identity = value
 
-                    if (p0.type === Ast.IDENTITY) {
+                    if (p0.subType === Ast.IDENTITY) {
                         let ast = new AssignStmtAst(p0, p2.result[1]);
                         ast.start = index;
                         ast.end = p2.end;
@@ -95,14 +95,12 @@ const parseStatementAst = env => str => (index) => {
             p0 = parseSeq(str)(p.end, parseIfSeq)
             if (isMatch(p0)) {
                 let ast = new IfStmtAst([{ condition: p0.result[2], body: p0.result[6] }]);
-                p0 = parseOptionalSpace(str)(p0.end);
-                let p1 = parseSeq(str)(p0.end, [parseConst('else'), parseOptionalSpace, ...parseIfSeq])
+                let p1 = parseSeq(str)(p0.end, [parseOptionalSpace, parseConst('else'), parseOptionalSpace, ...parseIfSeq])
                 while (isMatch(p1)) {
                     ast.matchBodies.push({ condition: p1.result[4], body: p1.result[8] })
                     p1 = parseSeq(str)(p1.end, [parseConst('else'), parseOptionalSpace, ...parseIfSeq])
                 }
-                p1 = parseOptionalSpace(str)(p1.end)
-                p1 = parseSeq(str)(p1.end, [parseConst('else'), parseOptionalSpace, ...parseBodySeq])
+                p1 = parseSeq(str)(p1.end, [parseOptionalSpace, parseConst('else'), parseOptionalSpace, ...parseBodySeq])
                 if (isMatch(p1)) {
                     ast.elseBody = p1.result[4]
                 }
@@ -146,7 +144,8 @@ const parseStatementsAst = parentEnv => str => (index) => {
     const ast = new StmtsAst([]);
     let env = {
         parent: parentEnv,
-        context: new Map()
+        context: new Map(),
+        scope: new Map(),
     };
     //let context = new Map();
     //let p = parseOptionalSpace(str)(index)
