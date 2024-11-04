@@ -382,7 +382,7 @@ class IdentityPathExprAst extends ExprAst {
 class ArrayValueAst extends ValueAst {
     constructor(value) {
         super(Ast.ARRAY)
-        this.value = value
+        this.values = value
     }
 
     toObject() {
