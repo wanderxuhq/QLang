@@ -9,6 +9,10 @@ const toNative = (ast) => {
         return ast.value
     } else if (ast.subType === Ast.STRING) {
         return ast.value
+    } else if (ast.subType === Ast.OBJECT) {
+        let obj = {};
+        ast.fields.forEach(e => obj[e.variable.value] = toNative(e.value))
+        return obj;
     }
 }
 

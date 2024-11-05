@@ -43,7 +43,7 @@ const runValue = env => ast => {
                     //env = createEnv(env);
                     env.context.set('this', result)
 
-                    result = runValue(env)(result.value.fields.fields.find(e => e.variable.value === child.value).value);
+                    result = runValue(env)(result.value.fields.find(e => e.variable.value === child.value).value);
                 }
 
                 if (child.arguments) {
