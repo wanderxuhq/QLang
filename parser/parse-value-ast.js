@@ -324,7 +324,7 @@ const parseObjectAst = leadspace => env => str => (index) => {
         parseConst('}')
     ])
     if (isMatch(fields)) {
-        let ast = new ObjectValueAst(fields.result[2]);
+        let ast = new ObjectValueAst(fields.result[2].fields);
         ast.start = index;
         ast.end = fields.end;
         return ast
