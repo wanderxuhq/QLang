@@ -4,19 +4,18 @@ import { toNative } from './native.js';
 import runValue from './run-value.js';
 
 const runStatements = env => ast => {
-    
     for (const statement of ast.statements) {
         if (statement.type === Ast.DECLARE) {
             const value = runValue(env)(statement.value);
             env.context.set(statement.variable.value,
-                value.value
+                value.result.value
             );
             if (statement.value.arguments) {
                 //env.scope = value.context
                 env.scope.set(statement.variable.value, value.context)
             }
         } else if (statement.type === Ast.ASSIGN) {
-            const value = runValue(env)(statement.value).value;
+            const value = runValue(env)(statement.value).result.value;
             let subEnv = findInEnv(env)(statement.variable)(null);
             if (subEnv.type === 'context') {
                 subEnv.env.context.set(statement.variable.value, value)
@@ -32,13 +31,13 @@ const runStatements = env => ast => {
             return value;
         } else if (statement.type === Ast.FUNCTION_CALL) {
             runValue(env)(statement);
-        } else if (statement.type === Ast.VALUE) {
+        } else if (statement.type === Ast.IDENTITY) {
             runValue(env)(statement);
         } else if (statement.type === Ast.IF) {
             runValue(env)(statement.matchBodies[0].condition)
             let hasMatch = false;
             for (const matchBody of statement.matchBodies) {
-                if (toNative(runValue(env)(matchBody.condition).value)) {
+                if (toNative(runValue(env)(matchBody.condition).result.value)) {
                     //TODO return in if
                     const value = runStatements(env)(matchBody.body);
                     if (value) {
@@ -58,7 +57,7 @@ const runStatements = env => ast => {
                 }
             }
         } else if (statement.type === Ast.WHILE) {
-            while (toNative(runValue(env)(statement.condition).value)) {
+            while (toNative(runValue(env)(statement.condition).result.value)) {
                 const value = runStatements(env)(statement.body);
                 if (value) {
                     //TODO return in if

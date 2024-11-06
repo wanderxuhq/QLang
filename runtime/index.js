@@ -6,9 +6,9 @@ let context = new Map();
 context.set('String', { name: 'String', type: 'Type' });
 context.set('Int', { name: 'Int', type: 'Type' });
 context.set('Void', { name: 'Void', type: 'Type' });
-context.set('print', { type: 'FUNCTION', system: true, call: e => {
+context.set('print', { type: 'Function', system: true, call: e => {
     let value = e;
-    if (e !== '\n') {
+    if (typeof(e) !== 'string') {
         value = JSON.stringify(e)
     }
     process.stdout.write(value)
