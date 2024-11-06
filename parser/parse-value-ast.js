@@ -25,6 +25,9 @@ import {
     ObjectValueAst,
     ArrayValueAst,
 } from '../ast/index.js';
+import {
+    PrimeType
+} from '../type/constant.js'
 import { parseComment } from './parse-comment.js';
 import { parseImport } from './parse-module.js';
 import { createEnv } from '../env.js';
@@ -84,9 +87,14 @@ const parseBinOpUnitAst = option => leadspace => env => str => (lhs, index) => {
             nextBinOpToken = parseBinOpToken(str)(nOptionalSpace.end);
         }
 
-        let ast = new BinOpValueAst(op, lhs, rhs);
-        ast.start = index;
-        ast.end = rhs.end;
+        const ast = {
+            type: Ast.BIN_OP,
+            op: op.type,
+            lhs: lhs,
+            rhs: rhs,
+            start: index,
+            end: rhs.end
+        }
         return ast;
     } else {
         return notMatch(index);
@@ -119,9 +127,12 @@ const parseIdentityAst = str => (index) => {
     let identity = parseIdentity(str)(index);
 
     if (isMatch(identity)) {
-        let ast = new IdentityValueAst(identity.value);
-        ast.start = index;
-        ast.end = identity.end;
+        const ast = {
+            type: Ast.IDENTITY,
+            value: identity.value,
+            start: index,
+            end: identity.end
+        }
 
         return ast;
     } else {
@@ -202,9 +213,18 @@ const parseFunctionAst = leadspace => env => str => (index) => {
             parseConst('}')
         ]);
     if (isMatch(p0)) {
-        let ast = new FunctionValueAst(p0.result[2].parameters, p0.result[10]);
-        ast.start = index;
-        ast.end = p0.end;
+        const ast = {
+            type: Ast.VALUE,
+            value: {
+                type: PrimeType.Function,
+                parameters: p0.result[2].parameters,
+                body: p0.result[10]
+
+            },
+            start: index,
+            end: p0.end
+        }
+
         return ast;
     } else {
         p0 = parseSeq(str)(p.end, [
@@ -219,10 +239,16 @@ const parseFunctionAst = leadspace => env => str => (index) => {
             parseConst('}')
         ]);
         if (isMatch(p0)) {
-            let ast = new FunctionValueAst(p0.result[0].parameters, p0.result[6]);
-            ast.start = index;
-            ast.end = p0.end;
-
+            const ast = {
+                type: Ast.VALUE,
+                value: {
+                    type: PrimeType.Function,
+                    parameters: p0.result[0].parameters,
+                    body: p0.result[6]
+                },
+                start: index,
+                end: p0.end
+            }
             return ast;
         } else {
             return notMatch(index);
@@ -324,9 +350,15 @@ const parseObjectAst = leadspace => env => str => (index) => {
         parseConst('}')
     ])
     if (isMatch(fields)) {
-        let ast = new ObjectValueAst(fields.result[2].fields);
-        ast.start = index;
-        ast.end = fields.end;
+        const ast = {
+            type: Ast.VALUE,
+            value: {
+                type: PrimeType.Object,
+                fields: fields.result[2].fields
+            },
+            start: index,
+            end: fields.end
+        }
         return ast
     } else {
         return notMatch(index)
@@ -362,9 +394,15 @@ const parseArrayAst = leadspace => env => str => (index) => {
     ]);
 
     if (isMatch(values)) {
-        let ast = new ArrayValueAst(values.result[2].values);
-        ast.start = index;
-        ast.end = values.end;
+        const ast = {
+            type: Ast.VALUE,
+            value: {
+                type: PrimeType.Array,
+                values: values.result[2].values
+            },
+            start: index,
+            end: values.end
+        }
         return ast
     } else {
         return notMatch(index);
@@ -449,7 +487,7 @@ const parseSingleValueAst = option => leadspace => env => str => (index) => {
             }
         }
 
-        if (f.subType === Ast.IDENTITY) {
+        if (f.type === Ast.IDENTITY) {
             let match = true;
             f.children = []
             while (match) {
@@ -512,7 +550,7 @@ const parseSingleValueAst = option => leadspace => env => str => (index) => {
                         }
 
                         f.children.push(child)
-                        
+
                     } else {
                         match = false;
                     }
@@ -730,9 +768,15 @@ const parseNumberAst = str => (index) => {
             }
         }
 
-        let ast = new NumberValueAst(new Number(number).valueOf());
-        ast.start = index;
-        ast.end = index + length;
+        const ast = {
+            type: Ast.VALUE,
+            value: {
+                type: PrimeType.Number,
+                value: new Number(number).valueOf()
+            },
+            start: index,
+            end: index + length
+        }
 
         return ast;
     } else {
@@ -779,9 +823,15 @@ const parseStringAst = str => (index) => {
         }
         length++;
 
-        let ast = new StringValueAst(string);
-        ast.start = index;
-        ast.end = index + length;
+        const ast = {
+            type: Ast.VALUE,
+            value: {
+                type: PrimeType.String,
+                value: string
+            },
+            start: index,
+            end: index + length
+        }
 
         return ast;
     } else {
@@ -792,16 +842,28 @@ const parseStringAst = str => (index) => {
 const parseBooleanAst = str => (index) => {
     const trueResult = parseConst('true')(str)(index);
     if (isMatch(trueResult)) {
-        let ast = new BooleanValueAst(true);
-        ast.start = index;
-        ast.end = trueResult.end;
+        const ast = {
+            type: Ast.VALUE,
+            value: {
+                type: PrimeType.Boolean,
+                value: true
+            },
+            start: index,
+            end: trueResult.end
+        };
         return ast
     } else {
         const falseResult = parseConst('false')(str)(index);
         if (isMatch(falseResult)) {
-            let ast = new BooleanValueAst(false);
-            ast.start = index;
-            ast.end = falseResult.end;
+            const ast = {
+                type: Ast.VALUE,
+                value: {
+                    type: PrimeType.Boolean,
+                    value: false
+                },
+                start: index,
+                end: falseResult.end
+            }
 
             return ast;
         } else {

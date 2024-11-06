@@ -73,7 +73,7 @@ const parseStatementAst = env => str => (index) => {
                 if (isMatch(p2)) {
                     // identity = value
 
-                    if (p0.subType === Ast.IDENTITY) {
+                    if (p0.type === Ast.IDENTITY) {
                         let ast = new AssignStmtAst(p0, p2.result[1]);
                         ast.start = index;
                         ast.end = p2.end;

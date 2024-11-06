@@ -5,59 +5,81 @@ import {
     ArrayValueAst
 } from '../ast/index.js';
 import { findInEnv, createEnv } from '../env.js';
-import { notMatch } from '../parser/match.js';
+import { PrimeType } from '../type/constant.js';
 import { toNative } from './native.js';
 import runStatements from './run-statements.js';
 
-const runValue = env => ast => {
+const runValue = env => value => {
     //console.log(ast.value)
-    if (ast.subType === Ast.IDENTITY) {
-        let result = findInEnv(env)(ast)(null);
+    if (value.type === Ast.VALUE) {
+        if (value.value.type === PrimeType.Array) {
+            return {
+                result: {
+                    type: Ast.VALUE,
+                    value: {
+                        type: PrimeType.Array,
+                        values: value.value.values.map(e => runValue(env)(e))
+                    }
+                },
+                env: env
+            };
+        }
 
+        return {
+            result: {
+                type: Ast.VALUE,
+                value: value.value
+            },
+            env: env
+        }
+    } else if (value.type === Ast.IDENTITY) {
+        let result = {
+            result: { type: Ast.VALUE, value: findInEnv(env)(value)(null)?.value },
+            env: env
+        };
         //console.trace()
-        if (ast.arguments) {
+        if (value.arguments) {
             env.runScope = new Map();
-            if (env.scope.has(ast.value)) {
-                for(const [key, value] of env.scope.get(ast.value)) {
+            if (env.scope.has(value.value)) {
+                for (const [key, value] of env.scope.get(value.value)) {
                     env.runScope.set(key, value)
                 }
             }
 
-            const tmpResult = runFunction(env)(result)(ast);
+            const tmpResult = runFunction(env)(result.result.value)(value);
             result = {
+                result: tmpResult.value, //TODO type
                 env: env,
-                value: tmpResult.value,
                 context: tmpResult.context
             }
         }
 
-        if (ast.children.length > 0) {
-            const root = ast;
-            
-            for (let childIndex = 0; childIndex < ast.children.length; childIndex++) {
-                const child = ast.children[childIndex];
+        if (value.children.length > 0) {
+            const root = value;
+
+            for (let childIndex = 0; childIndex < value.children.length; childIndex++) {
+                const child = value.children[childIndex];
                 if (child.childType === 'INDEX') {
-                    result = runValue(env)(result.value.values[runValue(env)(child).value.value])
+                    //runValue(env)(makeValue(result.value)).value.values[runValue(env)(child).value.value]
+                    result = result.result.value
+                        .values[runValue(env)(child).result.value.value]
                     //ast = child
                 } else if (child.childType === 'FIELD') {
                     //env = createEnv(env);
                     env.context.set('this', result)
 
-                    result = runValue(env)(result.value.fields.find(e => e.variable.value === child.value).value);
+                    result = runValue(env)(result.result.value.fields.find(e => e.variable.value === child.value).value);
                 }
 
                 if (child.arguments) {
                     env.runScope = new Map();
                     if (env.scope.has(root.value)) {
-                        //for(const [key, value] of env.scope.get(root.value)) {
-                            env.runScope = env.scope.get(root.value)
-                            //env.runScope.set(key, value)
-                        //}
+                        env.runScope = env.scope.get(root.value)
                     }
-                    const tmpResult = runFunction(env)(result)(child);
+                    const tmpResult = runFunction(env)(result.result.value)(child);
                     result = {
+                        result: tmpResult.value,
                         env: env,
-                        value: tmpResult.value,
                         context: tmpResult.context
                     }
                 }
@@ -65,56 +87,147 @@ const runValue = env => ast => {
         }
 
         return result;
-    } else if (ast.subType === Ast.BIN_OP) {
-        if (ast.op === '+') {
-            return {value: new NumberValueAst(toNative(runValue(env)(ast.lhs).value) + toNative(runValue(env)(ast.rhs).value)), env: env};
-        } else if (ast.op === '-') {
-            return {value: new NumberValueAst(toNative(runValue(env)(ast.lhs).value) - toNative(runValue(env)(ast.rhs).value)), env: env};
-        } else if (ast.op === '*') {
-            return {value: new NumberValueAst(toNative(runValue(env)(ast.lhs).value) * toNative(runValue(env)(ast.rhs).value)), env: env};
-        } else if (ast.op === '/') {
-            return {value: new NumberValueAst(toNative(runValue(env)(ast.lhs).value) / toNative(runValue(env)(ast.rhs).value)), env: env};
-        } else if (ast.op === '==') {
-            return {value: new BooleanValueAst(toNative(runValue(env)(ast.lhs).value) === toNative(runValue(env)(ast.rhs).value)), env: env};
-        } else if (ast.op === '<') {
-            return {value: new BooleanValueAst(toNative(runValue(env)(ast.lhs).value) < toNative(runValue(env)(ast.rhs).value)), env: env};
-        } else if (ast.op === '>') {
-            return {value: new BooleanValueAst(toNative(runValue(env)(ast.lhs).value) > toNative(runValue(env)(ast.rhs).value)), env: env};
-        } else if (ast.op === '<=') {
-            return {value: new BooleanValueAst(toNative(runValue(env)(ast.lhs).value) <= toNative(runValue(env)(ast.rhs).value)), env: env};
-        } else if (ast.op === '>=') {
-            return {value: new BooleanValueAst(toNative(runValue(env)(ast.lhs).value) >= toNative(runValue(env)(ast.rhs).value)), env: env};
-        } else if (ast.op === '&&') {
-            return {value: new BooleanValueAst(toNative(runValue(env)(ast.lhs).value) && toNative(runValue(env)(ast.rhs).value)), env: env};
-        } else if (ast.op === '||') {
-            return {value: new BooleanValueAst(toNative(runValue(env)(ast.lhs).value) || toNative(runValue(env)(ast.rhs).value)), env: env};
+    } else if (value.type === Ast.BIN_OP) {
+        if (value.op === '+') {
+            return {
+                result: {
+                    type: Ast.VALUE,
+                    value: {
+                        type: PrimeType.Number,
+                        value: toNative(runValue(env)(value.lhs).result.value) + toNative(runValue(env)(value.rhs).result.value)
+                    },
+                    env: env
+                }
+            }
+        } else if (value.op === '-') {
+            return {
+                result: {
+                    type: Ast.VALUE,
+                    value: {
+                        type: PrimeType.Number,
+                        value: toNative(runValue(env)(value.lhs).result.value) - toNative(runValue(env)(value.rhs).result.value)
+                    },
+                    env: env
+                }
+            }
+        } else if (value.op === '*') {
+            return {
+                result: {
+                    type: Ast.VALUE,
+                    value: {
+                        type: PrimeType.Number,
+                        value: toNative(runValue(env)(value.lhs).result.value) * toNative(runValue(env)(value.rhs).result.value)
+                    },
+                    env: env
+                }
+            }
+        } else if (value.op === '/') {
+            return {
+                result: {
+                    type: Ast.VALUE,
+                    value: {
+                        type: PrimeType.Number,
+                        value: toNative(runValue(env)(value.lhs).result.value) / toNative(runValue(env)(value.rhs).result.value)
+                    },
+                    env: env
+                }
+            }
+        } else if (value.op === '==') {
+            return {
+                result: {
+                    type: Ast.VALUE,
+                    value: {
+                        type: PrimeType.Boolean,
+                        value: toNative(runValue(env)(value.lhs).result.value) === toNative(runValue(env)(value.rhs).result.value)
+                    }
+                },
+                env: env
+            }
+        } else if (value.op === '<') {
+            return {
+                result: {
+                    type: Ast.VALUE,
+                    value: {
+                        type: PrimeType.Boolean,
+                        value: toNative(runValue(env)(value.lhs).result.value) < toNative(runValue(env)(value.rhs).result.value)
+                    }
+                },
+                env: env
+            }
+        } else if (value.op === '>') {
+            return {
+                result: {
+                    type: Ast.VALUE,
+                    value: {
+                        type: PrimeType.Boolean,
+                        value: toNative(runValue(env)(value.lhs).result.value) > toNative(runValue(env)(value.rhs).result.value)
+                    }
+                },
+                env: env
+            }
+        } else if (value.op === '<=') {
+            return {
+                result: {
+                    type: Ast.VALUE,
+                    value: {
+                        type: PrimeType.Boolean,
+                        value: toNative(runValue(env)(value.lhs).result.value) <= toNative(runValue(env)(value.rhs).result.value)
+                    },
+                    env: env
+                }
+            }
+        } else if (value.op === '>=') {
+            return {
+                result: {
+                    type: Ast.VALUE,
+                    value: {
+                        type: PrimeType.Boolean,
+                        value: toNative(runValue(env)(value.lhs).result.value) >= toNative(runValue(env)(value.rhs).result.value)
+                    },
+                    env: env
+                }
+            }
+        } else if (value.op === '&&') {
+            return {
+                result: {
+                    type: Ast.VALUE,
+                    value: {
+                        type: PrimeType.Boolean,
+                        value: toNative(runValue(env)(value.lhs).result.value) && toNative(runValue(env)(value.rhs).result.value)
+                    },
+                    env: env
+                }
+            }
+        } else if (value.op === '||') {
+            return {
+                result: {
+                    type: Ast.VALUE,
+                    value: {
+                        type: PrimeType.Boolean,
+                        value: toNative(runValue(env)(value.lhs).result.value) || toNative(runValue(env)(value.rhs).result.value)
+                    },
+                    env: env
+                }
+            }
         }
-    } else if (ast.subType === Ast.OBJECT) {
-        return {value: ast, env: env};
-    } else if (ast.subType === Ast.FUNCTION) {
-        return {value: ast, env: env};
-    } else if (ast.subType === Ast.ARRAY) {
-        return {value: new ArrayValueAst(ast.values.map(e => runValue(env)(e).value)), env: env};
-    } else {
-        return {value: ast, env: env};
     }
 }
 
 const runFunction = env => fun => ast => {
     for (let i = 0; i < ast.arguments.length; i++) {
-        fun = fun.value
+        //fun = fun.value
         //TODO
         if (!fun.system) {
-        //if (true) {
+            //if (true) {
             //TODO move up
             env = createEnv(env);
             for (let j = 0; j < fun.parameters.length; j++) {
                 env.context.set(
                     fun.parameters[j].variable,
-                    runValue(env)(ast.arguments[i].parameters[j]).value
+                    runValue(env)(ast.arguments[i].parameters[j]).result.value
                 );
             }
-            
+
             //env.runScope = env.parent.runScope
             fun = runStatements(env)(fun.body);
             //env = env.parent;
@@ -123,10 +236,10 @@ const runFunction = env => fun => ast => {
             let parameters = [];
             for (let j = 0; j < fun.parameters.length; j++) {
                 parameters.push(
-                    runValue(env)(ast.arguments[i].parameters[j]).value
+                    runValue(env)(ast.arguments[i].parameters[j])
                 );
             }
-            fun = fun.call.apply(this, parameters.map(e => toNative(e)));
+            fun = fun.call.apply(this, parameters.map(e => toNative(e.result.value)));
         }
     }
 
@@ -135,12 +248,19 @@ const runFunction = env => fun => ast => {
         env.scope.set(key, value);
     }
     */
-   //env.scope = env.context
+    //env.scope = env.context
 
     return {
-        value: fun?.value,
+        value: fun?.result,
         context: env.context
     };
+}
+
+const makeValue = (value) => {
+    return {
+        type: Ast.VALUE,
+        value: value
+    }
 }
 
 export default runValue;

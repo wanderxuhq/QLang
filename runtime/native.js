@@ -1,17 +1,18 @@
-import { Ast } from "../ast/index.js";
+import { PrimeType } from "../type/constant.js";
 
 const toNative = (ast) => {
-    if (ast.subType === Ast.ARRAY) {
-        return ast.values.map(e => toNative(e));
-    } else if (ast.subType === Ast.BOOLEAN) {
+    if (ast.type === PrimeType.Array) {
+        return ast.values.map(e => toNative(e.result.value));
+    } else if (ast.type === PrimeType.Boolean) {
         return ast.value
-    } else if (ast.subType === Ast.NUMBER) {
+    } else if (ast.type === PrimeType.Number) {
         return ast.value
-    } else if (ast.subType === Ast.STRING) {
+    } else if (ast.type === PrimeType.String) {
         return ast.value
-    } else if (ast.subType === Ast.OBJECT) {
+    } else if (ast.type === PrimeType.Object) {
         let obj = {};
-        ast.fields.forEach(e => obj[e.variable.value] = toNative(e.value))
+        //TODO wrap or unwrap
+        ast.fields.forEach(e => obj[e.variable.value] = toNative(e.value.value))
         return obj;
     }
 }
