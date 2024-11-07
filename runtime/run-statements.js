@@ -1,5 +1,6 @@
 import { Ast } from '../ast/index.js';
 import { createEnv, findInEnv } from '../env.js';
+import { PrimeType } from '../type/constant.js';
 import { toNative } from './native.js';
 import runValue from './run-value.js';
 
@@ -15,16 +16,71 @@ const runStatements = env => ast => {
                 env.scope.set(statement.variable.value, value.context)
             }
         } else if (statement.type === Ast.ASSIGN) {
-            const value = runValue(env)(statement.value).result.value;
-            let subEnv = findInEnv(env)(statement.variable)(null);
-            if (subEnv.type === 'context') {
-                subEnv.env.context.set(statement.variable.value, value)
-            } else if (subEnv.type === 'runScope') {
-                subEnv.env.runScope.set(statement.variable.value, value)
+            const value = runValue(env)(statement.value);
+            let envObj = findInEnv(env)(statement.variable)(null);
+            let subContext;
+            if (envObj.type === 'context') {
+                subContext = envObj.env.context;
+            } else if (envObj.type === 'runScope') {
+                subContext = envObj.env.runScope;
             }
-            
-            if (statement.value.arguments) {
-                env.scope.set(statement.variable.value, env.scope.get('_temp'))
+            if (statement.variable.children.length === 0) {
+                subContext.set(statement.variable.value, value.result.value)
+                //TODO
+                if (statement.value.arguments) {
+                    env.scope.set(statement.variable.value, env.scope.get('_temp'))
+                }
+            } else {
+                let obj = subContext.get(statement.variable.value);
+
+                let lastObj = obj;
+                for (let index = 0; index < statement.variable.children.length - 1; index++) {
+                    const child = statement.variable.children[index];
+                    if (child.childType === 'INDEX') {
+                        const indexObj = lastObj.values[toNative(child.value)].result
+                        if (indexObj) {
+                            //TODO
+                            lastObj = indexObj.value
+                        } else {
+                            //TODO obj[x] cannot be null
+                            lastObj = null
+                        }
+                    } else if (child.childType === 'FIELD') {
+                        const field = lastObj.fields.find(e => e.variable.value === child.value);
+                        if (field) {
+                            lastObj = field.value.value
+                        } else {
+                            //TODO obj.x cannot be null
+                            lastObj = null
+                        }
+                    }
+                }
+
+                const lastChild = statement.variable.children[statement.variable.children.length - 1];
+                if (lastChild.childType === 'FIELD') {
+                    const field = lastObj.fields.find(e => e.variable.value === lastChild.value)
+                    if (field) {
+                        field.value.value = value.result.value
+                    } else {
+                        lastObj.fields.push(
+                            {
+                                variable: lastChild,
+                                value: {
+                                    type: Ast.VALUE,
+                                    value: value.result.value
+                                }
+                            }
+                        )
+                    }
+                    
+                } else if (lastChild.childType === 'INDEX') {
+                    const index = toNative(lastChild.value)
+                    if (index < lastObj.values.length) {
+                        lastObj.values[toNative(lastChild.value)] = value
+                    } else {
+                        //TODO obj[x] not available
+                    }
+                }
             }
         } else if (statement.type === Ast.RETURN) {
             const value = runValue(env)(statement.value);
