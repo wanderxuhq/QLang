@@ -338,7 +338,11 @@ const parseObjectAst = leadspace => env => str => (index) => {
                 fields: fields
             };
         } else {
-            return parseOptionalSpace(str)(index);
+            return {
+                start: index,
+                end: index,
+                fields: []
+            };
         }
     }
 
@@ -487,101 +491,65 @@ const parseSingleValueAst = option => leadspace => env => str => (index) => {
             }
         }
 
-        if (f.type === Ast.IDENTITY) {
-            let match = true;
-            f.children = []
-            while (match) {
-                let optionalSpace = parseOptionalSpace(str)(end);
+        let match = true;
+        f.children = []
+        while (match) {
+            let optionalSpace = parseOptionalSpace(str)(end);
 
-                let objectIndex = parseSeq(str)(optionalSpace.end,
+            let objectIndex = parseSeq(str)(optionalSpace.end,
+                [
+                    parseConst('['),
+                    parseOptionalSpace,
+                    parseValueAst(leadspace)(env),
+                    parseOptionalSpace,
+                    parseConst(']')
+                ]);
+            if (isMatch(objectIndex)) {
+                let child = objectIndex.result[2];
+                child.childType = 'INDEX';
+                f.children.push(child)
+
+                end = objectIndex.end;
+            } else {
+                const objectField = parseSeq(str)(optionalSpace.end,
                     [
-                        parseConst('['),
+                        parseConst('.'),
                         parseOptionalSpace,
-                        parseValueAst(leadspace)(env),
-                        parseOptionalSpace,
-                        parseConst(']')
+                        parseIdentityAst
                     ]);
-                if (isMatch(objectIndex)) {
-                    /*
-                    f.child = objectIndex.result[2];
-                    f.child.childType = 'INDEX'
-                    f = f.child;
-                    */
-                    let child = objectIndex.result[2];
-                    child.childType = 'INDEX';
-                    f.children.push(child)
 
-                    end = objectIndex.end;
-                } else {
-                    const objectField = parseSeq(str)(optionalSpace.end,
-                        [
-                            parseConst('.'),
-                            parseOptionalSpace,
-                            parseIdentityAst
-                        ]);
+                if (isMatch(objectField)) {
+                    const child = objectField.result[2];
+                    child.childType = 'FIELD';
+                    end = objectField.end;
 
-                    if (isMatch(objectField)) {
-                        const child = objectField.result[2]; //parseIdentityAst(str)(dot.end);//parseValueAst(env)(str)(dot.end);
-                        /*
-                        f.child = child;
-                        f.child.childType = 'FIELD';
-                        f = f.child;
-                        */
-                        child.childType = 'FIELD';
-                        end = objectField.end;
-
-                        let functionCall = parseCommonFunctionCall(leadspace)(env)(str)(objectField.end)
-                        if (isMatch(functionCall)) {
-                            let funParameters = [];
-                            funParameters.push(functionCall);
-                            end = functionCall.end;
-                            let nextFunctionCall = parseCommonFunctionCall(leadspace)(env)(str)(end)
-                            while (isMatch(nextFunctionCall)) {
-                                nextFunctionCall = parseCommonFunctionCall(leadspace)(env)(str)(end)
-                                if (isMatch(nextFunctionCall)) {
-                                    end = nextFunctionCall.end;
-                                    funParameters.push(nextFunctionCall);
-                                } else {
-                                    break;
-                                }
+                    let functionCall = parseCommonFunctionCall(leadspace)(env)(str)(objectField.end)
+                    if (isMatch(functionCall)) {
+                        let funParameters = [];
+                        funParameters.push(functionCall);
+                        end = functionCall.end;
+                        let nextFunctionCall = parseCommonFunctionCall(leadspace)(env)(str)(end)
+                        while (isMatch(nextFunctionCall)) {
+                            nextFunctionCall = parseCommonFunctionCall(leadspace)(env)(str)(end)
+                            if (isMatch(nextFunctionCall)) {
+                                end = nextFunctionCall.end;
+                                funParameters.push(nextFunctionCall);
+                            } else {
+                                break;
                             }
-
-                            child.arguments = funParameters;
                         }
 
-                        f.children.push(child)
-
-                    } else {
-                        match = false;
+                        child.arguments = funParameters;
                     }
-                }
-            }
-            root.end = end;
-        } else {
-            let functionCall = parseCommonFunctionCall(leadspace)(env)(str)(end)
-            if (isMatch(functionCall)) {
-                let funParameters = [];
-                funParameters.push(functionCall);
-                end = functionCall.end;
-                let nextFunctionCall = parseCommonFunctionCall(leadspace)(env)(str)(end)
-                while (isMatch(nextFunctionCall)) {
-                    nextFunctionCall = parseCommonFunctionCall(leadspace)(env)(str)(end)
-                    if (isMatch(nextFunctionCall)) {
-                        end = nextFunctionCall.end;
-                        funParameters.push(nextFunctionCall);
-                    } else {
-                        break;
-                    }
-                }
 
-                f.arguments = funParameters;
-                f.end = end;
-            } else {
-                if (option.functionCall) {
+                    f.children.push(child)
 
+                } else {
+                    match = false;
                 }
             }
         }
+        root.end = end;
 
         return root;
 
@@ -647,13 +615,6 @@ const parseCommonFunctionCall = leadspace => (env) => (str) => (index) => {
                         parseOptionalSpace,
                         parseValueAst(leadspace)(env)
                     ]);
-                    /*
-                    if (isMatch(p)) {
-                        p = parseValueAst(env)(str)(p.end, true);
-                    } else {
-                        break;
-                    }
-                    */
                 }
             }
 
@@ -664,7 +625,12 @@ const parseCommonFunctionCall = leadspace => (env) => (str) => (index) => {
                 end: p.end
             }
         } else {
-            return notMatch(index);
+            return {
+                type: 'PARAMETERS',
+                parameters,
+                start: index,
+                end: index
+            }
         }
     }
 

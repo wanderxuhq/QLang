@@ -74,6 +74,7 @@ const parseStatementAst = env => str => (index) => {
                     // identity = value
 
                     if (p0.type === Ast.IDENTITY) {
+                        //TODO segmentation
                         let ast = new AssignStmtAst(p0, p2.result[1]);
                         ast.start = index;
                         ast.end = p2.end;
@@ -81,7 +82,6 @@ const parseStatementAst = env => str => (index) => {
                     } else {
                         return parseFail(`Assign left side "${p0.value}" cannot be "${p0.type}"`)(str)(index, p2.end);
                     }
-
                 } else {
                     return notMatch(index);
                 }
@@ -102,7 +102,7 @@ const parseStatementAst = env => str => (index) => {
                 }
                 p1 = parseSeq(str)(p1.end, [parseOptionalSpace, parseConst('else'), parseOptionalSpace, ...parseBodySeq])
                 if (isMatch(p1)) {
-                    ast.elseBody = p1.result[4]
+                    ast.elseBody = p1.result[5]
                 }
 
                 ast.start = p0.start;
