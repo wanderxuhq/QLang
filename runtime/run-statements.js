@@ -1,6 +1,7 @@
 import { Ast } from '../ast/index.js';
 import { createEnv, findInEnv } from '../env.js';
 import { PrimeType } from '../type/constant.js';
+import { Void } from '../value/constant.js';
 import { toNative } from './native.js';
 import runValue from './run-value.js';
 
@@ -37,7 +38,7 @@ const runStatements = env => ast => {
                 for (let index = 0; index < statement.variable.children.length - 1; index++) {
                     const child = statement.variable.children[index];
                     if (child.childType === 'INDEX') {
-                        const indexObj = lastObj.values[toNative(child.value)].result
+                        const indexObj = lastObj.values[toNative(child.value)]
                         if (indexObj) {
                             //TODO
                             lastObj = indexObj.value
@@ -72,11 +73,10 @@ const runStatements = env => ast => {
                             }
                         )
                     }
-                    
                 } else if (lastChild.childType === 'INDEX') {
                     const index = toNative(lastChild.value)
                     if (index < lastObj.values.length) {
-                        lastObj.values[toNative(lastChild.value)] = value
+                        lastObj.values[toNative(lastChild.value)] = value.result
                     } else {
                         //TODO obj[x] not available
                     }
@@ -122,6 +122,8 @@ const runStatements = env => ast => {
             }
         }
     }
+
+    return Void;
 }
 
 export default runStatements;
