@@ -1,7 +1,8 @@
 import { Ast } from '../ast/index.js';
 import { findInEnv, createEnv } from '../env.js';
 import { PrimeType } from '../type/constant.js';
-import { toNative } from './native.js';
+import { Void } from '../value/constant.js';
+import { fromNative, toNative } from './native.js';
 import runStatements from './run-statements.js';
 
 const runValue = env => value => {
@@ -23,12 +24,15 @@ const runValue = env => value => {
         if (value.arguments) {
             env.runScope = new Map();
             if (env.scope.has(value.value)) {
+                env.runScope = env.scope.get(value.value)
+                /*
                 for (const [key, value] of env.scope.get(value.value)) {
                     env.runScope.set(key, value)
                 }
+                */
             }
 
-            const tmpResult = runFunction(env)(result.result.value)(value);
+            const tmpResult = runFunction(env)(result)(null)(value.arguments);
             result = {
                 result: tmpResult.value, //TODO type
                 env: env,
@@ -43,15 +47,24 @@ const runValue = env => value => {
                 for (let childIndex = 0; childIndex < value.children.length; childIndex++) {
                     const child = value.children[childIndex];
                     if (child.childType === 'INDEX') {
-                        //runValue(env)(makeValue(result.value)).value.values[runValue(env)(child).value.value]
                         result = runValue(env)(result.result.value
                             .values[runValue(env)(child).result.value.value])
-                        //ast = child
                     } else if (child.childType === 'FIELD') {
-                        //env = createEnv(env);
                         env.context.set('this', result)
+                        if (result.result.value.type === PrimeType.Array && child.value === 'add') {
+                            let func = fromNative((arr, e) => {
+                                arr.result.value.values.push(e.result);
+                                return arr.result
+                            });
+                            func.value.oop = true;
+                            result = {
+                                result: func,
+                                env: env
+                            }
+                        } else {
+                            result = runValue(env)(result.result.value.fields.find(e => e.variable.value === child.value).value);
+                        }
 
-                        result = runValue(env)(result.result.value.fields.find(e => e.variable.value === child.value).value);
                     }
 
                     if (child.arguments) {
@@ -59,7 +72,7 @@ const runValue = env => value => {
                         if (env.scope.has(root.value)) {
                             env.runScope = env.scope.get(root.value)
                         }
-                        const tmpResult = runFunction(env)(result.result.value)(child);
+                        const tmpResult = runFunction(env)(result)(root)(child.arguments);
                         result = {
                             result: tmpResult.value,
                             env: env,
@@ -71,11 +84,17 @@ const runValue = env => value => {
         }
 
         if (result.result.value.type === PrimeType.Array) {
+            let values = result.result.value.values;
+            //result.result.value.values.forEach(e => runValue(env)(e).result)
+            for (let i = 0; i < values.length; i++) {
+                values[i] = runValue(env)(values[i]).result
+            }
             result = {
                 type: Ast.VALUE,
                 value: {
                     type: PrimeType.Array,
-                    values: result.result.value.values.map(e => runValue(env)(e).result),
+                    //values: result.result.value.values.map(e => runValue(env)(e).result),
+                    values: values,
                     fields: []
                 }
             }
@@ -85,6 +104,7 @@ const runValue = env => value => {
             };
         }
 
+        /*
         return {
             result: {
                 type: Ast.VALUE,
@@ -92,6 +112,8 @@ const runValue = env => value => {
             },
             env: env
         }
+            */
+        return result;
     } else if (value.type === Ast.BIN_OP) {
         if (value.op === '+') {
             return {
@@ -218,32 +240,41 @@ const runValue = env => value => {
     }
 }
 
-const runFunction = env => fun => ast => {
-    for (let i = 0; i < ast.arguments.length; i++) {
+const runFunction = env => fun => obj => args => {
+    for (let i = 0; i < args.length; i++) {
+        fun = fun.result.value
         if (!fun.system) {
+            fun = JSON.parse(JSON.stringify(fun))
             env = createEnv(env);
             for (let j = 0; j < fun.parameters.length; j++) {
                 env.context.set(
                     fun.parameters[j].variable,
-                    runValue(env)(ast.arguments[i].parameters[j]).result.value
+                    runValue(env)(args[i].parameters[j]).result.value
                 );
             }
 
             fun = runStatements(env)(fun.body);
         } else {
             let parameters = [];
-            for (let j = 0; j < ast.arguments[i].parameters.length; j++) {
+            if (fun.oop){
+                parameters.push(runValue(env)({
+                    type: obj.type,
+                    value: obj.value,
+                    children: []
+                }))
+            }
+            for (let j = 0; j < args[i].parameters.length; j++) {
                 parameters.push(
-                    runValue(env)(ast.arguments[i].parameters[j])
+                    runValue(env)(args[i].parameters[j])
                 );
             }
 
-            fun = fun.call.apply(this, parameters);
+            fun = {result: fun.call.apply(this, parameters)};
         }
     }
 
     return {
-        value: fun?.result || fun,
+        value: fun?.result,
         context: env.context
     };
 }
