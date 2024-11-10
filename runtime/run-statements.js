@@ -27,10 +27,6 @@ const runStatements = env => ast => {
             }
             if (statement.variable.children.length === 0) {
                 subContext.set(statement.variable.value, value.result.value)
-                //TODO
-                if (statement.value.arguments) {
-                    env.scope.set(statement.variable.value, env.scope.get('_temp'))
-                }
             } else {
                 let obj = subContext.get(statement.variable.value);
 
@@ -87,7 +83,10 @@ const runStatements = env => ast => {
             return value;
         } else if (statement.type === Ast.FUNCTION_CALL) {
             runValue(env)(statement);
-        } else if (statement.type === Ast.IDENTITY) {
+        } else if (statement.type === Ast.VALUE || statement.type === Ast.IDENTITY) {
+            if(statement.value === 'debug') {
+                debugger;
+            }
             runValue(env)(statement);
         } else if (statement.type === Ast.IF) {
             runValue(env)(statement.matchBodies[0].condition)
@@ -123,7 +122,7 @@ const runStatements = env => ast => {
         }
     }
 
-    return Void;
+    return {result: Void, env: env};
 }
 
 export default runStatements;

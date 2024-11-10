@@ -641,7 +641,7 @@ const parseCommonFunctionCall = leadspace => (env) => (str) => (index) => {
     ]);
     let parseParameterSuffix = null;
     if (isMatch(parameterPrefix)) {
-        parseParameterSuffix = str => _index => parseConst(')')(str)(_index);
+        parseParameterSuffix = str => _index => parseSeq(str)(_index, [parseOptionalSpace, parseConst(')')]);
         const parameters = parseParameters(str)(parameterPrefix.end);
         if (isMatch(parameters)) {
             const parameterSuffix = parseParameterSuffix(str)(parameters.end);
