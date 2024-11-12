@@ -16,7 +16,8 @@ const findInEnv = env => variable => scope => {
             return {
                 type: 'runScope',
                 env: env,
-                value: result
+                value: result.value,
+                scope: result.scope
             };
         }
         if (env.context.has(variable.value)) {
@@ -24,7 +25,8 @@ const findInEnv = env => variable => scope => {
             return {
                 type: 'context',
                 env: env,
-                value: result
+                value: result.value,
+                scope: result.scope
             };
         }
 

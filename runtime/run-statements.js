@@ -10,12 +10,9 @@ const runStatements = env => ast => {
         if (statement.type === Ast.DECLARE) {
             const value = runValue(env)(statement.value);
             env.context.set(statement.variable.value,
-                value.result.value
+                //TODO scope
+                {value: value.result.value, scope: value.scope}
             );
-            if (statement.value.arguments) {
-                //env.scope = value.context
-                env.scope.set(statement.variable.value, value.context)
-            }
         } else if (statement.type === Ast.ASSIGN) {
             const value = runValue(env)(statement.value);
             let envObj = findInEnv(env)(statement.variable)(null);
@@ -26,7 +23,8 @@ const runStatements = env => ast => {
                 subContext = envObj.env.runScope;
             }
             if (statement.variable.children.length === 0) {
-                subContext.set(statement.variable.value, value.result.value)
+                //TODO scope
+                subContext.set(statement.variable.value, {value: value.result.value, scope: value.result.scope})
             } else {
                 let obj = subContext.get(statement.variable.value);
 
@@ -86,16 +84,16 @@ const runStatements = env => ast => {
         } else if (statement.type === Ast.VALUE || statement.type === Ast.IDENTITY) {
             if(statement.value === 'debug') {
                 debugger;
+            } else {
+                runValue(env)(statement);
             }
-            runValue(env)(statement);
         } else if (statement.type === Ast.IF) {
-            runValue(env)(statement.matchBodies[0].condition)
             let hasMatch = false;
             for (const matchBody of statement.matchBodies) {
                 if (toNative(runValue(env)(matchBody.condition).result.value)) {
                     //TODO return in if
                     const value = runStatements(env)(matchBody.body);
-                    if (value) {
+                    if (value.result !== Void) {
                         return value;
                     }
                     hasMatch = true;
@@ -106,7 +104,7 @@ const runStatements = env => ast => {
             if (!hasMatch && statement.elseBody) {
                 const value = runStatements(env)(statement.elseBody);
 
-                if (value) {
+                if (value.result !== Void) {
                     //TODO return in if
                     return value;
                 }
@@ -114,7 +112,7 @@ const runStatements = env => ast => {
         } else if (statement.type === Ast.WHILE) {
             while (toNative(runValue(env)(statement.condition).result.value)) {
                 const value = runStatements(env)(statement.body);
-                if (value) {
+                if (value.result !== Void) {
                     //TODO return in if
                     return value;
                 }
