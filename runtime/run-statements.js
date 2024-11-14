@@ -84,6 +84,7 @@ const runStatements = env => ast => {
         } else if (statement.type === Ast.VALUE || statement.type === Ast.IDENTITY) {
             if(statement.value === 'debug') {
                 debugger;
+                runValue(env)(statement);
             } else {
                 runValue(env)(statement);
             }

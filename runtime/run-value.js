@@ -1,5 +1,6 @@
 import { Ast } from '../ast/index.js';
 import { findInEnv, createEnv } from '../env.js';
+import { findInStd } from '../std/index.js';
 import { PrimeType } from '../type/constant.js';
 import { Void } from '../value/constant.js';
 import { fromNative, toNative } from './native.js';
@@ -48,30 +49,17 @@ const runValue = env => value => {
                             .values[runValue(env)(child).result.value.value])
                     } else if (child.childType === 'FIELD') {
                         env.context.set('this', result)
-                        if (result.result.value.type === PrimeType.Array && child.value === 'add') {
-                            let func = fromNative((arr, e) => {
-                                arr.result.value.values.push(e.result);
-                                return arr.result
-                            });
-                            func.value.oop = true;
+
+                        const std = findInStd(result.result.value.type, child.value)
+                        if (std) {
                             result = {
-                                result: func,
+                                result: std(result),
                                 env: env,
                                 scope: scope
-                            }
-                        } else if (result.result.value.type === PrimeType.Array && child.value === 'length') {
-                            let func = fromNative((arr, e) => {
-                                return fromNative(arr.result.value.values.length)
-                            });
-                            func.value.oop = true;
-                            result = {
-                                result: func,
-                                env: env
                             }
                         } else {
                             result = runValue(env)(result.result.value.fields.find(e => e.variable.value === child.value).value);
                         }
-
                     }
 
                     if (child.arguments) {
