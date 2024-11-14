@@ -1,4 +1,3 @@
-let print = (x) {}
 let k=10
 let l=1
 while(l<=k){
