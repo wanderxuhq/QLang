@@ -15,6 +15,11 @@ const toNative = (ast) => {
         //TODO wrap or unwrap
         ast.fields.forEach(e => obj[e.variable.value] = toNative(e.value.value))
         return obj;
+    } else if (ast.type === PrimeType.Function) {
+        return {
+            parameters: ast.parameters.map(e => e.variable),
+            statements: ast.body.statements
+        };
     }
 }
 

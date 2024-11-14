@@ -11,7 +11,7 @@ context.set('Void', {value: { name: 'Void', type: 'Type' }, scope: new Map()});
 const print = e => {
     let value = toNative(e.result.value);
     if (typeof (value) !== 'string') {
-        value = JSON.stringify(value)
+        value = JSON.stringify(value, null, 2)
     }
     process.stdout.write(value);
 
