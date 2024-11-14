@@ -1,7 +1,7 @@
-k=10
-l=1
+let k=10
+let l=1
 while(l<=k){
-	i=1
+	let i=1
 	while(i<=l){
 		print("*")
 		i=i+1
@@ -21,7 +21,7 @@ while(l<=k){
 	i=1
 }
 while(l<=2*k-1){
-	i=1
+	let i=1
 	while(i<=k-(l-k)){
 		print("*")
 		i=i+1
