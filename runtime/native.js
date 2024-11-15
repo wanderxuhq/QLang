@@ -1,5 +1,6 @@
 import { Ast } from "../ast/index.js";
 import { PrimeType } from "../type/constant.js";
+import { makeRunValueInput } from "./run-value.js";
 
 const toNative = (ast) => {
     if (ast.type === PrimeType.Array) {
@@ -29,27 +30,18 @@ const fromNative = (value) => {
     const type = trueTypeOf(value);
     if (type === 'boolean') {
         return {
-            type: Ast.VALUE,
-            value: {
-                type: PrimeType.Boolean,
-                value: value
-            }
+            type: PrimeType.Boolean,
+            value: value
         }
     } else if (type === 'number') {
         return {
-            type: Ast.VALUE,
-            value: {
-                type: PrimeType.Number,
-                value: value
-            }
+            type: PrimeType.Number,
+            value: value
         }
     } else if (type === 'string') {
         return {
-            type: Ast.VALUE,
-            value: {
-                type: PrimeType.String,
-                value: value
-            }
+            type: PrimeType.String,
+            value: value
         }
     } else if (type === 'object') {
         let fields = [];
@@ -60,25 +52,19 @@ const fromNative = (value) => {
                         type: Ast.IDENTITY,
                         value: field
                     },
-                    value: fromNative(value[field])
+                    value: makeRunValueInput(fromNative(value[field]))
                 }
             )
         }
         return {
-            type: Ast.VALUE,
-            value: {
-                type: PrimeType.Object,
-                fields: fields
-            }
+            type: PrimeType.Object,
+            fields: fields
         }
     } else if (type === 'function') {
         return {
-            type: Ast.VALUE,
-            value: {
-                type: 'Function',
-                system: true,
-                call: value,
-            }
+            type: 'Function',
+            system: true,
+            call: value,
         }
     }
 }

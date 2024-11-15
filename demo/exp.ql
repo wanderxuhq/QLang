@@ -12,10 +12,12 @@ print(n.g(4))
 //print(f(3)(4))
 print('\n')
 let a = [1]
+/*
 println(a.add(2).add(3))
 println(a)
 a.add(4)
 println(a)
+*/
 /*
 let arr = [1];
 //arr.add(1);
