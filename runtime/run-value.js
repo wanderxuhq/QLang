@@ -1,8 +1,6 @@
 import { Ast } from '../ast/index.js';
-import { findInEnv, createEnv } from '../env.js';
 import { findInStd } from '../std/index.js';
 import { PrimeType } from '../type/constant.js';
-import { Void } from '../value/constant.js';
 import { fromNative, toNative } from './native.js';
 import runStatements from './run-statements.js';
 
@@ -12,7 +10,9 @@ const runValueWithScope = env => value => {
     if (value.type === Ast.IDENTITY || value.type === Ast.VALUE) {
         if (value.type === Ast.IDENTITY) {
             //result = findInEnv(env)(value)(null).value
-            const envResult = findInEnv(env)(value)(null)
+            //const envResult = envFind(env)(value)
+            const envResult = env.find(value)
+            //const envResult = findInEnv(env)(value)(null)
             result = {
                 value: envResult?.value,
                 env: env
@@ -26,11 +26,12 @@ const runValueWithScope = env => value => {
         }
 
         if (value.arguments) {
-            env = createEnv(env);
+            //env = createEnv(env);
+            env = env.push()
             env.runScope = scope
 
             const tmpResult = runFunction(env)(result.value)(null)(value.arguments);
-            env = env.parent
+            env = env.pop()//env.parent
             result = {
                 value: tmpResult.value, //TODO type
                 env: env,
@@ -63,10 +64,11 @@ const runValueWithScope = env => value => {
                     }
 
                     if (child.arguments) {
-                        env = createEnv(env);
+                        //env = createEnv(env);
+                        env = env.push();
                         env.runScope = scope
                         const tmpResult = runFunction(env)(result.value)(root)(child.arguments);
-                        env = env.parent;
+                        env = env.pop()//env.parent;
                         scope = tmpResult.scope
                         result = {
                             value: tmpResult.value,
@@ -258,4 +260,4 @@ const makeRunValueInput = value => {
     }
 }
 
-export {runValueWithScope, runValue, makeRunValueInput};
+export { runValueWithScope, runValue, makeRunValueInput };

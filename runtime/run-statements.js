@@ -1,6 +1,4 @@
 import { Ast } from '../ast/index.js';
-import { createEnv, findInEnv } from '../env.js';
-import { PrimeType } from '../type/constant.js';
 import { Void } from '../value/constant.js';
 import { toNative } from './native.js';
 import { runValueWithScope, runValue, makeRunValueInput } from './run-value.js';
@@ -15,7 +13,8 @@ const runStatements = env => ast => {
             );
         } else if (statement.type === Ast.ASSIGN) {
             const value = runValueWithScope(env)(statement.value);
-            let envObj = findInEnv(env)(statement.variable)(null);
+            //let envObj = findInEnv(env)(statement.variable)(null);
+            let envObj = env.find(statement.variable)
             let subContext;
             if (envObj.type === 'context') {
                 subContext = envObj.env.context;
