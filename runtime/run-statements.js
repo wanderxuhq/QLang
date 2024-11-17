@@ -7,25 +7,22 @@ const runStatements = env => ast => {
     for (const statement of ast.statements) {
         if (statement.type === Ast.DECLARE) {
             const value = runValueWithScope(env)(statement.value);
-            env.context.set(statement.variable.value,
+            env.set(statement.variable.value,
                 //TODO scope
                 {value: value.value, scope: value.scope}
             );
         } else if (statement.type === Ast.ASSIGN) {
             const value = runValueWithScope(env)(statement.value);
-            //let envObj = findInEnv(env)(statement.variable)(null);
-            let envObj = env.find(statement.variable)
-            let subContext;
-            if (envObj.type === 'context') {
-                subContext = envObj.env.context;
-            } else if (envObj.type === 'runScope') {
-                subContext = envObj.env.runScope;
+            let envObj = env.find(statement.variable.value)
+            if (!envObj.find) {
+                console.log(`${statement.variable.value} not find in env`)
             }
+
             if (statement.variable.children.length === 0) {
                 //TODO scope
-                subContext.set(statement.variable.value, {value: value.value, scope: value.scope})
+                envObj.callback(statement.variable.value, {value: value.value, scope: value.scope});
             } else {
-                let obj = subContext.get(statement.variable.value);
+                let obj = envObj.value;
 
                 let lastObj = obj;
                 for (let index = 0; index < statement.variable.children.length - 1; index++) {

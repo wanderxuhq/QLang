@@ -11,7 +11,10 @@ const runValueWithScope = env => value => {
         if (value.type === Ast.IDENTITY) {
             //result = findInEnv(env)(value)(null).value
             //const envResult = envFind(env)(value)
-            const envResult = env.find(value)
+            const envResult = env.find(value.value)
+            if (!envResult.find) {
+                console.log(`${value.value} not find in env`)
+            }
             //const envResult = findInEnv(env)(value)(null)
             result = {
                 value: envResult?.value,
@@ -49,7 +52,7 @@ const runValueWithScope = env => value => {
                         result = runValueWithScope(env)(result.value
                             .values[toNative(runValue(env)(child))])
                     } else if (child.childType === 'FIELD') {
-                        env.context.set('this', result)
+                        env.set('this', result)
 
                         const std = findInStd(result.value.type, child.value)
                         if (std) {
@@ -216,7 +219,7 @@ const runFunction = env => fun => obj => args => {
             fun = JSON.parse(JSON.stringify(fun))
             //env = createEnv(env);
             for (let j = 0; j < fun.parameters.length; j++) {
-                env.context.set(
+                env.set(
                     fun.parameters[j].variable,
                     { value: runValue(env)(args[i].parameters[j]), scope: new Map() }
                 );

@@ -8,30 +8,27 @@ const envPush = data => () => {
         scope: new Map(),
     }
     child.push = envPush(child);
-    child.pop = envPop(child);
-    child.find = envFind(child);
-    return child;
-};
-const envPop = data => () => {
-    return data.parent;
-};
-const envFind = data => variable => {
-    let env = data;
+    child.pop = () => {
+        return child.parent;
+    };
 
-    while (env) {
-        if (env.runScope?.has(variable.value)) {
-            let result = env.runScope.get(variable.value);
+    child.find = variable => {
+        let env = child;
+
+        if (env.runScope?.has(variable)) {
+            let result = env.runScope.get(variable);
             return {
-                type: 'runScope',
+                find: true,
+                callback: (variable, value) => { env.runScope.set(variable, value) },
                 env: env,
                 value: result.value,
                 scope: result.scope
             };
-        }
-        if (env.context.has(variable.value)) {
-            let result = env.context.get(variable.value);
+        } else if (env.context.has(variable)) {
+            let result = env.context.get(variable);
             return {
-                type: 'context',
+                find: true,
+                callback: env.set,
                 env: env,
                 value: result.value,
                 scope: result.scope
@@ -39,23 +36,43 @@ const envFind = data => variable => {
         }
 
         env = env.pop();
+        if (env) {
+            return env.find(variable);
+        } else {
+            return {
+                find: false
+            }
+        }
     }
+    child.set = (variable, value) => {
+        child.context.set(variable, value);
+    };
+    return child;
+};
 
-    return Void
+/*
+const envTransaction = data => () => {
+    data.transtaction = true;
+    data.backup = data.context
+    data.context = JSON.parse(JSON.stringify(data.context));
 }
 
+const envCommit = data => () => {
+    data.transtaction = false;
+}
+
+const envRevert = data => () => {
+    data.context = data.backup;
+    data.transtaction = false;
+}
+*/
+
 const rootEnv = (() => {
-    const root = {
-        parent: null,
-        //context: context,
-        scope: new Map()
-    }
+    let root = envPush(null)();
 
-    let context = new Map();
-
-    context.set('String', { value: { name: 'String', type: 'Type' }, scope: new Map() });
-    context.set('Int', { value: { name: 'Int', type: 'Type' }, scope: new Map() });
-    context.set('Void', { value: { name: 'Void', type: 'Type' }, scope: new Map() });
+    root.set('String', { value: { name: 'String', type: 'Type' }, scope: new Map() });
+    root.set('Int', { value: { name: 'Int', type: 'Type' }, scope: new Map() });
+    root.set('Void', { value: { name: 'Void', type: 'Type' }, scope: new Map() });
     const print = e => {
         let value = toNative(e);
         if (typeof (value) !== 'string') {
@@ -65,17 +82,17 @@ const rootEnv = (() => {
 
         return Void;
     }
-    context.set('print', { value: fromNative(print), scope: new Map() });
-    context.set('println', {
+    root.set('print', { value: fromNative(print), scope: new Map() });
+    root.set('println', {
         value: fromNative(e => {
             print(e);
             process.stdout.write('\n')
             return Void;
         }), scope: new Map()
     })
-    context.set('debug', { value: fromNative(print), scope: new Map() });
+    root.set('debug', { value: fromNative(print), scope: new Map() });
 
-    context.set('Arrays', {
+    root.set('Arrays', {
         value: fromNative({
             add: (arr, e) => {
                 arr.value.values.push(e);
@@ -86,11 +103,6 @@ const rootEnv = (() => {
             }
         }), scope: new Map()
     });
-
-    root.context = context;
-    root.find = envFind(root);
-    root.push = envPush(root);
-    root.pop = envPop(root);
 
     return root;
 })().push();
