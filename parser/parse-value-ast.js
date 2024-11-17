@@ -30,7 +30,6 @@ import {
 } from '../type/constant.js'
 import { parseComment } from './parse-comment.js';
 import { parseImport } from './parse-module.js';
-import { createEnv } from '../env.js';
 
 const binOpPrecedence = (() => {
     const map = new Map();
@@ -596,7 +595,7 @@ const parseCommonFunctionCall = leadspace => (env) => (str) => (index) => {
         let parameters = []
         let p = parseValueAst(leadspace)(env)(str)(index, true);
         if (isMatch(p)) {
-            env = createEnv(env);
+            env = env.push();
             parameters.push(p)
 
             p = parseSeq(str)(p.end, [

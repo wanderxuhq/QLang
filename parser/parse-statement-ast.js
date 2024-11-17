@@ -37,7 +37,6 @@ const parseStatementAst = env => str => (index) => {
             if (isMatch(p2)) {
                 // let variable: Type = value
                 const ast = new DeclareStmtAst(p1.result[3], p0.result[2], p2.result[3]);
-                //context.set(p0.result[2], { type: p1.result[3], value: p2.result[3] });
                 ast.start = index;
                 ast.end = p2.end;
 
@@ -142,11 +141,7 @@ const parseStatementAst = env => str => (index) => {
 
 const parseStatementsAst = parentEnv => str => (index) => {
     const ast = new StmtsAst([]);
-    let env = {
-        parent: parentEnv,
-        context: new Map(),
-        scope: new Map(),
-    };
+    let env = parentEnv
     //let context = new Map();
     //let p = parseOptionalSpace(str)(index)
     let p = parseEmptyLines(str)(index);
@@ -155,7 +150,7 @@ const parseStatementsAst = parentEnv => str => (index) => {
     if (isMatch(statement)) {
         while (isMatch(statement)) {
             if (statement.type === Ast.DECLARE) {
-                env.context.set(statement.variable.value,
+                env.set(statement.variable.value,
                     statement.value
                 );
             }
