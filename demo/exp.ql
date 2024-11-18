@@ -1,3 +1,16 @@
+let a = 1;
+println(a)
+let f = (x) -> {
+    return {
+        a = 1,
+        b = 2
+    }
+}
+let a = f(1).b;
+println(a)
+
+
+/*
 //a.add(2)
 let f = (a) -> {
     let x = 5
@@ -12,6 +25,7 @@ print(n.g(4))
 //print(f(3)(4))
 print('\n')
 let a = [1]
+*/
 /*
 println(a.add(2).add(3))
 println(a)

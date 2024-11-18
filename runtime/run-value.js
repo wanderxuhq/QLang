@@ -162,269 +162,104 @@ const runValue = env => value => {
         return result;
     } else if (value.type === Ast.BIN_OP) {
         if (value.op === '+') {
-            const lhsValue = runValue(env)(value.lhs);
-            const rhsValue = runValue(env)(value.rhs);
-            if (lhsValue.status.code === 0 && rhsValue.status.code === 0) {
+            return runBinOp(env)(value)((lhs, rhs) => {
                 return {
-                    status: {
-                        code: 0,
-                        message: ''
-                    },
                     value: {
                         type: PrimeType.Number,
-                        value: toNative(lhsValue.value) + toNative(rhsValue.value)
-                    },
-                    env: env
+                        value: toNative(lhs.value) + toNative(rhs.value)
+                    }
                 }
-            } else {
-                return {
-                    status: {
-                        code: 1,
-                        message: 'Error occurred'
-                    },
-                    env: env
-                }
-            }
+            });
         } else if (value.op === '-') {
-            const lhsValue = runValue(env)(value.lhs);
-            const rhsValue = runValue(env)(value.rhs);
-            if (lhsValue.status.code === 0 && rhsValue.status.code === 0) {
+            return runBinOp(env)(value)((lhs, rhs) => {
                 return {
-                    status: {
-                        code: 0,
-                        message: ''
-                    },
                     value: {
                         type: PrimeType.Number,
-                        value: toNative(lhsValue.value) - toNative(rhsValue.value)
-                    },
-                    env: env
+                        value: toNative(lhs.value) - toNative(rhs.value)
+                    }
                 }
-            } else {
-                return {
-                    status: {
-                        code: 1,
-                        message: 'Error occurred'
-                    },
-                    env: env
-                }
-            }
+            });
         } else if (value.op === '*') {
-            const lhsValue = runValue(env)(value.lhs);
-            const rhsValue = runValue(env)(value.rhs);
-            if (lhsValue.status.code === 0 && rhsValue.status.code === 0) {
+            return runBinOp(env)(value)((lhs, rhs) => {
                 return {
-                    status: {
-                        code: 0,
-                        message: ''
-                    },
                     value: {
                         type: PrimeType.Number,
-                        value: toNative(lhsValue.value) * toNative(rhsValue.value)
-                    },
-                    env: env
+                        value: toNative(lhs.value) * toNative(rhs.value)
+                    }
                 }
-            } else {
-                return {
-                    status: {
-                        code: 1,
-                        message: 'Error occurred'
-                    },
-                    env: env
-                }
-            }
+            });
         } else if (value.op === '/') {
-            const lhsValue = runValue(env)(value.lhs);
-            const rhsValue = runValue(env)(value.rhs);
-            if (lhsValue.status.code === 0 && rhsValue.status.code === 0) {
+            return runBinOp(env)(value)((lhs, rhs) => {
                 return {
-                    status: {
-                        code: 0,
-                        message: ''
-                    },
                     value: {
                         type: PrimeType.Number,
-                        value: toNative(lhsValue.value) / toNative(rhsValue.value)
-                    },
-                    env: env
+                        value: toNative(lhs.value) / toNative(rhs.value)
+                    }
                 }
-            } else {
-                return {
-                    status: {
-                        code: 1,
-                        message: 'Error occurred'
-                    },
-                    env: env
-                }
-            }
+            });
         } else if (value.op === '==') {
-            const lhsValue = runValue(env)(value.lhs);
-            const rhsValue = runValue(env)(value.rhs);
-            if (lhsValue.status.code === 0 && rhsValue.status.code === 0) {
+            return runBinOp(env)(value)((lhs, rhs) => {
                 return {
-                    status: {
-                        code: 0,
-                        message: ''
-                    },
                     value: {
                         type: PrimeType.Boolean,
-                        value: toNative(lhsValue.value) === toNative(rhsValue.value)
-                    },
-                    env: env
+                        value: toNative(lhs.value) === toNative(rhs.value)
+                    }
                 }
-            } else {
-                return {
-                    status: {
-                        code: 1,
-                        message: 'Error occurred'
-                    },
-                    env: env
-                }
-            }
+            });
         } else if (value.op === '<') {
-            const lhsValue = runValue(env)(value.lhs);
-            const rhsValue = runValue(env)(value.rhs);
-            if (lhsValue.status.code === 0 && rhsValue.status.code === 0) {
+            return runBinOp(env)(value)((lhs, rhs) => {
                 return {
-                    status: {
-                        code: 0,
-                        message: ''
-                    },
                     value: {
                         type: PrimeType.Boolean,
-                        value: toNative(lhsValue.value) < toNative(rhsValue.value)
-                    },
-                    env: env
+                        value: toNative(lhs.value) < toNative(rhs.value)
+                    }
                 }
-            } else {
-                return {
-                    status: {
-                        code: 1,
-                        message: 'Error occurred'
-                    },
-                    env: env
-                }
-            }
+            });
         } else if (value.op === '>') {
-            const lhsValue = runValue(env)(value.lhs);
-            const rhsValue = runValue(env)(value.rhs);
-            if (lhsValue.status.code === 0 && rhsValue.status.code === 0) {
+            return runBinOp(env)(value)((lhs, rhs) => {
                 return {
-                    status: {
-                        code: 0,
-                        message: ''
-                    },
                     value: {
                         type: PrimeType.Boolean,
-                        value: toNative(lhsValue.value) > toNative(rhsValue.value)
-                    },
-                    env: env
+                        value: toNative(lhs.value) > toNative(rhs.value)
+                    }
                 }
-            } else {
-                return {
-                    status: {
-                        code: 1,
-                        message: 'Error occurred'
-                    },
-                    env: env
-                }
-            }
+            });
         } else if (value.op === '<=') {
-            const lhsValue = runValue(env)(value.lhs);
-            const rhsValue = runValue(env)(value.rhs);
-            if (lhsValue.status.code === 0 && rhsValue.status.code === 0) {
+            return runBinOp(env)(value)((lhs, rhs) => {
                 return {
-                    status: {
-                        code: 0,
-                        message: ''
-                    },
                     value: {
                         type: PrimeType.Boolean,
-                        value: toNative(lhsValue.value) <= toNative(rhsValue.value)
-                    },
-                    env: env
+                        value: toNative(lhs.value) <= toNative(rhs.value)
+                    }
                 }
-            } else {
-                return {
-                    status: {
-                        code: 1,
-                        message: 'Error occurred'
-                    },
-                    env: env
-                }
-            }
+            });
         } else if (value.op === '>=') {
-            const lhsValue = runValue(env)(value.lhs);
-            const rhsValue = runValue(env)(value.rhs);
-            if (lhsValue.status.code === 0 && rhsValue.status.code === 0) {
+            return runBinOp(env)(value)((lhs, rhs) => {
                 return {
-                    status: {
-                        code: 0,
-                        message: ''
-                    },
                     value: {
                         type: PrimeType.Boolean,
-                        value: toNative(lhsValue.value) >= toNative(rhsValue.value)
-                    },
-                    env: env
+                        value: toNative(lhs.value) >= toNative(rhs.value)
+                    }
                 }
-            } else {
-                return {
-                    status: {
-                        code: 1,
-                        message: 'Error occurred'
-                    },
-                    env: env
-                }
-            }
+            });
         } else if (value.op === '&&') {
-            const lhsValue = runValue(env)(value.lhs);
-            const rhsValue = runValue(env)(value.rhs);
-            if (lhsValue.status.code === 0 && rhsValue.status.code === 0) {
+            return runBinOp(env)(value)((lhs, rhs) => {
                 return {
-                    status: {
-                        code: 0,
-                        message: ''
-                    },
                     value: {
                         type: PrimeType.Boolean,
-                        value: toNative(lhsValue.value) && toNative(rhsValue.value)
-                    },
-                    env: env
+                        value: toNative(lhs.value) && toNative(rhs.value)
+                    }
                 }
-            } else {
-                return {
-                    status: {
-                        code: 1,
-                        message: 'Error occurred'
-                    },
-                    env: env
-                }
-            }
+            });
         } else if (value.op === '||') {
-            const lhsValue = runValue(env)(value.lhs);
-            const rhsValue = runValue(env)(value.rhs);
-            if (lhsValue.status.code === 0 && rhsValue.status.code === 0) {
+            return runBinOp(env)(value)((lhs, rhs) => {
                 return {
-                    status: {
-                        code: 0,
-                        message: ''
-                    },
                     value: {
                         type: PrimeType.Boolean,
-                        value: toNative(lhsValue.value) || toNative(rhsValue.value)
-                    },
-                    env: env
+                        value: toNative(lhs.value) || toNative(rhs.value)
+                    }
                 }
-            } else {
-                return {
-                    status: {
-                        code: 1,
-                        message: 'Error occurred'
-                    },
-                    env: env
-                }
-            }
+            });
         }
     }
 }
@@ -465,6 +300,33 @@ const runFunction = env => fun => obj => args => {
         //TODO
         scope: env.context
     };
+}
+
+const runBinOp = env => value => callback => {
+    const lhsValue = runValue(env)(value.lhs);
+    if (lhsValue.status.code === 0) {
+        const rhsValue = runValue(env)(value.rhs);
+        if (rhsValue.status === 0) {
+            return {
+                status: {
+                    code: 0,
+                    message: ''
+                },
+                value: callback(lhsValue, rhsValue),
+                env: env
+            }
+        } else {
+            return {
+                status: rhsValue.status,
+                env: env
+            }
+        }
+    } else {
+        return {
+            status: lhsValue.status,
+            env: env
+        }
+    }
 }
 
 const makeRunValueInput = value => {
