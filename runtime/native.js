@@ -4,7 +4,7 @@ import { makeRunValueInput } from "./run-value.js";
 
 const toNative = (ast) => {
     if (ast.type === PrimeType.Array) {
-        return ast.value.values.map(e => toNative(e.value));
+        return ast.values.map(e => toNative(e.value));
     } else if (ast.type === PrimeType.Boolean) {
         return ast.value
     } else if (ast.type === PrimeType.Number) {
@@ -13,7 +13,6 @@ const toNative = (ast) => {
         return ast.value
     } else if (ast.type === PrimeType.Object) {
         let obj = {};
-        //TODO wrap or unwrap
         ast.fields.forEach(e => obj[e.variable.value] = toNative(e.value.value))
         return obj;
     } else if (ast.type === PrimeType.Function) {

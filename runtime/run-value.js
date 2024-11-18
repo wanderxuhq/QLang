@@ -124,36 +124,28 @@ const runValue = env => value => {
                 values[i] = makeRunValueInput(runValue(env)(values[i]).value)
             }
             const scope = result.scope
-            const value = {
-                type: PrimeType.Array,
-                values: values,
-                fields: []
-            }
             return {
                 status: {
                     code: 0,
                     message: ''
                 },
-                value: value,
+                value: result.value,
                 env: env,
                 scope: scope
             };
         } else if (result.value.type === PrimeType.Object) {
+            
             let fields = result.value.fields;
             for (let i = 0; i < fields.length; i++) {
                 fields[i].value = makeRunValueInput(runValue(env)(fields[i].value).value)
             }
             const scope = result.scope
-            const value = {
-                type: PrimeType.Object,
-                fields: fields,
-            }
             return {
                 status: {
                     code: 0,
                     message: ''
                 },
-                value: value,
+                value: result.value,
                 env: env,
                 scope: scope
             };
@@ -198,9 +190,17 @@ const runValue = env => value => {
             });
         } else if (value.op === '==') {
             return runBinOp(env)(value)((lhs, rhs) => {
+                let compareLhs = lhs.value;
+                if (lhs.value.type !== PrimeType.Array && lhs.value.type !== PrimeType.Object && lhs.value.type !== PrimeType.Function) {
+                    compareLhs = toNative(lhs);
+                }
+                let compareRhs = rhs.value;
+                if (rhs.value.type !== PrimeType.Array && rhs.value.type !== PrimeType.Object && rhs.value.type !== PrimeType.Function) {
+                    compareRhs = toNative(rhs);
+                }
                 return {
                     type: PrimeType.Boolean,
-                    value: toNative(lhs.value) === toNative(rhs.value)
+                    value: compareLhs === compareRhs
                 }
             });
         } else if (value.op === '<') {
