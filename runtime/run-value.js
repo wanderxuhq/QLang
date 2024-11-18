@@ -164,100 +164,85 @@ const runValue = env => value => {
         if (value.op === '+') {
             return runBinOp(env)(value)((lhs, rhs) => {
                 return {
-                    value: {
-                        type: PrimeType.Number,
-                        value: toNative(lhs.value) + toNative(rhs.value)
-                    }
+                    type: PrimeType.Number,
+                    value: toNative(lhs.value) + toNative(rhs.value)
                 }
             });
         } else if (value.op === '-') {
             return runBinOp(env)(value)((lhs, rhs) => {
                 return {
-                    value: {
-                        type: PrimeType.Number,
-                        value: toNative(lhs.value) - toNative(rhs.value)
-                    }
+                    type: PrimeType.Number,
+                    value: toNative(lhs.value) - toNative(rhs.value)
                 }
             });
         } else if (value.op === '*') {
             return runBinOp(env)(value)((lhs, rhs) => {
                 return {
-                    value: {
-                        type: PrimeType.Number,
-                        value: toNative(lhs.value) * toNative(rhs.value)
-                    }
+                    type: PrimeType.Number,
+                    value: toNative(lhs.value) * toNative(rhs.value)
                 }
             });
         } else if (value.op === '/') {
             return runBinOp(env)(value)((lhs, rhs) => {
                 return {
-                    value: {
-                        type: PrimeType.Number,
-                        value: toNative(lhs.value) / toNative(rhs.value)
-                    }
+                    type: PrimeType.Number,
+                    value: toNative(lhs.value) / toNative(rhs.value)
+                }
+            });
+        } else if (value.op === '%') {
+            return runBinOp(env)(value)((lhs, rhs) => {
+                return {
+                    type: PrimeType.Number,
+                    value: toNative(lhs.value) % toNative(rhs.value)
                 }
             });
         } else if (value.op === '==') {
             return runBinOp(env)(value)((lhs, rhs) => {
                 return {
-                    value: {
-                        type: PrimeType.Boolean,
-                        value: toNative(lhs.value) === toNative(rhs.value)
-                    }
+                    type: PrimeType.Boolean,
+                    value: toNative(lhs.value) === toNative(rhs.value)
                 }
             });
         } else if (value.op === '<') {
             return runBinOp(env)(value)((lhs, rhs) => {
                 return {
-                    value: {
-                        type: PrimeType.Boolean,
-                        value: toNative(lhs.value) < toNative(rhs.value)
-                    }
+                    type: PrimeType.Boolean,
+                    value: toNative(lhs.value) < toNative(rhs.value)
                 }
             });
         } else if (value.op === '>') {
             return runBinOp(env)(value)((lhs, rhs) => {
                 return {
-                    value: {
-                        type: PrimeType.Boolean,
-                        value: toNative(lhs.value) > toNative(rhs.value)
-                    }
+                    type: PrimeType.Boolean,
+                    value: toNative(lhs.value) > toNative(rhs.value)
                 }
             });
         } else if (value.op === '<=') {
             return runBinOp(env)(value)((lhs, rhs) => {
                 return {
-                    value: {
-                        type: PrimeType.Boolean,
-                        value: toNative(lhs.value) <= toNative(rhs.value)
-                    }
+                    type: PrimeType.Boolean,
+                    value: toNative(lhs.value) <= toNative(rhs.value)
                 }
             });
         } else if (value.op === '>=') {
             return runBinOp(env)(value)((lhs, rhs) => {
                 return {
-                    value: {
-                        type: PrimeType.Boolean,
-                        value: toNative(lhs.value) >= toNative(rhs.value)
-                    }
+                    type: PrimeType.Boolean,
+                    value: toNative(lhs.value) >= toNative(rhs.value)
                 }
             });
         } else if (value.op === '&&') {
             return runBinOp(env)(value)((lhs, rhs) => {
                 return {
-                    value: {
-                        type: PrimeType.Boolean,
-                        value: toNative(lhs.value) && toNative(rhs.value)
-                    }
+                    type: PrimeType.Boolean,
+                    value: toNative(lhs.value) && toNative(rhs.value)
                 }
             });
         } else if (value.op === '||') {
             return runBinOp(env)(value)((lhs, rhs) => {
                 return {
-                    value: {
-                        type: PrimeType.Boolean,
-                        value: toNative(lhs.value) || toNative(rhs.value)
-                    }
+                    type: PrimeType.Boolean,
+                    value: toNative(lhs.value) || toNative(rhs.value)
                 }
             });
         }
@@ -306,7 +291,7 @@ const runBinOp = env => value => callback => {
     const lhsValue = runValue(env)(value.lhs);
     if (lhsValue.status.code === 0) {
         const rhsValue = runValue(env)(value.rhs);
-        if (rhsValue.status === 0) {
+        if (rhsValue.status.code === 0) {
             return {
                 status: {
                     code: 0,
