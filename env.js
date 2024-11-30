@@ -1,3 +1,4 @@
+import { Ast } from "./ast/index.js";
 import { fromNative, toNative } from "./runtime/native.js";
 import { Void } from "./value/constant.js";
 
@@ -15,23 +16,14 @@ const envPush = data => () => {
     child.find = variable => {
         let env = child;
 
-        if (env.runScope?.has(variable)) {
-            let result = env.runScope.get(variable);
-            return {
-                find: true,
-                callback: (variable, value) => { env.runScope.set(variable, value) },
-                env: env,
-                value: result.value,
-                scope: result.scope
-            };
-        } else if (env.context.has(variable)) {
+        if (env.context.has(variable)) {
             let result = env.context.get(variable);
             return {
                 find: true,
                 callback: env.set,
-                env: env,
-                value: result.value,
-                scope: result.scope
+                env: result.env,
+                value: result,
+                scope: result
             };
         }
 
@@ -47,25 +39,44 @@ const envPush = data => () => {
     child.set = (variable, value) => {
         child.context.set(variable, value);
     };
+    child.attach = (scope) => {
+        child.scope = scope
+    }
+    child.deattach = () => {
+        child.scope = new Map()
+    }
     return child;
 };
 
-/*
-const envTransaction = data => () => {
-    data.transtaction = true;
-    data.backup = data.context
-    data.context = JSON.parse(JSON.stringify(data.context));
-}
+const findInEnv = (env, scope) => variable => {
+    if (scope?.has(variable)) {
+        let result = scope.get(variable);
+        return {
+            find: true,
+            callback: (variable, value) => { env.runScope.set(variable, value) },
+            env: env,
+            value: result.value,
+            scope: result.scope
+        };
+    } else if (env.context.has(variable)) {
+        let result = env.context.get(variable);
+        return {
+            find: true,
+            callback: env.set,
+            env: env,
+            value: result.value,
+            scope: result.scope
+        };
+    }
 
-const envCommit = data => () => {
-    data.transtaction = false;
+    if (env) {
+        return findInEnv(env, null)(variable);
+    } else {
+        return {
+            find: false
+        }
+    }
 }
-
-const envRevert = data => () => {
-    data.context = data.backup;
-    data.transtaction = false;
-}
-*/
 
 const rootEnv = (() => {
     let root = envPush(null)();
@@ -80,29 +91,22 @@ const rootEnv = (() => {
         }
         process.stdout.write(value);
 
-        return Void;
+        return {
+            status: {
+                code: 0
+            }, hasReturn: false,
+            value: { type: Ast.VALUE, value: Void }
+        };
     }
-    root.set('print', { value: fromNative(print), scope: new Map() });
-    root.set('println', {
-        value: fromNative(e => {
-            print(e);
-            process.stdout.write('\n')
-            return Void;
-        }), scope: new Map()
-    })
-    root.set('debug', { value: fromNative(print), scope: new Map() });
-
-    root.set('Arrays', {
-        value: fromNative({
-            add: (arr, e) => {
-                arr.value.values.push(e);
-                return Void
-            },
-            length: (arr, e) => {
-                return toNative(arr.value.values.length)
-            }
-        }), scope: new Map()
-    });
+    root.set('print', fromNative(print));
+    root.set('println', fromNative(e => {
+        print(e);
+        process.stdout.write('\n')
+        return { type: Ast.VALUE, value: Void };
+    }))
+    let debugFuction = fromNative(print);
+    debugFuction.value.debug = true;
+    root.set('debug', debugFuction);
 
     return root;
 })().push();

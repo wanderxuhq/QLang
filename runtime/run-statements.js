@@ -9,7 +9,7 @@ const runStatements = env => ast => {
             const value = runValue(env)(statement.value);
             env.set(statement.variable.value,
                 //TODO scope
-                {value: value.value, scope: value.scope}
+                value.value
             );
         } else if (statement.type === Ast.ASSIGN) {
             const value = runValue(env)(statement.value);
@@ -20,7 +20,7 @@ const runStatements = env => ast => {
 
             if (statement.variable.children.length === 0) {
                 //TODO scope
-                envObj.callback(statement.variable.value, {value: value.value, scope: value.scope});
+                envObj.callback(statement.variable.value, value.value);
             } else {
                 let obj = envObj.value;
 
@@ -78,11 +78,15 @@ const runStatements = env => ast => {
                 status: value.status,
                 hasReturn: true,
                 value: value.value,
+                //TODO scope
+                scope: value.scope
             };
         } else if (statement.type === Ast.VALUE || statement.type === Ast.IDENTITY || statement.type === Ast.BIN_OP) {
+            /*
             if(statement.value === 'debug') {
                 debugger;
             }
+            */
             const result = runValue(env)(statement);
             if (result.status.code !== 0) {
                 return {
@@ -101,6 +105,7 @@ const runStatements = env => ast => {
                             status: value.status,
                             hasReturn: true,
                             value: value.value,
+                            scope: value.scope
                         };
                     }
                     hasMatch = true;
@@ -118,6 +123,7 @@ const runStatements = env => ast => {
                         status: value.status,
                         hasReturn: true,
                         value: value.value,
+                        scope: value.scope
                     };
                 }
             }
@@ -130,6 +136,7 @@ const runStatements = env => ast => {
                         status: value.status,
                         hasReturn: true,
                         value: value.value,
+                        scope: value.scope
                     };
                 }
             }
@@ -142,7 +149,7 @@ const runStatements = env => ast => {
             message: '',
         },
         hasReturn: false,
-        value: Void
+        value: {type: Ast.VALUE, value: Void}
     };
 }
 

@@ -190,7 +190,12 @@ const parseFunctionAst = leadspace => env => str => (index) => {
                 end: p.end
             }
         } else {
-            return notMatch(index);
+            const optionalSpace = parseOptionalSpace(str)(index);
+            return {
+                parameters,
+                start: index,
+                end: optionalSpace.end
+            }
         }
 
     }
