@@ -94,8 +94,9 @@ const runValue = env => value => {
                         if (child.type === Ast.VALUE) {
                             childEnv = result.value.env
                         }
+                        //child.value as a Value
                         result = runValue(env)(result.value.value
-                            .values[toNative(runValue(env)(child).value)])
+                            .values[toNative(runValue(env)(child.value).value)])
                     } else if (child.childType === 'FIELD') {
                         //env.set('this', result)
 
@@ -113,6 +114,7 @@ const runValue = env => value => {
                             //if (child.type === Ast.VALUE) {
                             childEnv = result.value.env
                             //}
+                            //child.value as String
                             const field = result.value.value.fields.find(e => e.variable.value === child.value).value
                             result = runValue(field.env)(field);
                         }

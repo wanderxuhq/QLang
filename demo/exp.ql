@@ -1,3 +1,14 @@
+
+//f()[0]()
+
+let f = () -> {
+    let a = 1;
+    let h = () -> {return a}
+    return [h]
+}
+print(f()[0]())
+
+/*
 let f = () -> {
     let a = 1;
     let h = () -> {return a}
@@ -7,13 +18,14 @@ let f = () -> {
 let g = (arr) -> {
     return arr;
 }
-let arr1 = f()
+//let arr1 = f()
 //debug(arr1)
-let x = arr1[0]
-debug(x())
+let x = f()[0]();
+debug(x)
 //print(g(arr1))
 
 //print(g())
+*/
 /*let f = (x) -> {
     let g = (y) -> {return {i = y, z = [y + 1]}}
     let a = 1;

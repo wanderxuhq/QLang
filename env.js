@@ -39,44 +39,9 @@ const envPush = data => () => {
     child.set = (variable, value) => {
         child.context.set(variable, value);
     };
-    child.attach = (scope) => {
-        child.scope = scope
-    }
-    child.deattach = () => {
-        child.scope = new Map()
-    }
+
     return child;
 };
-
-const findInEnv = (env, scope) => variable => {
-    if (scope?.has(variable)) {
-        let result = scope.get(variable);
-        return {
-            find: true,
-            callback: (variable, value) => { env.runScope.set(variable, value) },
-            env: env,
-            value: result.value,
-            scope: result.scope
-        };
-    } else if (env.context.has(variable)) {
-        let result = env.context.get(variable);
-        return {
-            find: true,
-            callback: env.set,
-            env: env,
-            value: result.value,
-            scope: result.scope
-        };
-    }
-
-    if (env) {
-        return findInEnv(env, null)(variable);
-    } else {
-        return {
-            find: false
-        }
-    }
-}
 
 const rootEnv = (() => {
     let root = envPush(null)();

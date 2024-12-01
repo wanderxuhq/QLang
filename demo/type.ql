@@ -1,7 +1,5 @@
 let Option = {
     Some = (value) -> {
-        //debug(value)
-        //TODO
         return {
             value = value,
             isSome = () -> {return true;},
@@ -21,8 +19,6 @@ let createMap = x -> {
     return {
         put = (key, value) -> {
             cache1.add([key, value]);
-            //debug(value)
-            //debug(cache1)
         },
         get = key -> {
             let index = 0;
@@ -38,7 +34,7 @@ let createMap = x -> {
     }
 };
 
-let Type = (x) -> {
+let Type = () -> {
     let cache = createMap(1);
     return {
         create = (name, compatible) -> {
@@ -49,26 +45,18 @@ let Type = (x) -> {
             return t;
         },
         compatible = (v1) -> {
-            //debug(Type.compatible)
-            return cache.get(v1).isSome();
+            return cache.get(v1).then((x) -> {return true;});
         },
         check = (t, v) -> {
-            //debug(cache.get(t).value.compatible(v))
             return cache.get(t).value.compatible(v);
         }
     }
-}(5)
+}()
 
-//print({a = 1, b = 2})
-//print(Type)
-//debug(
-    Type.create('Type', Type.compatible)
-//)
-//debug(1)
+Type.create('Type', Type.compatible)
 Type.create('Any', (v) -> {
     return true;
 });
-
 
 println("Type.check('Type', 'Any')")
 println(Type.check('Type', 'Any'));
@@ -76,21 +64,17 @@ println(Type.check('Type', 'Any'));
 println(Type.check('Any', 1));
 
 Type.create('Number', (v) -> {
-    //debug()
-    //println('v: ' + v);
     return false;
 })
 //println(Type.check('Number', 100))
 
 Type.create('Even', (v) -> {
-    //debug(v)
     return v % 2 == 0;
 })
 
 println(Type.check('Even', 100))
 println("Type.check('Even', 101)")
 println(Type.check('Even', 101))
-//println(Type.check('Type', 'Even'))
 
 Type.create('Void', (v) -> {
     return false;
