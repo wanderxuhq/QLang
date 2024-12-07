@@ -12,7 +12,7 @@ import rootEnv from '../env.js';
 
 export default (source) => {
     const result = parseStatementsAst(rootEnv)(
-        fs.readFileSync(source, 'utf-8')
+        source
     )(0);
     fs.writeFileSync("output.json", JSON.stringify(result, null, 2));  
     return result;

@@ -1,18 +1,18 @@
 import { Ast } from '../ast/index.js';
 import { Void } from '../value/constant.js';
 import { toNative } from './native.js';
-import { runValueWithScope, runValue, makeRunValueInput } from './run-value.js';
+import { runValue, makeRunValueInput } from './run-value.js';
 
 const runStatements = env => ast => {
     for (const statement of ast.statements) {
         if (statement.type === Ast.DECLARE) {
-            const value = runValueWithScope(env)(statement.value);
+            const value = runValue(env)(statement.value);
             env.set(statement.variable.value,
                 //TODO scope
-                {value: value.value, scope: value.scope}
+                value.value
             );
         } else if (statement.type === Ast.ASSIGN) {
-            const value = runValueWithScope(env)(statement.value);
+            const value = runValue(env)(statement.value);
             let envObj = env.find(statement.variable.value)
             if (!envObj.find) {
                 console.log(`${statement.variable.value} not find in env`)
@@ -20,7 +20,7 @@ const runStatements = env => ast => {
 
             if (statement.variable.children.length === 0) {
                 //TODO scope
-                envObj.callback(statement.variable.value, {value: value.value, scope: value.scope});
+                envObj.callback(statement.variable.value, value.value);
             } else {
                 let obj = envObj.value;
 
@@ -74,23 +74,39 @@ const runStatements = env => ast => {
             }
         } else if (statement.type === Ast.RETURN) {
             const value = runValue(env)(statement.value);
-            return value;
+            return {
+                status: value.status,
+                hasReturn: true,
+                value: value.value,
+                //TODO scope
+                scope: value.scope
+            };
         } else if (statement.type === Ast.VALUE || statement.type === Ast.IDENTITY || statement.type === Ast.BIN_OP) {
+            /*
             if(statement.value === 'debug') {
                 debugger;
-                runValue(env)(statement);
-            } else {
-                runValue(env)(statement);
+            }
+            */
+            const result = runValue(env)(statement);
+            if (result.status.code !== 0) {
+                return {
+                    status: result.status
+                }
             }
         } else if (statement.type === Ast.IF) {
             let hasMatch = false;
             for (const matchBody of statement.matchBodies) {
-                if (toNative(runValue(env)(matchBody.condition))) {
+                if (toNative(runValue(env)(matchBody.condition).value)) {
                     //TODO return in if
                     const value = runStatements(env)(matchBody.body);
                     //TODO has return and return void
-                    if (value !== Void) {
-                        return value;
+                    if (value.hasReturn && value.status.code === 0) {
+                        return {
+                            status: value.status,
+                            hasReturn: true,
+                            value: value.value,
+                            scope: value.scope
+                        };
                     }
                     hasMatch = true;
                     break;
@@ -101,23 +117,40 @@ const runStatements = env => ast => {
                 const value = runStatements(env)(statement.elseBody);
 
                 //TODO has return and return void
-                if (value !== Void) {
+                if (value.hasReturn && value.status.code === 0) {
                     //TODO return in if
-                    return value;
+                    return {
+                        status: value.status,
+                        hasReturn: true,
+                        value: value.value,
+                        scope: value.scope
+                    };
                 }
             }
         } else if (statement.type === Ast.WHILE) {
-            while (toNative(runValue(env)(statement.condition))) {
+            while (toNative(runValue(env)(statement.condition).value)) {
                 const value = runStatements(env)(statement.body);
-                if (value !== Void) {
+                if (value.hasReturn && value.status.code === 0) {
                     //TODO return in if
-                    return value;
+                    return {
+                        status: value.status,
+                        hasReturn: true,
+                        value: value.value,
+                        scope: value.scope
+                    };
                 }
             }
         }
     }
 
-    return Void;
+    return {
+        status: {
+            code: 0,
+            message: '',
+        },
+        hasReturn: false,
+        value: {type: Ast.VALUE, value: Void}
+    };
 }
 
 export default runStatements;

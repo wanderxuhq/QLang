@@ -149,11 +149,13 @@ const parseStatementsAst = parentEnv => str => (index) => {
     let end = index;
     if (isMatch(statement)) {
         while (isMatch(statement)) {
+            /*
             if (statement.type === Ast.DECLARE) {
                 env.set(statement.variable.value,
                     statement.value
                 );
             }
+            */
             end = statement.end;
             ast.statements.push(statement);
 

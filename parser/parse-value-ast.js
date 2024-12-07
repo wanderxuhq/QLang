@@ -190,7 +190,12 @@ const parseFunctionAst = leadspace => env => str => (index) => {
                 end: p.end
             }
         } else {
-            return notMatch(index);
+            const optionalSpace = parseOptionalSpace(str)(index);
+            return {
+                parameters,
+                start: index,
+                end: optionalSpace.end
+            }
         }
 
     }
@@ -504,11 +509,30 @@ const parseSingleValueAst = option => leadspace => env => str => (index) => {
                     parseConst(']')
                 ]);
             if (isMatch(objectIndex)) {
-                let child = objectIndex.result[2];
+                let child = {value: objectIndex.result[2]};
                 child.childType = 'INDEX';
-                f.children.push(child)
-
                 end = objectIndex.end;
+
+                let functionCall = parseCommonFunctionCall(leadspace)(env)(str)(end)
+                    if (isMatch(functionCall)) {
+                        let funParameters = [];
+                        funParameters.push(functionCall);
+                        end = functionCall.end;
+                        let nextFunctionCall = parseCommonFunctionCall(leadspace)(env)(str)(end)
+                        while (isMatch(nextFunctionCall)) {
+                            nextFunctionCall = parseCommonFunctionCall(leadspace)(env)(str)(end)
+                            if (isMatch(nextFunctionCall)) {
+                                end = nextFunctionCall.end;
+                                funParameters.push(nextFunctionCall);
+                            } else {
+                                break;
+                            }
+                        }
+
+                        child.arguments = funParameters;
+                    }
+
+                f.children.push(child);
             } else {
                 const objectField = parseSeq(str)(optionalSpace.end,
                     [
