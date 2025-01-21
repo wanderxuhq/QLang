@@ -6,11 +6,21 @@ import { fromNative, toNative } from './native.js';
 import runStatements from './run-statements.js';
 
 const runValue = env => value => {
+    if (!value) {
+        return {
+            status: {
+                code: 1,
+                message: 'Invalid value'
+            }
+        };
+    }
+
     let result = {};
     let scope = new Map();
     if (!value.env) {
         value.env = env;
     }
+
     if (value.type === Ast.IDENTITY || value.type === Ast.VALUE) {
         if (value.type === Ast.IDENTITY) {
             //result = findInEnv(env)(value)(null).value
@@ -25,11 +35,7 @@ const runValue = env => value => {
                     code: 0,
                     message: ''
                 },
-                value: {
-                    type: envResult.value.type,
-                    value: envResult.value.value,
-                    env: envResult.value.env
-                },
+                value: envResult.value,
             };
             scope = envResult?.scope
         } else {
@@ -38,49 +44,14 @@ const runValue = env => value => {
                     code: 0,
                     message: ''
                 },
-                value: {
-                    type: value.type,
-                    value: value.value,
-                    env: value.env
-                }
+                value: value
             }
 
             //result.value.env = env;
         }
 
         if (value.arguments) {
-            //console.log(result.value)
-            if (result.value.value.type === PrimeType.Function) {
-                //env = env.push()
-                //env.runScope = scope
-                //let childEnv = result.value.env.push()
-                if (value.value === 'debug') {
-                    //debugger;
-                }
-                const tmpResult = runFunction(env)(result.value)(null)(value.arguments);
-                //env = env.pop()//env.parent
-                result = {
-                    status: {
-                        code: 0,
-                        message: ''
-                    },
-                    value: {
-                        type: Ast.VALUE,
-                        value: tmpResult.value?.value,
-                        env: tmpResult.value?.env
-                    }, //TODO type
-                }
-            } else {
-                result = {
-                    status: {
-                        code: 1,
-                        message: `${value.value} is not function`,
-                        start: value.start,
-                        end: value.end
-                    },
-                }
-                return result;
-            }
+            result = runFunction(env)(result)(null)(value.arguments)
         }
 
         if (value.children) {
@@ -116,6 +87,12 @@ const runValue = env => value => {
                             //}
                             //child.value as String
                             const field = result.value.value.fields.find(e => e.variable.value === child.value).value
+                            //TODO enrich env
+                            /*
+                            if (!field.env) {
+                                field.env = result.value.env
+                            }
+                            */
                             result = runValue(field.env)(field);
                         }
                     }
@@ -125,18 +102,14 @@ const runValue = env => value => {
                         //env = env.push();
                         //env.runScope = scope
                         //TODO nested scope
-                        const tmpResult = runFunction(env)(result.value)(root)(child.arguments);
+                        const tmpResult = runFunction(env)(result)(root)(child.arguments);
                         //env = env.pop()//env.parent;
                         result = {
                             status: {
                                 code: 0,
                                 message: ''
                             },
-                            value: {
-                                type: tmpResult.value.type,
-                                value: tmpResult.value.value,
-                                env: tmpResult.value.env
-                            }
+                            value: tmpResult.value
                         }
                     } else {
                         scope = undefined;
@@ -146,41 +119,43 @@ const runValue = env => value => {
         }
 
 
-        if (result.value.value.type === PrimeType.Array) {
-            let values = result.value.value.values;
-            for (let i = 0; i < values.length; i++) {
-                //values[i].env = env;
-                values[i] = runValue(result.value.env)(values[i]).value
-            }
-            result = {
-                status: {
-                    code: 0,
-                    message: ''
-                },
-                value: {
-                    type: Ast.VALUE,
-                    value: result.value.value,
-                    env: result.value.env
-                },
-            };
+        if (!result.value.native) {
+            if (result.value.value.type === PrimeType.Array) {
+                let values = result.value.value.values;
+                for (let i = 0; i < values.length; i++) {
+                    //values[i].env = env;
+                    values[i] = runValue(result.value.env)(values[i]).value
+                }
+                result = {
+                    status: {
+                        code: 0,
+                        message: ''
+                    },
+                    value: {
+                        type: Ast.VALUE,
+                        value: result.value.value,
+                        env: result.value.env
+                    },
+                };
 
-        } else if (result.value.value.type === PrimeType.Object) {
-            let fields = result.value.value.fields;
-            for (let i = 0; i < fields.length; i++) {
-                //fields[i].value.env = result.value.env
-                fields[i].value = runValue(result.value.env)(fields[i].value).value
+            } else if (result.value.value.type === PrimeType.Object || result.value.value.type === PrimeType.Type) {
+                let fields = result.value.value.fields;
+                for (let i = 0; i < fields.length; i++) {
+                    //fields[i].value.env = result.value.env
+                    fields[i].value = runValue(result.value.env)(fields[i].value).value
+                }
+                result = {
+                    status: {
+                        code: 0,
+                        message: ''
+                    },
+                    value: {
+                        type: Ast.VALUE,
+                        value: result.value.value,
+                        env: result.value.env
+                    },
+                };
             }
-            result = {
-                status: {
-                    code: 0,
-                    message: ''
-                },
-                value: {
-                    type: Ast.VALUE,
-                    value: result.value.value,
-                    env: result.value.env
-                },
-            };
         }
 
         return result;
@@ -282,49 +257,84 @@ const runValue = env => value => {
 }
 
 const runFunction = env => fun => obj => args => {
-    //let fun = f.value
-    //TODO is env required?
-    let result
-    //let childEnv = env
-    for (let i = 0; i < args.length; i++) {
-        if (!fun.value.system) {
-            const childEnv = fun.env.push()
-            const f = JSON.parse(JSON.stringify(fun.value))
-            for (let j = 0; j < f.parameters.length; j++) {
-                childEnv.set(
-                    f.parameters[j].variable,
-                    //TODO check env
-                    runValue(env)(args[i].parameters[j]).value
-                );
-            }
+    if (!fun.value.native) {
+        if (fun.value.value.type === PrimeType.Function) {
+            fun = fun.value;
+            for (let i = 0; i < args.length; i++) {
+                if (!fun.value.system) {
+                    const childEnv = fun.env.push()
+                    const f = JSON.parse(JSON.stringify(fun.value))
+                    for (let j = 0; j < f.parameters.length; j++) {
+                        childEnv.set(
+                            f.parameters[j].variable,
+                            //TODO check env
+                            runValue(env)(args[i].parameters[j]).value
+                        );
+                    }
 
-            const tmpResult = runStatements(childEnv)(f.body);
-            fun = tmpResult.value;
-            result = tmpResult
+                    fun = runStatements(childEnv)(f.body);
+                } else {
+                    let parameters = [];
+                    if (fun.value.oop) {
+                        parameters.push(runValue(env)({
+                            type: obj.type,
+                            value: obj.value,
+                            children: []
+                        }).value)
+                    }
+                    if (fun.value.debug) {
+                        debugger;
+                    }
+                    for (let j = 0; j < args[i].parameters.length; j++) {
+                        parameters.push(
+                            runValue(env)(args[i].parameters[j]).value
+                        );
+                    }
+
+                    fun = fun.value.call.apply(this, parameters);
+                    fun = {
+                        status: {
+                            code: 0,
+                            message: '',
+                        },
+                        value: fun
+                    }
+                }
+            }
         } else {
-            let parameters = [];
-            if (fun.value.oop) {
-                parameters.push(runValue(env)({
-                    type: obj.type,
-                    value: obj.value,
-                    children: []
-                }).value)
+            fun = {
+                status: {
+                    code: 1,
+                    message: `${value.value} is not function`,
+                    start: value.start,
+                    end: value.end
+                },
             }
-            if (fun.value.debug) {
-                debugger;
-            }
-            for (let j = 0; j < args[i].parameters.length; j++) {
-                parameters.push(
-                    runValue(env)(args[i].parameters[j]).value
-                );
-            }
+            return fun;
+        }
+    } else {
+        if (fun.value.value.debug) {
+            debugger;
+        }
 
-            fun = fun.value.call.apply(this, parameters);
-            result = { value: fun }
+        for (let i = 0; i <args.length; i++) {
+            const pa = args[i]
+            let ps = [];
+
+            for (const p of pa.parameters) {
+                ps.push(runValue(env)(p).value)
+            }
+            fun = {
+                status: {
+                    code: 0,
+                    message: '',
+                },
+                value: fun.value.value.apply(this, ps)
+            }
         }
     }
 
-    return result;
+    return fun
 }
 
 const runBinOp = env => value => callback => {
@@ -362,4 +372,4 @@ const makeRunValueInput = value => {
     }
 }
 
-export { runValue, makeRunValueInput };
+export { runValue, makeRunValueInput, runFunction };

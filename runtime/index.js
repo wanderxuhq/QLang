@@ -6,7 +6,7 @@ import runStatements from './run-statements.js';
 import { calculatePos } from '../util/pos.js';
 import { Ast } from '../ast/index.js';
 
-const code = fs.readFileSync('./demo/type.ql', 'utf-8');
+const code = fs.readFileSync('./demo/exp.ql', 'utf-8');
 
 const ast = parse(code)
 const result = runStatements(rootEnv)(ast);

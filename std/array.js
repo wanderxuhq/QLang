@@ -9,13 +9,6 @@ lib.set('length', arr => fromNative(arr.values.length));
 lib.set('add', arr => {
     let func = fromNative((arr, e) => {
         arr.value.values.push(e);
-        //console.log('---')
-        /*
-        for (let [key, value] of e.env.context) {
-            console.log(key);
-        }
-        */
-        //console.log(e.env.context.map(e1 => e1.key))
 
         return { type: Ast.VALUE, value: Void};
     });

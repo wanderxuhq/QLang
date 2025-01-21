@@ -1,4 +1,30 @@
+/*let f = (x) -> {return x;}
+f(1)
+*/
+let x = 1;
+let Any = Type.create(v -> {return true});
+//let Number = Type.create(v -> {return Type.get(v) == 'Number'})
+let String = Type.create(v -> {return Type.get(v) == 'String'})
+let StringOrNumber = Type.create(v -> {return Type.get(v) == String || Type.get(v) == Number})
 
+//debug(Any)
+/*
+println(Type.check(Type, Any))
+println(Type.check(Any, Type))
+println(Type.check(Type, Type))
+*/
+println(Type.check(Number, 3))
+/*
+println(Type.check(Number, Number))
+println(Type.check(String, '123'))
+println(Type.check(String, 123))
+println(Type.check(StringOrNumber, 123456))
+println(Type.check(StringOrNumber, 'abc'))
+*/
+//println('')
+//debug(Type.get(Any))
+
+/*
 //f()[0]()
 
 let f = () -> {
@@ -7,7 +33,7 @@ let f = () -> {
     return [h]
 }
 print(f()[0]())
-
+*/
 /*
 let f = () -> {
     let a = 1;

@@ -1,5 +1,7 @@
 import { Ast } from "./ast/index.js";
-import { fromNative, toNative } from "./runtime/native.js";
+import { fromNative, toNative, wrap } from "./runtime/native.js";
+import Type from "./std/type.js";
+import { PrimeType } from "./type/constant.js";
 import { Void } from "./value/constant.js";
 
 const envPush = data => () => {
@@ -46,6 +48,7 @@ const envPush = data => () => {
 const rootEnv = (() => {
     let root = envPush(null)();
 
+    root.set('test', wrap(() => wrap(() => fromNative(5))));
     root.set('String', { value: { name: 'String', type: 'Type' }, scope: new Map() });
     root.set('Int', { value: { name: 'Int', type: 'Type' }, scope: new Map() });
     root.set('Void', { value: { name: 'Void', type: 'Type' }, scope: new Map() });
@@ -54,24 +57,33 @@ const rootEnv = (() => {
         if (typeof (value) !== 'string') {
             value = JSON.stringify(value, null, 2)
         }
+        if (value === undefined) {
+            throw new Error(value)
+        }
         process.stdout.write(value);
 
         return {
             status: {
                 code: 0
-            }, hasReturn: false,
+            },
+            hasReturn: false,
             value: { type: Ast.VALUE, value: Void }
         };
     }
-    root.set('print', fromNative(print));
-    root.set('println', fromNative(e => {
+    root.set('print', wrap(print));
+    root.set('println', wrap(e => {
         print(e);
         process.stdout.write('\n')
         return { type: Ast.VALUE, value: Void };
     }))
-    let debugFuction = fromNative(print);
+    let debugFuction = wrap(print);
     debugFuction.value.debug = true;
     root.set('debug', debugFuction);
+    const Type0 = fromNative(Type)
+    Type0.value.type = PrimeType.Type;
+    root.set('Type', Type0);
+    root.set('Number', Type.create(wrap(v => fromNative(v.value.type === 'Number'))))
+    Type.env = root;
 
     return root;
 })().push();
