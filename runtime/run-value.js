@@ -51,7 +51,7 @@ const runValue = env => value => {
         }
 
         if (value.arguments) {
-            result = runFunction(env)(result)(null)(value.arguments)
+            result = runFunction(env)(result)(value.arguments)
         }
 
         if (value.children) {
@@ -78,7 +78,7 @@ const runValue = env => value => {
                                     code: 0,
                                     message: ''
                                 },
-                                value: std(result.value.value),
+                                value: std(result.value),
                             }
                         } else {
                             let childEnv = env;
@@ -102,7 +102,7 @@ const runValue = env => value => {
                         //env = env.push();
                         //env.runScope = scope
                         //TODO nested scope
-                        const tmpResult = runFunction(env)(result)(root)(child.arguments);
+                        const tmpResult = runFunction(env)(result)(child.arguments);
                         //env = env.pop()//env.parent;
                         result = {
                             status: {
@@ -256,7 +256,7 @@ const runValue = env => value => {
     }
 }
 
-const runFunction = env => fun => obj => args => {
+const runFunction = env => fun => args => {
     if (!fun.value.native) {
         if (fun.value.value.type === PrimeType.Function) {
             fun = fun.value;
@@ -275,6 +275,7 @@ const runFunction = env => fun => obj => args => {
                     fun = runStatements(childEnv)(f.body);
                 } else {
                     let parameters = [];
+                    /*
                     if (fun.value.oop) {
                         parameters.push(runValue(env)({
                             type: obj.type,
@@ -282,6 +283,7 @@ const runFunction = env => fun => obj => args => {
                             children: []
                         }).value)
                     }
+                        */
                     if (fun.value.debug) {
                         debugger;
                     }
@@ -319,7 +321,7 @@ const runFunction = env => fun => obj => args => {
 
         for (let i = 0; i < args.length; i++) {
             let parameters = [];
-
+/*
             if (fun.value.oop) {
                 parameters.push(runValue(env)({
                     type: obj.type,
@@ -327,6 +329,7 @@ const runFunction = env => fun => obj => args => {
                     children: []
                 }).value)
             }
+            */
             for (let j = 0; j < args[i].parameters.length; j++) {
                 parameters.push(runValue(env)(args[i].parameters[j]).value)
             }
