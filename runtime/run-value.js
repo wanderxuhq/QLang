@@ -317,19 +317,25 @@ const runFunction = env => fun => obj => args => {
             debugger;
         }
 
-        for (let i = 0; i <args.length; i++) {
-            const pa = args[i]
-            let ps = [];
+        for (let i = 0; i < args.length; i++) {
+            let parameters = [];
 
-            for (const p of pa.parameters) {
-                ps.push(runValue(env)(p).value)
+            if (fun.value.oop) {
+                parameters.push(runValue(env)({
+                    type: obj.type,
+                    value: obj.value,
+                    children: []
+                }).value)
+            }
+            for (let j = 0; j < args[i].parameters.length; j++) {
+                parameters.push(runValue(env)(args[i].parameters[j]).value)
             }
             fun = {
                 status: {
                     code: 0,
                     message: '',
                 },
-                value: fun.value.value.apply(this, ps)
+                value: fun.value.value.apply(this, parameters)
             }
         }
     }

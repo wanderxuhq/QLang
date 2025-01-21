@@ -12,7 +12,7 @@ lib.set('add', arr => {
 
         return { type: Ast.VALUE, value: Void};
     });
-    func.value.oop = true;
+    func.oop = true;
     func.env = rootEnv
 
     return func;

@@ -4,23 +4,25 @@ f(1)
 let x = 1;
 let Any = Type.create(v -> {return true});
 //let Number = Type.create(v -> {return Type.get(v) == 'Number'})
-let String = Type.create(v -> {return Type.get(v) == 'String'})
-let StringOrNumber = Type.create(v -> {return Type.get(v) == String || Type.get(v) == Number})
-
+//let String = Type.create(v -> {return Type.get(v) == 'String'})
+//let StringOrNumber = Type.create(v -> {return Type.get(v) == 'String' || Type.get(v) == 'Number'})
+let StringOrNumber = Type.create(v -> {return Type.check(String, v) || Type.check(Number, v)})
 //debug(Any)
-/*
+
 println(Type.check(Type, Any))
 println(Type.check(Any, Type))
 println(Type.check(Type, Type))
-*/
+
+println(Type.get(3))
 println(Type.check(Number, 3))
-/*
+debug(Number)
+
 println(Type.check(Number, Number))
 println(Type.check(String, '123'))
 println(Type.check(String, 123))
 println(Type.check(StringOrNumber, 123456))
 println(Type.check(StringOrNumber, 'abc'))
-*/
+
 //println('')
 //debug(Type.get(Any))
 

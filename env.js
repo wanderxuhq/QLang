@@ -83,6 +83,7 @@ const rootEnv = (() => {
     Type0.value.type = PrimeType.Type;
     root.set('Type', Type0);
     root.set('Number', Type.create(wrap(v => fromNative(v.value.type === 'Number'))))
+    root.set('String', Type.create(wrap(v => fromNative(v.value.type === 'String'))))
     Type.env = root;
 
     return root;
