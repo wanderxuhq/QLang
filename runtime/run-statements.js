@@ -1,4 +1,6 @@
 import { Ast } from '../ast/index.js';
+import Type from '../std/type.js';
+import { equal } from '../type/constant.js';
 import { Void } from '../value/constant.js';
 import { toNative } from './native.js';
 import { runValue, makeRunValueInput } from './run-value.js';
@@ -7,9 +9,19 @@ const runStatements = env => ast => {
     for (const statement of ast.statements) {
         if (statement.type === Ast.DECLARE) {
             const value = runValue(env)(statement.value);
+            if (statement.declareType) {
+                const d = runValue(env)(statement.declareType);
+                if (d.value.value !== Void) {
+                    if (!toNative(Type.check(d.value, value.value))) {
+                        console.log(`type mismatch, expected "${statement.declareType.value}", got "${value.value.value.type.value}"`)
+                    }
+                } else {
+                    console.log(`type not found for ${statement.declareType.value}`)
+                }
+            }
             env.set(statement.variable.value,
                 //TODO scope
-                value.value
+                { type: statement.declareType, value: value.value }
             );
         } else if (statement.type === Ast.ASSIGN) {
             const value = runValue(env)(statement.value);
@@ -20,9 +32,9 @@ const runStatements = env => ast => {
 
             if (statement.variable.children.length === 0) {
                 //TODO scope
-                envObj.callback(statement.variable.value, value.value);
+                envObj.callback(statement.variable.value, {value: value.value});
             } else {
-                let obj = envObj.value;
+                let obj = envObj.value.value;
 
                 let lastObj = obj;
                 for (let index = 0; index < statement.variable.children.length - 1; index++) {
@@ -149,7 +161,7 @@ const runStatements = env => ast => {
             message: '',
         },
         hasReturn: false,
-        value: {type: Ast.VALUE, value: Void}
+        value: { type: Ast.VALUE, value: Void }
     };
 }
 

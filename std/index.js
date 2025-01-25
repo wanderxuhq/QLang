@@ -2,11 +2,12 @@ import { PrimeType } from "../type/constant.js";
 import array from "./array.js";
 
 let std = new Map();
-std.set(PrimeType.Array, array)
+//TODO Better way?
+std.set(PrimeType.Array.value, array)
 
 const findInStd = (type, attribute) => {
-    if (std.has(type)) {
-        const lib = std.get(type)
+    if (std.has(type.value)) {
+        const lib = std.get(type.value)
         if (lib.has(attribute)) {
             return lib.get(attribute);
         } else {

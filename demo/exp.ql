@@ -8,11 +8,13 @@ let Any = Type.create(v -> {return true});
 //let StringOrNumber = Type.create(v -> {return Type.get(v) == 'String' || Type.get(v) == 'Number'})
 let StringOrNumber = Type.create(v -> {return Type.check(String, v) || Type.check(Number, v)})
 //debug(Any)
+debug(Type.check(StringOrNumber, 'abc'))
 
+
+debug(Type.get({}))
 println(Type.check(Type, Any))
 println(Type.check(Any, Type))
 println(Type.check(Type, Type))
-
 println(Type.get(3))
 println(Type.check(Number, 3))
 debug(Number)

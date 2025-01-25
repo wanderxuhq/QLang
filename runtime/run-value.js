@@ -1,7 +1,8 @@
 import { Ast } from '../ast/index.js';
 import rootEnv from '../env.js';
 import { findInStd } from '../std/index.js';
-import { PrimeType } from '../type/constant.js';
+import { equal, PrimeType } from '../type/constant.js';
+import { Void } from '../value/constant.js';
 import { fromNative, toNative } from './native.js';
 import runStatements from './run-statements.js';
 
@@ -28,6 +29,17 @@ const runValue = env => value => {
             const envResult = env.find(value.value)
             if (!envResult.find) {
                 console.log(`${value.value} not find in env`)
+
+                return result = {
+                    status: {
+                        code: 0,
+                        message: ''
+                    },
+                    value: {
+                        value: Ast.VALUE,
+                        value: Void
+                    },
+                };
             }
             //const envResult = findInEnv(env)(value)(null)
             result = {
@@ -35,7 +47,7 @@ const runValue = env => value => {
                     code: 0,
                     message: ''
                 },
-                value: envResult.value,
+                value: envResult.value.value,
             };
             scope = envResult?.scope
         } else {
@@ -120,7 +132,7 @@ const runValue = env => value => {
 
 
         if (!result.value.native) {
-            if (result.value.value.type === PrimeType.Array) {
+            if (equal(result.value.value.type, PrimeType.Array)) {
                 let values = result.value.value.values;
                 for (let i = 0; i < values.length; i++) {
                     //values[i].env = env;
@@ -138,7 +150,7 @@ const runValue = env => value => {
                     },
                 };
 
-            } else if (result.value.value.type === PrimeType.Object || result.value.value.type === PrimeType.Type) {
+            } else if (equal(result.value.value.type, PrimeType.Object)) {
                 let fields = result.value.value.fields;
                 for (let i = 0; i < fields.length; i++) {
                     //fields[i].value.env = result.value.env
@@ -198,11 +210,11 @@ const runValue = env => value => {
         } else if (value.op === '==') {
             return runBinOp(env)(value)((lhs, rhs) => {
                 let compareLhs = lhs.value;
-                if (lhs.value.type !== PrimeType.Array && lhs.value.type !== PrimeType.Object && lhs.value.type !== PrimeType.Function) {
+                if (!equal(lhs.value.type, PrimeType.Array) && !equal(lhs.value.type, PrimeType.Object) && !equal(lhs.value.type, PrimeType.Function)) {
                     compareLhs = toNative(lhs.value);
                 }
                 let compareRhs = rhs.value;
-                if (rhs.value.type !== PrimeType.Array && rhs.value.type !== PrimeType.Object && rhs.value.type !== PrimeType.Function) {
+                if (!equal(rhs.value.type, PrimeType.Array) && !equal(rhs.value.type, PrimeType.Object) && !equal(rhs.value.type, PrimeType.Function)) {
                     compareRhs = toNative(rhs.value);
                 }
                 return {
@@ -256,23 +268,26 @@ const runValue = env => value => {
     }
 }
 
-const runFunction = env => fun => args => {
-    if (!fun.value.native) {
-        if (fun.value.value.type === PrimeType.Function) {
-            fun = fun.value;
+const runFunction = env => rootFn => args => {
+    let fn = rootFn
+    if (!fn.value.native) {
+        if (equal(fn.value.value.type, PrimeType.Function)) {
             for (let i = 0; i < args.length; i++) {
-                if (!fun.value.system) {
-                    const childEnv = fun.env.push()
-                    const f = JSON.parse(JSON.stringify(fun.value))
+                fn = fn.value;
+                if (!fn.value.system) {
+                    const childEnv = fn.env.push()
+                    const f = JSON.parse(JSON.stringify(fn.value))
                     for (let j = 0; j < f.parameters.length; j++) {
                         childEnv.set(
                             f.parameters[j].variable,
                             //TODO check env
-                            runValue(env)(args[i].parameters[j]).value
+                            //TODO type
+                            {value: runValue(env)(args[i].parameters[j]).value}
                         );
                     }
 
-                    fun = runStatements(childEnv)(f.body);
+                    fn = runStatements(childEnv)(f.body);
+                    console.log(fn)
                 } else {
                     let parameters = [];
                     /*
@@ -284,7 +299,7 @@ const runFunction = env => fun => args => {
                         }).value)
                     }
                         */
-                    if (fun.value.debug) {
+                    if (fn.value.debug) {
                         debugger;
                     }
                     for (let j = 0; j < args[i].parameters.length; j++) {
@@ -293,18 +308,18 @@ const runFunction = env => fun => args => {
                         );
                     }
 
-                    fun = fun.value.call.apply(this, parameters);
-                    fun = {
+                    fn = fn.value.call.apply(this, parameters);
+                    fn = {
                         status: {
                             code: 0,
                             message: '',
                         },
-                        value: fun
+                        value: fn
                     }
                 }
             }
         } else {
-            fun = {
+            fn = {
                 status: {
                     code: 1,
                     message: `${value.value} is not function`,
@@ -312,10 +327,10 @@ const runFunction = env => fun => args => {
                     end: value.end
                 },
             }
-            return fun;
+            return fn;
         }
     } else {
-        if (fun.value.value.debug) {
+        if (fn.value.value.debug) {
             debugger;
         }
 
@@ -333,17 +348,17 @@ const runFunction = env => fun => args => {
             for (let j = 0; j < args[i].parameters.length; j++) {
                 parameters.push(runValue(env)(args[i].parameters[j]).value)
             }
-            fun = {
+            fn = {
                 status: {
                     code: 0,
                     message: '',
                 },
-                value: fun.value.value.apply(this, parameters)
+                value: fn.value.value.apply(this, parameters)
             }
         }
     }
 
-    return fun
+    return fn
 }
 
 const runBinOp = env => value => callback => {

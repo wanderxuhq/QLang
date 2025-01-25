@@ -12,7 +12,7 @@ import {
     parseEmptyLines
 } from './parse-space.js';
 import { parseIdentity } from './parse-identity.js';
-import { parseValueAst } from './parse-value-ast.js';
+import { parseTypeAst, parseValueAst } from './parse-value-ast.js';
 import {
     Ast,
     StmtsAst,
@@ -22,6 +22,7 @@ import {
     WhileStmtAst,
     ReturnStmtAst
 } from '../ast/index.js';
+import { equal, PrimeType } from '../type/constant.js';
 
 const parseStatementAst = env => str => (index) => {
     const p = parseOptionalSpace(str)(index);
@@ -31,11 +32,16 @@ const parseStatementAst = env => str => (index) => {
     // let variable
     if (isMatch(p0)) {
         // let variable: Type
-        let p1 = parseSeq(str)(p0.end, [parseOptionalSpace, parseConst(':'), parseOptionalSpace, parseValueAst(leadSpace)(env)]);
+        let p1 = parseSeq(str)(p0.end, [parseOptionalSpace, parseConst(':'), parseOptionalSpace, parseTypeAst(leadSpace)(env)]);
         if (isMatch(p1)) {
             const p2 = parseSeq(str)(p1.end, [parseOptionalSpace, parseConst('='), parseOptionalSpace, parseValueAst(leadSpace)(env)]);
             if (isMatch(p2)) {
                 // let variable: Type = value
+                /*
+                if ((equal(p2.result[3].value.type, PrimeType.Function))) {
+                    p2.result[3].value.type = p1.result[3]
+                }
+                */
                 const ast = new DeclareStmtAst(p1.result[3], p0.result[2], p2.result[3]);
                 ast.start = index;
                 ast.end = p2.end;

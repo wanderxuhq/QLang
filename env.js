@@ -1,7 +1,7 @@
 import { Ast } from "./ast/index.js";
 import { fromNative, toNative, wrap } from "./runtime/native.js";
 import Type from "./std/type.js";
-import { PrimeType } from "./type/constant.js";
+import { equal, PrimeType } from "./type/constant.js";
 import { Void } from "./value/constant.js";
 
 const envPush = data => () => {
@@ -49,16 +49,16 @@ const rootEnv = (() => {
     let root = envPush(null)();
 
     root.set('test', wrap(() => wrap(() => fromNative(5))));
-    root.set('String', { value: { name: 'String', type: 'Type' }, scope: new Map() });
-    root.set('Int', { value: { name: 'Int', type: 'Type' }, scope: new Map() });
-    root.set('Void', { value: { name: 'Void', type: 'Type' }, scope: new Map() });
+    //root.set('String', { value: { name: 'String', type: 'Type' }, scope: new Map() });
+    //root.set('Int', { value: { name: 'Int', type: 'Type' }, scope: new Map() });
+    //root.set('Void', { value: { name: 'Void', type: 'Type' }, scope: new Map() });
     const print = e => {
         let value = toNative(e);
         if (typeof (value) !== 'string') {
             value = JSON.stringify(value, null, 2)
         }
         if (value === undefined) {
-            throw new Error(value)
+            throw new Error(`value is undefined`)
         }
         process.stdout.write(value);
 
@@ -70,20 +70,30 @@ const rootEnv = (() => {
             value: { type: Ast.VALUE, value: Void }
         };
     }
-    root.set('print', wrap(print));
-    root.set('println', wrap(e => {
-        print(e);
-        process.stdout.write('\n')
-        return { type: Ast.VALUE, value: Void };
-    }))
+    root.set('print', { value: wrap(print) });
+    root.set('println', {
+        value: wrap(e => {
+            print(e);
+            process.stdout.write('\n')
+            return { type: Ast.VALUE, value: Void };
+        })
+    })
     let debugFuction = wrap(print);
     debugFuction.value.debug = true;
-    root.set('debug', debugFuction);
+    root.set('debug', { value: debugFuction });
     const Type0 = fromNative(Type)
     Type0.value.type = PrimeType.Type;
-    root.set('Type', Type0);
-    root.set('Number', Type.create(wrap(v => fromNative(v.value.type === 'Number'))))
-    root.set('String', Type.create(wrap(v => fromNative(v.value.type === 'String'))))
+    
+    Object.values(PrimeType).forEach(primeType => root.set(primeType.value, { value: Type.create(wrap(v => fromNative(equal(v.value.type, primeType)))) }))
+    root.set('Type', { value: Type0 });
+    /*
+    root.set('Number', { value: Type.create(wrap(v => fromNative(equal(v.value.type, PrimeType.Number)))) })
+    root.set('String', { value: Type.create(wrap(v => fromNative(equal(v.value.type, PrimeType.String)))) })
+    root.set('Object', { value: Type.create(wrap(v => fromNative(equal(v.value.type, PrimeType.Object)))) })
+    root.set('Array', { value: Type.create(wrap(v => fromNative(equal(v.value.type, PrimeType.Array)))) })
+    root.set('Function', { value: Type.create(wrap(v => fromNative(equal(v.value.type, PrimeType.Function)))) })
+    root.set('Void', { value: Type.create(wrap(v => fromNative(equal(v.value.type, PrimeType.Void)))) })
+    */
     Type.env = root;
 
     return root;

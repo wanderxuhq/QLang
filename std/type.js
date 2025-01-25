@@ -1,7 +1,8 @@
 import { Ast } from "../ast/index.js";
-import { PrimeType } from "../type/constant.js";
+import { equal, PrimeType } from "../type/constant.js";
 import { fromNative, toNative, wrap } from "../runtime/native.js";
 import { runValue } from "../runtime/run-value.js";
+import rootEnv from "../env.js";
 
 let Type = {
     create: (compatible) => {
@@ -23,7 +24,7 @@ let Type = {
     },
 
     compatible: (t) => {
-        return fromNative(t.value.type === PrimeType.Type);
+        return fromNative(equal(t.value.type, PrimeType.Type));
     },
 
     check: (t, v) => {
@@ -38,19 +39,38 @@ let Type = {
         }
 
         if (t.type === Ast.VALUE) {
-            const nativeT = toNative(t);
-            if (!nativeT?.compatible) {
-                throw new Error('Type.check: invalid type object');
+            if (t.value.secondaryType !== 'FunctionSign') {
+                const nativeT = toNative(t);
+                if (!nativeT?.compatible) {
+                    throw new Error('Type.check: invalid type object');
+                }
+                const field = t.value.fields.find(e => e.variable.value === 'compatible').value
+                const result = runValue(t.env)({
+                    type: Ast.VALUE,
+                    arguments: [{parameters: [wrappedValue]}],
+                    value: runValue(field.env)(field).value.value,
+                    native: field.native
+                });
+    
+                return result.value;
+            } else {
+                if (!equal(PrimeType.Function, v.value.type)) {
+                    return fromNative(false)
+                }
+                if (v.value.parameters.length !== t.value.in.length) {
+                    return fromNative(false)
+                }
+                for (let i = 0; i < t.value.in.length; i++) {
+                    t.value.in[i]
+                    v.value.parameters[i]
+                    if (v.value.parameters[i].type) {
+                        if (!equal(t.value.in[i], v.value.parameters[i].type)) {
+                            return fromNative(false);
+                        }
+                    }
+                    return fromNative(true)
+                }
             }
-            const field = t.value.fields.find(e => e.variable.value === 'compatible').value
-            const result = runValue(t.env)({
-                type: Ast.VALUE,
-                arguments: [{parameters: [wrappedValue]}],
-                value: runValue(field.env)(field).value.value,
-                native: field.native
-            });
-
-            return result.value;
         }
 
         const nativeT = toNative(t);
@@ -62,7 +82,8 @@ let Type = {
     },
 
     get: (v) => {
-        return fromNative(v.value.type);
+        const value = v.value.type
+        return runValue(rootEnv)(value).value;
     }
 };
 

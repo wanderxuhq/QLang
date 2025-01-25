@@ -1,30 +1,30 @@
 import { Ast } from "../ast/index.js";
-import { PrimeType } from "../type/constant.js";
+import { PrimeType, equal } from "../type/constant.js";
 import { makeRunValueInput, runValue } from "./run-value.js";
 
 const toNative = (ast) => {
     const env = ast.env
     const value = ast.value;
 
-    if (value.type === PrimeType.Array) {
+    if (equal(value.type, PrimeType.Array)) {
         return value.values.map(e => toNative(runValue(env)(e).value));
-    } else if (value.type === PrimeType.Boolean) {
+    } else if (equal(value.type, PrimeType.Boolean)) {
         return value.value
-    } else if (value.type === PrimeType.Number) {
+    } else if (equal(value.type, PrimeType.Number)) {
         return value.value
-    } else if (value.type === PrimeType.String) {
+    } else if (equal(value.type, PrimeType.String)) {
         return value.value
-    } else if (value.type === PrimeType.Type) {
+    } else if (equal(value.type, PrimeType.Type)) {
         let obj = {};
         //runValue
         value.fields.forEach(e => obj[e.variable.value] = e.value.value)
         return obj;
-    } else if (value.type === PrimeType.Object) {
+    } else if (equal(value.type, PrimeType.Object)) {
         let obj = {};
         //runValue
         value.fields.forEach(e => obj[e.variable.value] = toNative(runValue(env)(e.value).value))
         return obj;
-    } else if (value.type === PrimeType.Function) {
+    } else if (equal(value.type, PrimeType.Function)) {
         if (!value.system) {
             return {
                 parameters: value.parameters.map(e => e.variable),
