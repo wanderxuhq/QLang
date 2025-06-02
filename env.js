@@ -1,8 +1,11 @@
 import { Ast } from "./ast/index.js";
-import { fromNative, toNative, wrap } from "./runtime/native.js";
-import Type from "./std/type.js";
+import { fromNative, wrap } from "./native/fromNative.js";
+import toNative from "./native/toNative.js";
+//import Type from "./std/type.js";
+import Pair from "./std/pair.js";
 import { equal, PrimeType } from "./type/constant.js";
 import { Void } from "./value/constant.js";
+import {std} from "./std/index.js";
 
 const envPush = data => () => {
     const child = {
@@ -81,11 +84,14 @@ const rootEnv = (() => {
     let debugFuction = wrap(print);
     debugFuction.value.debug = true;
     root.set('debug', { value: debugFuction });
-    const Type0 = fromNative(Type)
-    Type0.value.type = PrimeType.Type;
+
+    root.set('std', {value: fromNative(std)});
+    //const Type0 = fromNative(Type)
+    //Type0.value.type = PrimeType.Type;
     
-    Object.values(PrimeType).forEach(primeType => root.set(primeType.value, { value: Type.create(wrap(v => fromNative(equal(v.value.type, primeType)))) }))
-    root.set('Type', { value: Type0 });
+    //Object.values(PrimeType).forEach(primeType => root.set(primeType.value, { value: Type.create(wrap(v => fromNative(equal(v.value.type, primeType)))) }))
+    //root.set('Type', { value: Type0 });
+    //root.set('Pair', Pair)
     /*
     root.set('Number', { value: Type.create(wrap(v => fromNative(equal(v.value.type, PrimeType.Number)))) })
     root.set('String', { value: Type.create(wrap(v => fromNative(equal(v.value.type, PrimeType.String)))) })
@@ -94,7 +100,7 @@ const rootEnv = (() => {
     root.set('Function', { value: Type.create(wrap(v => fromNative(equal(v.value.type, PrimeType.Function)))) })
     root.set('Void', { value: Type.create(wrap(v => fromNative(equal(v.value.type, PrimeType.Void)))) })
     */
-    Type.env = root;
+    //Type.env = root;
 
     return root;
 })().push();

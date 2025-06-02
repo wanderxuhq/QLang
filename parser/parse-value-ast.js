@@ -2,11 +2,10 @@ import { parseConst } from './parse-const.js';
 import { notMatch, isMatch } from './match.js';
 import { parseSeq, matchParse } from './helper.js';
 import {
-    parseSpace,
-    parseOptionalSpace,
-    parseSpaceOnly,
+    parseSpaceAndNewline,
+    parseOptionalSpaceAndNewline,
     parseNewLine,
-    parseOptionalSpaceOnly,
+    parseOptionalSpace,
 } from './parse-space.js';
 import { parseIdentity } from './parse-identity.js';
 import {
@@ -70,19 +69,19 @@ const parseBinOpToken = (str) => (index) => {
     return notMatch(index);
 }
 const parseBinOpUnitAst = option => leadspace => env => str => (lhs, index) => {
-    const lOptionalSpace = parseOptionalSpace(str)(index);
+    const lOptionalSpace = parseOptionalSpaceAndNewline(str)(index);
     const op = parseBinOpToken(str)(lOptionalSpace.end);
     if (isMatch(op)) {
-        const rOptionalSpace = parseOptionalSpace(str)(op.end);
+        const rOptionalSpace = parseOptionalSpaceAndNewline(str)(op.end);
         let rhs = parseSingleValueAst(option)(leadspace)(env)(str)(rOptionalSpace.end);
-        let nOptionalSpace = parseOptionalSpace(str)(rhs.end);
+        let nOptionalSpace = parseOptionalSpaceAndNewline(str)(rhs.end);
         let nextBinOpToken = parseBinOpToken(str)(nOptionalSpace.end);
 
         let tmp = rhs;
         while (isMatch(nextBinOpToken) && getBinOpPrecedence(op.type) < getBinOpPrecedence(nextBinOpToken.type)) {
             tmp = rhs;
             rhs = parseBinOpUnitAst(option)(leadspace)(env)(str)(rhs, rhs.end)
-            nOptionalSpace = parseOptionalSpace(str)(rhs.end);
+            nOptionalSpace = parseOptionalSpaceAndNewline(str)(rhs.end);
             nextBinOpToken = parseBinOpToken(str)(nOptionalSpace.end);
         }
 
@@ -110,10 +109,10 @@ const parseValueAst = leadSpace => env => str => (index) => {
 const parseValue = option => leadSpace => env => str => (index) => {
     let value = parseSingleValueAst(option)(leadSpace)(env)(str)(index)
     if (isMatch(value)) {
-        let optionalSpace = parseOptionalSpace(str)(value.end);
+        let optionalSpace = parseOptionalSpaceAndNewline(str)(value.end);
         while (isBinOpToken(str)(optionalSpace.end)) {
             value = parseBinOpUnitAst(option)(leadSpace)(env)(str)(value, optionalSpace.end)
-            optionalSpace = parseOptionalSpace(str)(value.end);
+            optionalSpace = parseOptionalSpaceAndNewline(str)(value.end);
         }
     } else {
         return notMatch(index)
@@ -139,175 +138,29 @@ const parseIdentityAst = str => (index) => {
     }
 }
 
-const parseTypeAst = leadspace => env => str => (index) => {
-    let p = parseOptionalSpace(str)(index);
-
-    const parseParameters = (leadspace) => (str) => (index) => {
-        const parseParameter = (leadspace) => (str) => (_index) => {
-            //let variable = matchParse(str)(index, [parseFunctionAst(leadspace)(env), parseIdentityAst, parseParenthesis(leadspace)(env)]);
-            let variable = matchParse(str)(_index, [
-                parseFunctionAst(leadspace)(env),
-                parseObjectAst(leadspace)(env),
-                parseArrayAst(leadspace)(env),
-                parseIdentityAst,
-                parseParenthesis(leadspace)(env),
-                parseImport,
-            ])
-            //let variable = parseValueAst(leadspace)(env)(str)(index);
-            if (isMatch(variable)) {
-                /*
-                let parameter = {
-                    start: index,
-                    end: variable.end,
-                    variable: variable.value
-                }
-                */
-               console.log(variable)
-                let parameter = variable;
-                let p0 = parseSeq(str)(variable.end, [parseOptionalSpace, parseConst(':'), parseOptionalSpace]);
-
-                if (isMatch(p0)) {
-                    let type = parseValueAst(leadspace)(str)(p0.end);
-                    parameter.end = p0.end
-                    if (isMatch(type)) {
-                        parameter.type = type
-
-                        parameter.end = type.end
-                    }
-                }
-                return parameter;
-            } else {
-                return notMatch(_index);
-            }
-        }
-        let parameters = []
-        let p = parseOptionalSpace(str)(index);
-        p = parseParameter(leadspace)(str)(p.end);
-        if (isMatch(p)) {
-            while (isMatch(p)) {
-                parameters.push(p)
-                p = parseSeq(str)(p.end, [parseOptionalSpace, parseConst(','), parseOptionalSpace]);
-                p = parseParameter(leadspace)(str)(p.end);
-            }
-
-            return {
-                value: parameters,
-                start: index,
-                end: p.end
-            }
-        } else {
-            const optionalSpace = parseOptionalSpace(str)(index);
-            return {
-                value: parameters,
-                start: index,
-                end: optionalSpace.end
-            }
-        }
-
-    }
-
-    let p0 = parseSeq(str)(p.end,
-        [
-            parseConst('('),
-            parseOptionalSpace,
-            parseParameters(leadspace),
-            parseOptionalSpace,
-            parseConst(')'),
-            parseOptionalSpace,
-            parseConst('->'),
-            parseOptionalSpace,
-            parseValueAst(leadspace)(env)
-        ]);
-    if (isMatch(p0)) {
-        const ast = {
-            type: Ast.VALUE,
-            value: {
-                type: PrimeType.Type,
-                secondaryType: 'FunctionSign',
-                in: p0.result[2].value,
-                out: p0.result[8]
-            },
-            start: index,
-            end: p0.end
-        }
-
-        return ast;
-    } else {
-        p0 = parseSeq(str)(p.end, [
-            parseParameters(leadspace),
-            parseOptionalSpace,
-            parseConst('->'),
-            parseOptionalSpace,
-            parseValueAst(leadspace)(env)
-        ]);
-        if (isMatch(p0)) {
-            const ast = {
-                type: Ast.VALUE,
-                value: {
-                    type: PrimeType.Type,
-                    secondaryType: 'FunctionSign',
-                    in: p0.result[0].value,
-                    out: p0.result[4]
-                },
-                start: index,
-                end: p0.end
-            }
-            return ast;
-        } else {
-            p0 = parseIdentityAst(str)(index)
-            if (isMatch(p0)) {
-                const ast = p0
-        
-                return ast;
-            } else {
-                return notMatch(index)
-            }
-        }
-    }
-}
-
 const parseFunctionAst = leadspace => env => str => (index) => {
-    let p = parseOptionalSpace(str)(index);
+    let p = parseOptionalSpaceAndNewline(str)(index);
 
     const parseParameters = (leadspace) => (str) => (index) => {
         const parseParameter = (leadspace) => (str) => (index) => {
             let variable = parseIdentity(str)(index);
             if (isMatch(variable)) {
-                let parameter = {
+                return {
                     start: index,
                     end: variable.end,
                     variable: variable.value
                 }
-                let p0 = parseSeq(str)(variable.end, [parseOptionalSpace, parseConst(':'), parseOptionalSpace]);
-
-                if (isMatch(p0)) {
-                    let type = parseValueAst(leadspace)(env)(str)(p0.end);
-                    parameter.end = p0.end
-                    /* = {
-                        start: index,
-                        end: p0.end,
-                        variable: variable.value
-                    }
-                    */
-                    //TODO
-                    if (isMatch(type)) {
-                        parameter.type = type
-
-                        parameter.end = type.end
-                    }
-                }
-                return parameter;
             } else {
                 return notMatch(index);
             }
         }
         let parameters = []
-        let p = parseOptionalSpace(str)(index);
+        let p = parseOptionalSpaceAndNewline(str)(index);
         p = parseParameter(leadspace)(str)(p.end);
         if (isMatch(p)) {
             while (isMatch(p)) {
                 parameters.push(p)
-                p = parseSeq(str)(p.end, [parseOptionalSpace, parseConst(','), parseOptionalSpace]);
+                p = parseSeq(str)(p.end, [parseOptionalSpaceAndNewline, parseConst(','), parseOptionalSpaceAndNewline]);
                 p = parseParameter(leadspace)(str)(p.end);
             }
 
@@ -317,7 +170,7 @@ const parseFunctionAst = leadspace => env => str => (index) => {
                 end: p.end
             }
         } else {
-            const optionalSpace = parseOptionalSpace(str)(index);
+            const optionalSpace = parseOptionalSpaceAndNewline(str)(index);
             return {
                 parameters,
                 start: index,
@@ -330,17 +183,17 @@ const parseFunctionAst = leadspace => env => str => (index) => {
     let p0 = parseSeq(str)(p.end,
         [
             parseConst('('),
-            parseOptionalSpace,
+            parseOptionalSpaceAndNewline,
             parseParameters(leadspace),
-            parseOptionalSpace,
+            parseOptionalSpaceAndNewline,
             parseConst(')'),
-            parseOptionalSpace,
+            parseOptionalSpaceAndNewline,
             parseConst('->'),
-            parseOptionalSpace,
+            parseOptionalSpaceAndNewline,
             parseConst('{'),
-            parseOptionalSpace,
+            parseOptionalSpaceAndNewline,
             parseStatementsAst(env),
-            parseOptionalSpace,
+            parseOptionalSpaceAndNewline,
             parseConst('}')
         ]);
     if (isMatch(p0)) {
@@ -381,13 +234,13 @@ const parseFunctionAst = leadspace => env => str => (index) => {
     } else {
         p0 = parseSeq(str)(p.end, [
             parseParameters(leadspace),
-            parseOptionalSpace,
+            parseOptionalSpaceAndNewline,
             parseConst('->'),
-            parseOptionalSpace,
+            parseOptionalSpaceAndNewline,
             parseConst('{'),
-            parseOptionalSpace,
+            parseOptionalSpaceAndNewline,
             parseStatementsAst(env),
-            parseOptionalSpace,
+            parseOptionalSpaceAndNewline,
             parseConst('}')
         ]);
         if (isMatch(p0)) {
@@ -412,58 +265,25 @@ const parseObjectAst = leadspace => env => str => (index) => {
     const parseFields = leadspace => env => (str) => (index) => {
         const parseField = leadspace => env => (str) => index => {
             let p0 = parseIdentity(str)(index)
-            // variable
+            // key
             if (isMatch(p0)) {
-                // variable: Type
                 let p1 = parseSeq(str)(p0.end, [
-                    parseOptionalSpace,
-                    parseConst(':'),
-                    parseOptionalSpace,
-                    parseValueAst(leadspace)(env)
-                ])
+                    parseOptionalSpaceAndNewline,
+                    parseConst('='),
+                    parseOptionalSpaceAndNewline,
+                    parseValueAst(leadspace)(env)])
                 if (isMatch(p1)) {
-                    // variable: Type = value
-                    const p2 = parseSeq(str)(p1.end, [
-                        parseOptionalSpace,
-                        parseConst('='),
-                        parseOptionalSpace,
-                        parseValueAst(leadspace)(env)
-                    ]);
-                    if (isMatch(p2)) {
-                        return {
-                            start: index,
-                            end: p2.end,
-                            type: p1.result[3],
-                            variable: p0,
-                            value: p2.result[3]
-                        }
-                    } else {
-                        return {
-                            start: index,
-                            end: p1.end,
-                            type: p1.result[3],
-                            variable: p0,
-                        }
+                    return {
+                        start: index,
+                        end: p1.end,
+                        key: p0,
+                        value: p1.result[3]
                     }
                 } else {
-                    p1 = parseSeq(str)(p0.end, [
-                        parseOptionalSpace,
-                        parseConst('='),
-                        parseOptionalSpace,
-                        parseValueAst(leadspace)(env)])
-                    if (isMatch(p1)) {
-                        return {
-                            start: index,
-                            end: p1.end,
-                            variable: p0,
-                            value: p1.result[3]
-                        }
-                    } else {
-                        return {
-                            start: index,
-                            end: p0.end,
-                            variable: p0,
-                        }
+                    return {
+                        start: index,
+                        end: p0.end,
+                        key: p0,
                     }
                 }
             } else {
@@ -477,9 +297,9 @@ const parseObjectAst = leadspace => env => str => (index) => {
             while (isMatch(field)) {
                 fields.push(field);
                 let p = parseSeq(str)(field.end, [
-                    parseOptionalSpace,
+                    parseOptionalSpaceAndNewline,
                     parseConst(','),
-                    parseOptionalSpace
+                    parseOptionalSpaceAndNewline
                 ])
                 field = parseField(leadspace)(env)(str)(p.end);
             }
@@ -500,9 +320,9 @@ const parseObjectAst = leadspace => env => str => (index) => {
 
     const fields = parseSeq(str)(index, [
         parseConst('{'),
-        parseOptionalSpace,
+        parseOptionalSpaceAndNewline,
         parseFields(leadspace)(env),
-        parseOptionalSpace,
+        parseOptionalSpaceAndNewline,
         parseConst('}')
     ])
     if (isMatch(fields)) {
@@ -518,9 +338,9 @@ const parseObjectAst = leadspace => env => str => (index) => {
 
         const objectField = parseSeq(str)(fields.end,
             [
-                parseOptionalSpace,
+                parseOptionalSpaceAndNewline,
                 parseConst('.'),
-                parseOptionalSpace,
+                parseOptionalSpaceAndNewline,
                 parseIdentityAst
             ]);
         
@@ -548,9 +368,9 @@ const parseArrayAst = leadspace => env => str => (index) => {
         while (isMatch(value)) {
             values.push(value);
             let p = parseSeq(str)(value.end, [
-                parseOptionalSpace,
+                parseOptionalSpaceAndNewline,
                 parseConst(','),
-                parseOptionalSpace
+                parseOptionalSpaceAndNewline
             ])
             value = parseValueAst(leadspace)(env)(str)(p.end)
         }
@@ -563,9 +383,9 @@ const parseArrayAst = leadspace => env => str => (index) => {
     }
     const values = parseSeq(str)(index, [
         parseConst('['),
-        parseOptionalSpace,
+        parseOptionalSpaceAndNewline,
         parseArrayItems(leadspace)(env),
-        parseOptionalSpace,
+        parseOptionalSpaceAndNewline,
         parseConst(']')
     ]);
 
@@ -582,11 +402,11 @@ const parseArrayAst = leadspace => env => str => (index) => {
 
         let objectIndex = parseSeq(str)(values.end,
             [
-                parseOptionalSpace,
+                parseOptionalSpaceAndNewline,
                 parseConst('['),
-                parseOptionalSpace,
+                parseOptionalSpaceAndNewline,
                 parseValueAst(leadspace)(env),
-                parseOptionalSpace,
+                parseOptionalSpaceAndNewline,
                 parseConst(']')
             ]);
         if (isMatch(objectIndex)) {
@@ -609,14 +429,14 @@ const addIndexAndChild = ast => leadspace => env => (str) => (index) => {
     let match = true;
     ast.children = [];
     while (match) {
-        let optionalSpace = parseOptionalSpace(str)(ast.end);
+        let optionalSpace = parseOptionalSpaceAndNewline(str)(ast.end);
 
         let objectIndex = parseSeq(str)(optionalSpace.end,
             [
                 parseConst('['),
-                parseOptionalSpace,
+                parseOptionalSpaceAndNewline,
                 parseValueAst(leadspace)(env),
-                parseOptionalSpace,
+                parseOptionalSpaceAndNewline,
                 parseConst(']')
             ]);
         if (isMatch(objectIndex)) {
@@ -643,16 +463,29 @@ const addIndexAndChild = ast => leadspace => env => (str) => (index) => {
 }
 
 const parseSingleValueAst = option => leadspace => env => str => (index) => {
-    let literal = matchParse(str)(index, [
+    const literalAst = parseLiteralValueAst(option)(leadspace)(env)(str)(index);
+    if (isMatch(literalAst)) {
+        return literalAst;
+    }
+
+    const complexValueAst = parseComplexValueAst(option)(leadspace)(env)(str)(index);
+    if (isMatch(complexValueAst)) {
+        return complexValueAst;
+    }
+
+    return notMatch(index);
+}
+
+const parseLiteralValueAst = option => leadspace => env => str => (index) => {
+    return matchParse(str)(index, [
         parseNumberAst,
         parseStringAst,
         parseBooleanAst,
         //parseFunctionSignAst(leadspace)(env)
     ]);
-    if (isMatch(literal)) {
-        return literal;
-    }
+}
 
+const parseComplexValueAst = option => leadspace => env => str => (index) => {
     let f = notMatch(index);
 
     f = matchParse(str)(index, [
@@ -696,14 +529,14 @@ const parseSingleValueAst = option => leadspace => env => str => (index) => {
         let match = true;
         f.children = f.children || []
         while (match) {
-            let optionalSpace = parseOptionalSpace(str)(end);
+            let optionalSpace = parseOptionalSpaceAndNewline(str)(end);
 
             let objectIndex = parseSeq(str)(optionalSpace.end,
                 [
                     parseConst('['),
-                    parseOptionalSpace,
+                    parseOptionalSpaceAndNewline,
                     parseValueAst(leadspace)(env),
-                    parseOptionalSpace,
+                    parseOptionalSpaceAndNewline,
                     parseConst(']')
                 ]);
             if (isMatch(objectIndex)) {
@@ -735,7 +568,7 @@ const parseSingleValueAst = option => leadspace => env => str => (index) => {
                 const objectField = parseSeq(str)(optionalSpace.end,
                     [
                         parseConst('.'),
-                        parseOptionalSpace,
+                        parseOptionalSpaceAndNewline,
                         parseIdentityAst
                     ]);
 
@@ -773,40 +606,6 @@ const parseSingleValueAst = option => leadspace => env => str => (index) => {
         root.end = end;
 
         return root;
-
-        //addIndexAndChild(f)(leadspace)(env)(str)(f.end)
-
-        /*
-        const start = f.start;
-        let functionCall = parseCommonFunctionCall(leadspace)(env)(str)(f.end)
-        //TODO Type Inference
-
-        if (isMatch(functionCall)) {
-            let funParameters = [];
-            funParameters.push(functionCall);
-            let end = functionCall.end;
-            let nextFunctionCall = parseCommonFunctionCall(leadspace)(env)(str)(end)
-            while (isMatch(nextFunctionCall)) {
-                nextFunctionCall = parseCommonFunctionCall(leadspace)(env)(str)(end)
-                if (isMatch(nextFunctionCall)) {
-                    end = nextFunctionCall.end;
-                    funParameters.push(nextFunctionCall);
-                } else {
-                    break;
-                }
-            }
-
-            f = new FunctionCallAst(f, funParameters);
-            f.start = start;
-            f.end = end;
-            addIndexAndChild(f)(leadspace)(env)(str)(end);
-        } else {
-            if (option.functionCall) {
-                
-            }
-        }
-
-        */
     } else {
         return notMatch(index);
     }
@@ -821,9 +620,9 @@ const parseCommonFunctionCall = leadspace => (env) => (str) => (index) => {
             parameters.push(p)
 
             p = parseSeq(str)(p.end, [
-                parseOptionalSpace,
+                parseOptionalSpaceAndNewline,
                 parseConst(','),
-                parseOptionalSpace,
+                parseOptionalSpaceAndNewline,
                 parseValueAst(leadspace)(env)
             ]);
 
@@ -831,9 +630,9 @@ const parseCommonFunctionCall = leadspace => (env) => (str) => (index) => {
                 while (isMatch(p)) {
                     parameters.push(p.result[3])
                     p = parseSeq(str)(p.end, [
-                        parseOptionalSpace,
+                        parseOptionalSpaceAndNewline,
                         parseConst(','),
-                        parseOptionalSpace,
+                        parseOptionalSpaceAndNewline,
                         parseValueAst(leadspace)(env)
                     ]);
                 }
@@ -856,13 +655,13 @@ const parseCommonFunctionCall = leadspace => (env) => (str) => (index) => {
     }
 
     let parameterPrefix = parseSeq(str)(index, [
-        parseOptionalSpace,
+        parseOptionalSpaceAndNewline,
         parseConst('('),
-        parseOptionalSpace
+        parseOptionalSpaceAndNewline
     ]);
     let parseParameterSuffix = null;
     if (isMatch(parameterPrefix)) {
-        parseParameterSuffix = str => _index => parseSeq(str)(_index, [parseOptionalSpace, parseConst(')')]);
+        parseParameterSuffix = str => _index => parseSeq(str)(_index, [parseOptionalSpaceAndNewline, parseConst(')')]);
         const parameters = parseParameters(str)(parameterPrefix.end);
         if (isMatch(parameters)) {
             const parameterSuffix = parseParameterSuffix(str)(parameters.end);
@@ -882,13 +681,13 @@ const parseCommonFunctionCall = leadspace => (env) => (str) => (index) => {
 }
 
 const parseLeadSpace = leadspace => (str) => (index) => {
-    let space = parseSpaceOnly(str)(index);
+    let space = parseSpaceAndNewline(str)(index);
     let newLine = parseNewLine(str)(space.end);
     if (isMatch(newLine)) {
         while (isMatch(newLine)) {
-            newLine = parseSeq(str)(newLine.end, [parseOptionalSpaceOnly, parseNewLine]);
+            newLine = parseSeq(str)(newLine.end, [parseOptionalSpace, parseNewLine]);
         }
-        let optionalSpace = parseOptionalSpace(str)(newLine.end);
+        let optionalSpace = parseOptionalSpaceAndNewline(str)(newLine.end);
         if (optionalSpace.length > leadspace) {
             return optionalSpace;
         } else {
@@ -1063,9 +862,9 @@ const parseParenthesis = leadspace => env => str => (index) => {
     const result = parseSeq(str)(index,
         [
             parseConst('('),
-            parseOptionalSpace,
+            parseOptionalSpaceAndNewline,
             parseValueAst(leadspace)(env),
-            parseOptionalSpace,
+            parseOptionalSpaceAndNewline,
             parseConst(')')
         ]);
     if (isMatch(result)) {
@@ -1082,5 +881,6 @@ const parseParenthesis = leadspace => env => str => (index) => {
 export {
     parseValueAst,
     parseStringAst,
-    parseTypeAst
+    parseLiteralValueAst,
+    parseComplexValueAst
 }

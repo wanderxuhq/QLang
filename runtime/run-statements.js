@@ -1,27 +1,18 @@
 import { Ast } from '../ast/index.js';
-import Type from '../std/type.js';
 import { equal } from '../type/constant.js';
 import { Void } from '../value/constant.js';
-import { toNative } from './native.js';
-import { runValue, makeRunValueInput } from './run-value.js';
+import toNative from '../native/toNative.js';
+import { runValue } from './run-value.js';
+import copyAst from '../util/copy-ast.js';
 
 const runStatements = env => ast => {
     for (const statement of ast.statements) {
         if (statement.type === Ast.DECLARE) {
             const value = runValue(env)(statement.value);
-            if (statement.declareType) {
-                const d = runValue(env)(statement.declareType);
-                if (d.value.value !== Void) {
-                    if (!toNative(Type.check(d.value, value.value))) {
-                        console.log(`type mismatch, expected "${statement.declareType.value}", got "${value.value.value.type.value}"`)
-                    }
-                } else {
-                    console.log(`type not found for ${statement.declareType.value}`)
-                }
-            }
+
             env.set(statement.variable.value,
                 //TODO scope
-                { type: statement.declareType, value: value.value }
+                { value: value.value }
             );
         } else if (statement.type === Ast.ASSIGN) {
             const value = runValue(env)(statement.value);
@@ -141,7 +132,8 @@ const runStatements = env => ast => {
             }
         } else if (statement.type === Ast.WHILE) {
             while (toNative(runValue(env)(statement.condition).value)) {
-                const value = runStatements(env)(statement.body);
+                //TODO copyAst better way
+                const value = runStatements(env)(copyAst(statement.body));
                 if (value.hasReturn && value.status.code === 0) {
                     //TODO return in if
                     return {

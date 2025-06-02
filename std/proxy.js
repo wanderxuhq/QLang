@@ -5,6 +5,11 @@ import toNative from "../native/toNative.js";
 import { runValue } from "../runtime/run-value.js";
 import { Void } from "../value/constant.js";
 
-export default fromNative({
-    of: fromNative(value => fromNative(value.value.type))
+export default fromNative(handler => {
+    let proxyObj = {};
+    const get = handler.value.fields.find(e => e.key.value === 'get');
+    if (get) {
+        proxyObj.get = get;
+    }
+    return proxyObj;
 });

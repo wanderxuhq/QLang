@@ -5,6 +5,8 @@ import toNative from "../native/toNative.js";
 import { runValue } from "../runtime/run-value.js";
 import { Void } from "../value/constant.js";
 
-export default fromNative({
-    of: fromNative(value => fromNative(value.value.type))
-});
+export default fromNative(
+    {
+        toString: fromNative(number => fromNative(number.value.value + '')),
+    }
+);

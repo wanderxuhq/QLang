@@ -1,9 +1,18 @@
 import { PrimeType } from "../type/constant.js";
+import number from "./number.js";
+import string from "./string.js";
 import array from "./array.js";
+import object from "./object.js";
+import type from "./type.js";
+import pair from "./pair.js";
 
-let std = new Map();
-//TODO Better way?
-std.set(PrimeType.Array.value, array)
+let std = {
+    Number: number,
+    String: string,
+    Array: array,
+    Object: object,
+    Type: type,
+};
 
 const findInStd = (type, attribute) => {
     if (std.has(type.value)) {
@@ -21,4 +30,4 @@ const findInStd = (type, attribute) => {
 //findInStd(PrimeType.Array, 'length')
 //findInStd('print');
 
-export {findInStd}
+export {std, findInStd}

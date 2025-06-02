@@ -1,32 +1,40 @@
 import { Ast } from "../ast/index.js";
 import rootEnv from "../env.js";
-import { fromNative, toNative, wrap } from "../runtime/native.js";
-import { runValue } from "../runtime/run-value.js";
+import { fromNative, wrap } from "../native/fromNative.js";
+import toNative from "../native/toNative.js";
+import { runFunction, runValue } from "../runtime/run-value.js";
 import { Void } from "../value/constant.js";
 
-let lib = new Map();
-lib.set('length', arr => fromNative(arr.value.values.length));
-lib.set('add', arr => {
-    let func = wrap((e) => {
-        arr.value.values.push(e);
+export default fromNative(
+    {
+        length: fromNative(arr => fromNative(arr.value.values.length)),
+        add: fromNative(arr => {
+            let fn = wrap((e) => {
+                arr.value.values.push(e);
 
-        return { type: Ast.VALUE, value: Void};
-    });
-    //func.oop = true;
-    func.env = rootEnv
+                return { type: Ast.VALUE, value: Void };
+            });
+            fn.env = rootEnv
 
-    return func;
-});
-lib.set('remove', arr => {
-    let func = fromNative((index) => {
-        arr.value.values.splice(toNative(index), 1);
+            return fn;
+        }),
+        remove: fromNative(arr => {
+            let fn = fromNative((index) => {
+                arr.value.values.splice(toNative(index), 1);
 
-        return { type: Ast.VALUE, value: Void};
-    });
-    //func.oop = true;
-    func.env = rootEnv
+                return { type: Ast.VALUE, value: Void };
+            });
+            fn.env = rootEnv
 
-    return func;
-});
+            return fn;
+        }),
+        map: fromNative(arr => {
+            let fn = fromNative((mapFn) => {
+                return fromNative(arr.value.values.map(e => runFunction(mapFn.env)({ type: Ast.VALUE, value: mapFn })([{ type: "PARAMETERS", parameters: [e] }]).value));
+            });
+            fn.env = rootEnv
 
-export default lib;
+            return fn;
+        })
+    }
+);

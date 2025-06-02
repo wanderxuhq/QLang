@@ -262,10 +262,10 @@ const parseEmptyLines = str => index => {
 
 
 export {
-    parseSpaceAndNewline as parseSpace,
-    parseOptionalSpaceAndNewline as parseOptionalSpace,
-    parseSpace as parseSpaceOnly,
-    parseOptionalSpace as parseOptionalSpaceOnly,
+    parseSpaceAndNewline,
+    parseOptionalSpaceAndNewline,
+    parseSpace,
+    parseOptionalSpace,
     parseNewLine,
     parseOptionalNewLine,
     parseNewLines,

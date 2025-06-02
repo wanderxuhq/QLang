@@ -1,10 +1,13 @@
 import { Ast } from '../ast/index.js';
 import rootEnv from '../env.js';
 import { findInStd } from '../std/index.js';
+//import Type from '../std/type.js';
 import { equal, PrimeType } from '../type/constant.js';
 import { Void } from '../value/constant.js';
-import { fromNative, toNative } from './native.js';
+import { fromNative } from '../native/fromNative.js';
+import toNative from '../native/toNative.js';
 import runStatements from './run-statements.js';
+import copyAst from '../util/copy-ast.js';
 
 const runValue = env => value => {
     if (!value) {
@@ -33,7 +36,7 @@ const runValue = env => value => {
                 return result = {
                     status: {
                         code: 0,
-                        message: ''
+                        message: '',
                     },
                     value: {
                         value: Ast.VALUE,
@@ -81,32 +84,22 @@ const runValue = env => value => {
                         result = runValue(env)(result.value.value
                             .values[toNative(runValue(env)(child.value).value)])
                     } else if (child.childType === 'FIELD') {
-                        //env.set('this', result)
-
-                        const std = findInStd(result.value.value.type, child.value)
-                        if (std) {
-                            result = {
-                                status: {
-                                    code: 0,
-                                    message: ''
-                                },
-                                value: std(result.value),
-                            }
-                        } else {
-                            let childEnv = env;
-                            //if (child.type === Ast.VALUE) {
-                            childEnv = result.value.env
-                            //}
-                            //child.value as String
-                            const field = result.value.value.fields.find(e => e.variable.value === child.value).value
-                            //TODO enrich env
-                            /*
-                            if (!field.env) {
-                                field.env = result.value.env
-                            }
-                            */
-                            result = runValue(field.env)(field);
+                        let childEnv = env;
+                        //if (child.type === Ast.VALUE) {
+                        childEnv = result.value.env
+                        //}
+                        //child.value as String
+                        //runValue(result.value, result.value.env)
+                        const field = result.value.value.fields.find(e => e.key.value === child.value).value
+                        //TODO enrich env
+                        /*
+                        if (!field.env) {
+                            field.env = result.value.env
                         }
+                        */
+                        result = runValue(field.env)(field);
+
+                        //}
                     }
 
                     if (child.arguments) {
@@ -173,12 +166,47 @@ const runValue = env => value => {
         return result;
     } else if (value.type === Ast.BIN_OP) {
         if (value.op === '+') {
-            return runBinOp(env)(value)((lhs, rhs) => {
-                return {
-                    type: PrimeType.Number,
-                    value: toNative(lhs.value) + toNative(rhs.value)
+            const lhsValue = runValue(env)(value.lhs);
+            if (lhsValue.status.code === 0) {
+                const rhsValue = runValue(env)(value.rhs);
+                if (rhsValue.status.code === 0) {
+                    if (equal(lhsValue.value.value.type, PrimeType.Number) && equal(rhsValue.value.value.type, PrimeType.Number)) {
+                        return {
+                            status: {
+                                code: 0,
+                                message: ''
+                            },
+                            value: {
+                                type: Ast.VALUE, value: {
+                                    type: PrimeType.Number,
+                                    value: toNative(lhsValue.value) + toNative(rhsValue.value)
+                                }
+                            }
+                        }
+                    } else {
+                        return {
+                            status: {
+                                code: -1,
+                                start: lhsValue.start,
+                                message: "Type mismatch"
+                            },
+                            stack: {
+                                position: lhsValue.start
+                            }
+                        }
+                    }
+                } else {
+                    return {
+                        status: rhsValue.status,
+                        //env: env
+                    }
                 }
-            });
+            } else {
+                return {
+                    status: lhsValue.status,
+                    //env: env
+                }
+            }
         } else if (value.op === '-') {
             return runBinOp(env)(value)((lhs, rhs) => {
                 return {
@@ -276,18 +304,18 @@ const runFunction = env => rootFn => args => {
                 fn = fn.value;
                 if (!fn.value.system) {
                     const childEnv = fn.env.push()
-                    const f = JSON.parse(JSON.stringify(fn.value))
+                    const f = copyAst(fn.value)//JSON.parse(JSON.stringify(fn.value))
                     for (let j = 0; j < f.parameters.length; j++) {
                         childEnv.set(
                             f.parameters[j].variable,
                             //TODO check env
                             //TODO type
-                            {value: runValue(env)(args[i].parameters[j]).value}
+                            { value: runValue(env)(args[i].parameters[j]).value }
                         );
                     }
 
                     fn = runStatements(childEnv)(f.body);
-                    console.log(fn)
+                    //console.log(fn)
                 } else {
                     let parameters = [];
                     /*
@@ -336,15 +364,15 @@ const runFunction = env => rootFn => args => {
 
         for (let i = 0; i < args.length; i++) {
             let parameters = [];
-/*
-            if (fun.value.oop) {
-                parameters.push(runValue(env)({
-                    type: obj.type,
-                    value: obj.value,
-                    children: []
-                }).value)
-            }
-            */
+            /*
+                        if (fun.value.oop) {
+                            parameters.push(runValue(env)({
+                                type: obj.type,
+                                value: obj.value,
+                                children: []
+                            }).value)
+                        }
+                        */
             for (let j = 0; j < args[i].parameters.length; j++) {
                 parameters.push(runValue(env)(args[i].parameters[j]).value)
             }
@@ -389,11 +417,4 @@ const runBinOp = env => value => callback => {
     }
 }
 
-const makeRunValueInput = value => {
-    return {
-        type: Ast.VALUE,
-        value: value
-    }
-}
-
-export { runValue, makeRunValueInput, runFunction };
+export { runValue, runFunction };
