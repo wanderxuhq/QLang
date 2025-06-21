@@ -213,14 +213,14 @@ const parseFunctionAst = leadspace => env => str => (index) => {
         let functionCall = parseCommonFunctionCall(leadspace)(env)(str)(ast.end)
         if (isMatch(functionCall)) {
             let funParameters = [];
-            funParameters.push(functionCall);
+            funParameters.push(functionCall.parameters);
             end = functionCall.end;
             let nextFunctionCall = parseCommonFunctionCall(leadspace)(env)(str)(end)
             while (isMatch(nextFunctionCall)) {
                 nextFunctionCall = parseCommonFunctionCall(leadspace)(env)(str)(end)
                 if (isMatch(nextFunctionCall)) {
                     end = nextFunctionCall.end;
-                    funParameters.push(nextFunctionCall);
+                    funParameters.push(nextFunctionCall.parameters);
                 } else {
                     break;
                 }
@@ -343,13 +343,13 @@ const parseObjectAst = leadspace => env => str => (index) => {
                 parseOptionalSpaceAndNewline,
                 parseIdentityAst
             ]);
-        
+
         if (isMatch(objectField)) {
             ast.children = [];
             const child = objectField.result[3];
             child.childType = 'FIELD';
             //end = objectField.end;
-        
+
             ast.children.push(child)
 
             ast.end = objectField.end;
@@ -411,7 +411,7 @@ const parseArrayAst = leadspace => env => str => (index) => {
             ]);
         if (isMatch(objectIndex)) {
             ast.children = [];
-            let child = {value: objectIndex.result[3]};
+            let child = { value: objectIndex.result[3] };
             child.childType = 'INDEX';
             //end = objectIndex.end;
 
@@ -505,14 +505,14 @@ const parseComplexValueAst = option => leadspace => env => str => (index) => {
         let functionCall = parseCommonFunctionCall(leadspace)(env)(str)(end)
         if (isMatch(functionCall)) {
             let funParameters = [];
-            funParameters.push(functionCall);
+            funParameters.push(functionCall.parameters);
             end = functionCall.end;
             let nextFunctionCall = parseCommonFunctionCall(leadspace)(env)(str)(end)
             while (isMatch(nextFunctionCall)) {
                 nextFunctionCall = parseCommonFunctionCall(leadspace)(env)(str)(end)
                 if (isMatch(nextFunctionCall)) {
                     end = nextFunctionCall.end;
-                    funParameters.push(nextFunctionCall);
+                    funParameters.push(nextFunctionCall.parameters);
                 } else {
                     break;
                 }
@@ -540,28 +540,28 @@ const parseComplexValueAst = option => leadspace => env => str => (index) => {
                     parseConst(']')
                 ]);
             if (isMatch(objectIndex)) {
-                let child = {value: objectIndex.result[2]};
+                let child = { value: objectIndex.result[2] };
                 child.childType = 'INDEX';
                 end = objectIndex.end;
 
                 let functionCall = parseCommonFunctionCall(leadspace)(env)(str)(end)
-                    if (isMatch(functionCall)) {
-                        let funParameters = [];
-                        funParameters.push(functionCall);
-                        end = functionCall.end;
-                        let nextFunctionCall = parseCommonFunctionCall(leadspace)(env)(str)(end)
-                        while (isMatch(nextFunctionCall)) {
-                            nextFunctionCall = parseCommonFunctionCall(leadspace)(env)(str)(end)
-                            if (isMatch(nextFunctionCall)) {
-                                end = nextFunctionCall.end;
-                                funParameters.push(nextFunctionCall);
-                            } else {
-                                break;
-                            }
+                if (isMatch(functionCall)) {
+                    let funParameters = [];
+                    funParameters.push(functionCall.parameters);
+                    end = functionCall.end;
+                    let nextFunctionCall = parseCommonFunctionCall(leadspace)(env)(str)(end)
+                    while (isMatch(nextFunctionCall)) {
+                        nextFunctionCall = parseCommonFunctionCall(leadspace)(env)(str)(end)
+                        if (isMatch(nextFunctionCall)) {
+                            end = nextFunctionCall.end;
+                            funParameters.push(nextFunctionCall.parameters);
+                        } else {
+                            break;
                         }
-
-                        child.arguments = funParameters;
                     }
+
+                    child.arguments = funParameters;
+                }
 
                 f.children.push(child);
             } else {
@@ -580,14 +580,14 @@ const parseComplexValueAst = option => leadspace => env => str => (index) => {
                     let functionCall = parseCommonFunctionCall(leadspace)(env)(str)(objectField.end)
                     if (isMatch(functionCall)) {
                         let funParameters = [];
-                        funParameters.push(functionCall);
+                        funParameters.push(functionCall.parameters);
                         end = functionCall.end;
                         let nextFunctionCall = parseCommonFunctionCall(leadspace)(env)(str)(end)
                         while (isMatch(nextFunctionCall)) {
                             nextFunctionCall = parseCommonFunctionCall(leadspace)(env)(str)(end)
                             if (isMatch(nextFunctionCall)) {
                                 end = nextFunctionCall.end;
-                                funParameters.push(nextFunctionCall);
+                                funParameters.push(nextFunctionCall.parameters);
                             } else {
                                 break;
                             }
@@ -616,7 +616,7 @@ const parseCommonFunctionCall = leadspace => (env) => (str) => (index) => {
         let parameters = []
         let p = parseValueAst(leadspace)(env)(str)(index, true);
         if (isMatch(p)) {
-            env = env.push();
+            //env = env.push();
             parameters.push(p)
 
             p = parseSeq(str)(p.end, [
@@ -702,7 +702,7 @@ const parseLeadSpace = leadspace => (str) => (index) => {
     }
 }
 
-const parseSpaceFunctinoCall = leadspace => (env) => (str) => (index) => {
+const parseSpaceFunctionCall = leadspace => (env) => (str) => (index) => {
     let parameter = parseSeq(str)(index, [parseLeadSpace(leadspace), parseValue({ functionCall: false })(leadspace)(env)])
     if (isMatch(parameter)) {
         let funParameters = [];
@@ -773,50 +773,72 @@ const parseNumberAst = str => (index) => {
 const parseStringAst = str => (index) => {
     let _index = index;
     let char = str.substring(_index, _index + 1);
-    let length = 0;
-    let string = '';
+    let template = [];
+    let currentSubString = '';
     if (char.match(/["`']/)) {
         const strSymbol = char;
         _index++;
-        length++
+
         char = str.substring(_index, _index + 1);
 
         while (char !== strSymbol) {
             if (char === '\\') {
                 _index++;
-                length++
+
                 char = str.substring(_index, _index + 1);
                 if (char === 'n') {
-                    string += '\n'
+                    currentSubString += '\n'
                     _index++;
-                    length++
                 } else if (char === 't') {
-                    string += '\t'
+                    currentSubString += '\t'
                     _index++;
-                    length++
                 } else if (char === '\\') {
-                    string += '\\'
+                    currentSubString += '\\'
                     _index++;
-                    length++
+                } else if (char === '$') {
+                    currentSubString += '$'
+                    _index++;
+                } else if (char === '{') {
+                    currentSubString += '{'
+                    _index++;
+                } else if (char === '}') {
+                    currentSubString += '}'
+                    _index++;
+                }
+            } else if (char === '$') {
+                template.push({ type: "RAW_STRING", value: currentSubString });
+                currentSubString = '';
+                _index++;
+                char = str.substring(_index, _index + 1);
+                if (char === '{') {
+                    _index++;
+
+                    let v = parseValueAst(0)(null)(str)(_index);
+                    _index = v.end;
+                    char = str.substring(_index, _index + 1);
+                    if (char === '}') {
+                        template.push(v);
+                        _index++;
+                    }
                 }
             } else {
-                string += char;
+                currentSubString += char;
                 _index++;
-                length++
+
             }
 
             char = str.substring(_index, _index + 1);
         }
-        length++;
+        template.push({ type: "RAW_STRING", value: currentSubString });
 
         const ast = {
             type: Ast.VALUE,
             value: {
                 type: PrimeType.String,
-                value: string
+                template: template,
             },
             start: index,
-            end: index + length
+            end: _index + 1
         }
 
         return ast;

@@ -12,7 +12,7 @@ class Ast {
 
     static STATEMENTS = 'STATEMENTS';
     static STATEMENT = 'STATEMENT';
-    static DECLARE = 'DECLARE';
+    static LET = 'LET';
     static ASSIGN = 'ASSIGN';
     static IF = 'IF';
     static IF_UNIT = 'IF_UNIT';
@@ -33,6 +33,8 @@ class Ast {
     static COMMA_LIST = 'COMMA_LIST';
     static BIN_OP = 'BIN_OP';
     static VALUE = 'VALUE';
+    static IMPORT = 'IMPORT';
+    static EXPORT = 'EXPORT';
 
     accept(visitor) {
         return visitor.visit(this)
@@ -107,7 +109,7 @@ class DeclareStmtAst extends Ast {
     variable
     value
     constructor(type, variable, value) {
-        super(Ast.DECLARE)
+        super(Ast.LET)
         this.declareType = type
         this.variable = variable
         this.value = value
@@ -115,7 +117,7 @@ class DeclareStmtAst extends Ast {
 
     toObject() {
         return {
-            type: Ast.DECLARE,
+            type: Ast.LET,
             declareType: this.declareType,
             variable: this.variable,
             value: this.value.toObject()
@@ -124,7 +126,7 @@ class DeclareStmtAst extends Ast {
 
     toValue() {
         return {
-            type: Ast.DECLARE,
+            type: Ast.LET,
             variable: this.variable,
             value: this.value.toValue()
         };

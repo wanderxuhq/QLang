@@ -11,7 +11,7 @@ export default fromNative(
         add: fromNative(arr => {
             let fn = wrap((e) => {
                 arr.value.values.push(e);
-
+                
                 return { type: Ast.VALUE, value: Void };
             });
             fn.env = rootEnv
@@ -30,7 +30,7 @@ export default fromNative(
         }),
         map: fromNative(arr => {
             let fn = fromNative((mapFn) => {
-                return fromNative(arr.value.values.map(e => runFunction(mapFn.env)({ type: Ast.VALUE, value: mapFn })([{ type: "PARAMETERS", parameters: [e] }]).value));
+                return fromNative(arr.value.values.map(e => runFunction(mapFn.env)({ type: Ast.VALUE, value: mapFn })([[e]]).value));
             });
             fn.env = rootEnv
 

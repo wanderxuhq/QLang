@@ -4,6 +4,9 @@ import string from "./string.js";
 import array from "./array.js";
 import object from "./object.js";
 import type from "./type.js";
+import fn from "./function.js";
+
+import runtime from "./runtime.js";
 import pair from "./pair.js";
 
 let std = {
@@ -11,7 +14,9 @@ let std = {
     String: string,
     Array: array,
     Object: object,
+    Function: fn,
     Type: type,
+    Runtime: runtime
 };
 
 const findInStd = (type, attribute) => {

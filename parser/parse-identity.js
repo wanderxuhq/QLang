@@ -4,13 +4,13 @@ const parseIdentity = str => (index) => {
     let _index = index;
     let char = str.substring(index, index + 1);
     let length = 0;
-    if (char.match(/[A-Za-z]/)) {
+    if (char.match(/[A-Za-z_]/)) {
         let id = char;
         _index++;
         length++
-        while (char.match(/[A-Za-z0-9]/)) {
+        while (char.match(/[A-Za-z0-9_]/)) {
             char = str.substring(_index, _index + 1);
-            if (char.match(/[A-Za-z0-9]/)) {
+            if (char.match(/[A-Za-z0-9_]/)) {
                 id += char
                 _index++;
                 length++

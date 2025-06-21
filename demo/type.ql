@@ -14,17 +14,18 @@ let Option = {
     }
 };
 
-let createMap = x -> {
-    let cache1 = [];
+let createMap = () -> {
+    let cache = [];
     return {
         put = (key, value) -> {
-            cache1.add([key, value]);
+            std.Array.add(cache)([key, value])
+            //cache.add([key, value]);
         },
         get = key -> {
             let index = 0;
-            while (index < cache1.length) {
-                if (cache1[index][0] == key) {
-                    return Option.Some(cache1[index][1]);
+            while (index < std.Array.length(cache)) {
+                if (cache[index][0] == key) {
+                    return Option.Some(cache[index][1]);
                 }
                 index = index + 1;
             }
@@ -35,7 +36,7 @@ let createMap = x -> {
 };
 
 let Type = () -> {
-    let cache = createMap(1);
+    let cache = createMap();
     return {
         create = (name, compatible) -> {
             let t =  {
@@ -127,7 +128,7 @@ let ComplexArray = Type.create(v -> {
     if (Type.compatible(Array(Any), v)) {
         if Type.compatible(Int, v[0]) {
             let n = 1;
-            while n < n.length {
+            while n < std.Array.length(v) {
                 if (!Type.compatible(String, v[n])) {
                     return false
                 }

@@ -4,16 +4,14 @@ import { Void } from '../value/constant.js';
 import toNative from '../native/toNative.js';
 import { runValue } from './run-value.js';
 import copyAst from '../util/copy-ast.js';
+import parse from '../parser/index.js';
 
 const runStatements = env => ast => {
     for (const statement of ast.statements) {
-        if (statement.type === Ast.DECLARE) {
+        if (statement.type === Ast.LET) {
             const value = runValue(env)(statement.value);
 
-            env.set(statement.variable.value,
-                //TODO scope
-                { value: value.value }
-            );
+            env.set(statement.variable, { value: value.value });
         } else if (statement.type === Ast.ASSIGN) {
             const value = runValue(env)(statement.value);
             let envObj = env.find(statement.variable.value)
@@ -22,10 +20,9 @@ const runStatements = env => ast => {
             }
 
             if (statement.variable.children.length === 0) {
-                //TODO scope
-                envObj.callback(statement.variable.value, {value: value.value});
+                envObj.callback(statement.variable.value, { value: value.value });
             } else {
-                let obj = envObj.value.value;
+                let obj = envObj.value.value.value;
 
                 let lastObj = obj;
                 for (let index = 0; index < statement.variable.children.length - 1; index++) {
@@ -40,7 +37,7 @@ const runStatements = env => ast => {
                             lastObj = null
                         }
                     } else if (child.childType === 'FIELD') {
-                        const field = lastObj.fields.find(e => e.variable.value === child.value);
+                        const field = lastObj.fields.find(e => e.key.value === child.value);
                         if (field) {
                             lastObj = field.value.value
                         } else {
@@ -52,9 +49,9 @@ const runStatements = env => ast => {
 
                 const lastChild = statement.variable.children[statement.variable.children.length - 1];
                 if (lastChild.childType === 'FIELD') {
-                    const field = lastObj.fields.find(e => e.variable.value === lastChild.value)
+                    const field = lastObj.fields.find(e => e.key.value === lastChild.value)
                     if (field) {
-                        field.value.value = value.value
+                        field.value = value.value
                     } else {
                         lastObj.fields.push(
                             {
@@ -81,8 +78,6 @@ const runStatements = env => ast => {
                 status: value.status,
                 hasReturn: true,
                 value: value.value,
-                //TODO scope
-                scope: value.scope
             };
         } else if (statement.type === Ast.VALUE || statement.type === Ast.IDENTITY || statement.type === Ast.BIN_OP) {
             /*
@@ -108,7 +103,6 @@ const runStatements = env => ast => {
                             status: value.status,
                             hasReturn: true,
                             value: value.value,
-                            scope: value.scope
                         };
                     }
                     hasMatch = true;
@@ -126,7 +120,6 @@ const runStatements = env => ast => {
                         status: value.status,
                         hasReturn: true,
                         value: value.value,
-                        scope: value.scope
                     };
                 }
             }
@@ -140,10 +133,11 @@ const runStatements = env => ast => {
                         status: value.status,
                         hasReturn: true,
                         value: value.value,
-                        scope: value.scope
                     };
                 }
             }
+        } else if (statement.type === Ast.EXPORT) {
+            return runValue(env)(statement.value);
         }
     }
 

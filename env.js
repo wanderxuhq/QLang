@@ -7,11 +7,12 @@ import { equal, PrimeType } from "./type/constant.js";
 import { Void } from "./value/constant.js";
 import {std} from "./std/index.js";
 
+//const envStd = {value: fromNative(std)};
+
 const envPush = data => () => {
     const child = {
         parent: data,
         context: new Map(),
-        scope: new Map(),
     }
     child.push = envPush(child);
     child.pop = () => {
@@ -28,7 +29,16 @@ const envPush = data => () => {
                 callback: env.set,
                 env: result.env,
                 value: result,
-                scope: result
+            };
+        }
+
+        //const std = rootEnv.parent.context.get("std");
+        if(std[variable]) {
+            return {
+                find: true,
+                callback: env.set,
+                env: std[variable].env,
+                value: {value: std[variable]},
             };
         }
 

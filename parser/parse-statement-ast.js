@@ -22,6 +22,7 @@ import {
     ReturnStmtAst
 } from '../ast/index.js';
 import { equal, PrimeType } from '../type/constant.js';
+import { parseExport } from './parse-module.js';
 
 const parseStatementAst = env => str => (index) => {
     const p = parseOptionalSpaceAndNewline(str)(index);
@@ -36,8 +37,8 @@ const parseStatementAst = env => str => (index) => {
             // let variable = value
 
             const ast = {
-                type: Ast.DECLARE,
-                variable: p0.result[2],
+                type: Ast.LET,
+                variable: p0.result[2].value,
                 value: p1.result[3]
             };
 
@@ -59,10 +60,13 @@ const parseStatementAst = env => str => (index) => {
 
                     if (p0.type === Ast.IDENTITY) {
                         //TODO segmentation
-                        let ast = new AssignStmtAst(p0, p2.result[1]);
-                        ast.start = index;
-                        ast.end = p2.end;
-                        return ast;
+                        return {
+                            type: Ast.ASSIGN,
+                            variable: p0,
+                            value: p2.result[1],
+                            start: index,
+                            end: p2.end
+                        }
                     } else {
                         return parseFail(`Assign left side "${p0.value}" cannot be "${p0.type}"`)(str)(index, p2.end);
                     }
@@ -115,7 +119,12 @@ const parseStatementAst = env => str => (index) => {
                         return ast;
                     } else {
                         //console.log(`Parse failed: ${str.substring(index, index + 20)}`)
-                        return notMatch(index);
+                        p0 = parseExport(str)(p.end);
+                        if (isMatch(p0)) {
+                            return p0;
+                        } else {
+                            return notMatch(index);
+                        }
                     }
                 }
             }
@@ -135,7 +144,7 @@ const parseStatementsAst = parentEnv => str => (index) => {
     if (isMatch(statement)) {
         while (isMatch(statement)) {
             /*
-            if (statement.type === Ast.DECLARE) {
+            if (statement.type === Ast.LET) {
                 env.set(statement.variable.value,
                     statement.value
                 );
