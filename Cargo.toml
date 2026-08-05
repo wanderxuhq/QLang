@@ -1,0 +1,18 @@
+[package]
+name = "qlang"
+version = "0.1.0"
+edition = "2021"
+description = "QLang interpreter - a dynamically-typed programming language"
+authors = ["QLang Team"]
+
+[dependencies]
+thiserror = "1.0"
+rand = "0.8"
+
+[[bin]]
+name = "qlang"
+path = "src/main.rs"
+
+[lib]
+name = "qlang"
+path = "src/lib.rs"
