@@ -107,6 +107,13 @@ pub mod error;
 /// - std.Math - math functions (sqrt, abs, pow, max, PI, etc.)
 pub mod stdlib;
 
+/// Type system module - types as data (built-in type objects, std.Type)
+///
+/// Types are values: objects with a callable `check` predicate. This module
+/// builds the built-in type objects (Number, String, ...), the merged
+/// std.Type module, and the Error type object with its raise constructor.
+pub mod types;
+
 /// Re-exports the commonly used public API
 ///
 /// These types are the interfaces most frequently used by users:

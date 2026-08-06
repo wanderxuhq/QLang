@@ -91,6 +91,7 @@ impl Interpreter {
     pub fn new() -> Self {
         let global_env = new_env();
         register_builtins(&global_env);
+        crate::types::register_type_system(&global_env);
         // JSON5 number literals: Infinity / NaN predefined as globals (shadowable via let, matching JS)
         global_env.borrow_mut().define("Infinity".to_string(), Value::Number(f64::INFINITY));
         global_env.borrow_mut().define("NaN".to_string(), Value::Number(f64::NAN));

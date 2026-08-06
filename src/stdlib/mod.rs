@@ -65,31 +65,6 @@ pub fn register_builtins(env: &EnvRef) {
         }),
     })));
 
-    // Error constructor function
-    env_mut.define("Error".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
-        name: "Error".to_string(),
-        arity: None,  // 1 或 2 个参数
-        accepts_errors: true,
-        func: Box::new(|_ctx, args| {
-            let msg = match args.first() {
-                Some(Value::String(s)) => s.clone(),
-                Some(v) => v.to_string(),
-                None => "error".to_string(),
-            };
-            let cause = match args.get(1) {
-                Some(Value::Error(e)) => Some(Rc::clone(e)),
-                _ => None,
-            };
-            Ok(Value::Error(Rc::new(ErrorValue {
-                kind: "Error".to_string(),
-                message: msg,
-                line: 0, col: 0,
-                stack: Vec::new(),
-                cause,
-            })))
-        }),
-    })));
-
     // debug function
     env_mut.define("debug".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "debug".to_string(),
@@ -142,7 +117,6 @@ fn create_std_object() -> Value {
     fields.insert("Boolean".to_string(), create_boolean_module());
     fields.insert("Object".to_string(), create_object_module());
     fields.insert("Error".to_string(), create_error_module());
-    fields.insert("Type".to_string(), create_type_module());
     fields.insert("fs".to_string(), create_fs_module());
 
     Value::Object(Rc::new(RefCell::new(ObjectValue { fields })))
@@ -1585,23 +1559,6 @@ fn create_error_module() -> Value {
             fields
         },
     })))
-}
-
-/// Create the std.Type module
-fn create_type_module() -> Value {
-    let mut fields = HashMap::new();
-
-    // std.Type.of(value)
-    fields.insert("of".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
-        name: "Type.of".to_string(),
-        arity: Some(1),
-        accepts_errors: true,
-        func: Box::new(|_ctx, args| {
-            Ok(Value::String(args.first().map(|v| v.type_name()).unwrap_or("Null").to_string()))
-        }),
-    })));
-
-    Value::Object(Rc::new(RefCell::new(ObjectValue { fields })))
 }
 
 /// Create the std.fs module
