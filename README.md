@@ -4,7 +4,7 @@ A dynamically-typed programming language written in Rust, featuring self-hosting
 
 ## Features
 
-- **Dynamic typing** - No type declarations required
+- **Dynamic typing with optional annotations** - No type declarations required; `let x: Number = 42` annotations are runtime-checked (types are first-class values, see [Type System](#type-system))
 - **First-class functions** - Functions are first-class citizens with closures
 - **Lexical scoping** - Proper variable scoping with closures
 - **Rich standard library** - Math, String, Array, Object, JSON, and more
@@ -77,6 +77,9 @@ Reassignment is possible for existing variables:
 let x = 42
 x = 100  // Reassign to new value
 ```
+
+Type annotations are optional and checked at runtime when they appear —
+declaration, call entry, and reassignment. See [Type System](#type-system).
 
 ### Data Types
 
@@ -155,7 +158,7 @@ let nested = { outer: { inner: "value" } }
 let with_spaces = { name: "Bob", age: 25 };
 ```
 
-> **Note:** the old `{ key = value }` syntax was removed in favor of JSON5's `key: value`. Keys may be identifiers, keywords, quoted strings, or numbers; trailing commas are allowed; `{ name }` shorthand (QLang extension) still works.
+> **Note:** the old `{ key = value }` syntax was removed in favor of JSON5's `key: value`. Keys may be identifiers, keywords, quoted strings, or numbers; trailing commas are allowed; `{ name }` shorthand (QLang extension) still works. `{ x: Number }` means field `x` with the *value* of variable `Number` — which, since the type-system round, is the `Number` type object.
 
 Object field access uses dot notation:
 
@@ -168,10 +171,10 @@ person.age = 31             // Update field
 
 `null` is the **single empty value** — type `Null`, value `null`. There is no
 separate `void`: a function without a return statement yields `null`, and
-`std.Type.of(null)` is `"Null"`. The empty block expression `{}` also evaluates
-to `null`. In the future type system, `Null` is the unit type (its only value
-is `null`) — not the bottom type (`Never`), which is reserved for functions
-that never return (e.g. `exit`).
+`std.Type.of(null)` returns the `Null` type value. The empty block expression
+`{}` also evaluates to `null`. `Null` is the unit type (its only value is
+`null`) — not the bottom type (`Never`), which is reserved for functions that
+never return (e.g. `exit`).
 
 ```qlang
 let nothing = null
@@ -685,18 +688,6 @@ let parsed = std.JSON.parse(json)
 // {name: "Alice", age: 30, active: true}
 ```
 
-### Type Module
-
-```qlang
-std.Type.of(42)       // "Number"
-std.Type.of("hello")  // "String"
-std.Type.of([1,2,3])  // "Array"
-std.Type.of({})       // "Object"
-std.Type.of(true)     // "Boolean"
-std.Type.of(null)     // "Null"
-std.Type.of(x -> x)   // "Function"
-```
-
 ### Number Module
 
 ```qlang
@@ -706,6 +697,187 @@ std.Number.isFinite(1)                   // true
 std.Number.parseFloat("3.14")            // 3.14
 std.Number.parseFloat("not a number")    // NaN (a plain Number, not an error value)
 ```
+
+## Type System
+
+QLang's type system is **types as data** (an Idris-style foundation): a type
+value is an ordinary object whose core field is `check` — a predicate deciding
+"does `v` belong to this type?". Types participate in computation like any
+other value (passed, stored, compared); there is no separate compile-time
+phase. `let x: T = v` checks at declaration time, `(a: T) -> ...` checks at
+call entry, and reassigning an annotated binding re-checks. Unannotated code is
+fully dynamic with zero overhead.
+
+### Type values and `check`
+
+- A type value is an object with a callable `check` field. The membership test
+  is `T.check(v)` (mirroring `isError(v)`): `Number.check(42)` is `true`,
+  `Number.check("a")` is `false`.
+- A type value itself is **not callable** — `Number(42)` is an error
+  (`Not callable`). The exceptions are the type **constructors** `Array` and
+  `Object`, which are functions (below).
+- Types have **no names** — `Number`, `String`, ... are just globals pointing
+  at type values, exactly like any other binding. Error messages quote the
+  annotation text you wrote.
+- The type universe is closed at one level: `std.Type.of(Number)` → `std.Type`
+  and `std.Type.of(std.Type)` → `std.Type` (`Type : Type`).
+
+### Built-in type constants
+
+| Constant | `check` semantics |
+|---|---|
+| `Number` | value is a Number |
+| `String` | value is a String |
+| `Boolean` | value is a Boolean |
+| `Null` | value is `null` |
+| `AnyArray` | value is an array (any elements) — what `std.Type.of` returns for arrays |
+| `AnyObject` | value is an object **and not a type value** (types are their own category) — what `std.Type.of` returns for objects |
+| `Function` | value is a function |
+| `Any` | always `true` (top type) |
+| `Never` | always `false` (bottom type) |
+| `Error` | value is an error value (`isError`); its member `raise` builds error values (see [Error values](#error-values)) |
+| `std.Type` | "is `v` a type value?" — one object with two identities: type value and module (below) |
+| `Array` / `Object` | **type constructors** (functions), not type values themselves; `Array(Number)` builds an array type (below) |
+
+### std.Type (module and type value)
+
+`std.Type` is a single object with two identities: as a type value its `check`
+answers "is `v` a type?"; as a module it provides the operations
+
+```qlang
+std.Type.check(Number)      // true  — Number is a type value
+std.Type.check(42)          // false — 42 is not
+std.Type.of(42)             // Number   (the type VALUE, not the string "Number")
+std.Type.of("hello")        // String
+std.Type.of([1, 2, 3])      // AnyArray
+std.Type.of({})             // AnyObject
+std.Type.of(true)           // Boolean
+std.Type.of(null)           // Null
+std.Type.of(x -> x)         // Function
+std.Type.of(Number)         // std.Type
+std.Type.make((v) -> v > 0) // { check: (v) -> v > 0 }  — a user type
+```
+
+**`std.Type.of` returns type values, not strings** — a breaking change from the
+old string-returning `Type.of` (migrate comparisons like
+`std.Type.of(x) == "Number"` to `std.Type.of(x) == Number`).
+
+There is no global `Type` alias — the annotation form is `std.Type`:
+`let T: std.Type = Number`.
+
+### Type constructors: `Array(x)` / `Object(x)`
+
+`Array` and `Object` are **functions (constructors)** taking exactly **one**
+argument, whose type is a *union* of allowed forms (union members are mutually
+exclusive — a number is not a type value and vice versa); the member that
+matches decides the semantics. Invalid forms are rejected at construction time
+with an error value (never silently).
+
+**`Array(x)` — argument is `Number | Type | [Type] | {length, element}`:**
+
+| Matching member | Semantics | `check` |
+|---|---|---|
+| `Number` (length `n`) | fixed-length array, any elements | array && `length == n` |
+| `Type` (`T`) | any length, every element of `T` | array && every element passes `T.check` |
+| `[Type]` (`[T1, T2, ...]`) | fixed length `n`, per-position element types | `length == n` && per-position checks |
+| `{length, element}` | fixed length + element type combined | array && `length == n` && every element passes `element.check` |
+
+The members are self-describing: `[Type]` is `Array(std.Type)` and
+`{length, element}` is `Object({length: Number, element: std.Type})`.
+
+**`Object(x)` — argument is `Type | shape object`:**
+
+| Matching member | Semantics | `check` |
+|---|---|---|
+| `Type` (`T`) | object whose **keys** are all of `T` — `Object(String)` ≡ `AnyObject` (any keys); `Object(Number)` requires numeric keys | non-type object && every key passes `T.check` |
+| shape object (schema) | record type, e.g. `Object({name: String, age: Number})` | non-type object && every schema field exists and passes its check — **required fields are a subset; extra fields are allowed** |
+
+The whole Object family (`AnyObject` and every `Object(x)` product) excludes
+type objects: a type value is never an "object" for type purposes.
+
+### User-defined types (canonical forms)
+
+```qlang
+// Union type — the canonical 3-line form (no std.Type.union built-in needed)
+let Union = (A, B) -> std.Type.make((v) -> A.check(v) || B.check(v))
+let NumOrStr = Union(Number, String)
+
+// Custom predicate type
+let Positive = std.Type.make((v) -> v > 0)
+
+// Dependent types fall out naturally: a type constructor is just a function
+// returning a type object (Cayenne/CoC path — types are terms)
+let Vect = (n) -> std.Type.make((v) -> std.Type.of(v) == AnyArray && v.length == n)
+let x: Vect(3) = [1, 2, 3]
+```
+
+User types are ordinary data: not protected, breakable at your own risk
+(overwriting `check` stops them from being a type).
+
+### Annotations
+
+```qlang
+let x: Number = 42            // let annotation — the value is checked NOW
+let f = (a: Number) -> ...    // param annotation — evaluated at definition,
+                              // checked on every COMPLETED call
+let x: Number = 42
+x = "a"                       // reassignment re-checks the annotated binding
+```
+
+- The annotation is a **full expression**, evaluated where it appears:
+  `Number`, `Error`, `std.Type.make(...)`, `Vect(3)`, `Union(A, B)`,
+  `Array(Number)`, `Array(3)`, `Object({name: String})` are all valid.
+- Checking fires only at the three trigger points; a failed check produces a
+  `TypeCheck` error value (below), never a crash.
+- Curried calls defer checks to the **completing** call: on
+  `(a: Number, b: Number) -> ...`, `f("x")` is a legal partial application
+  (returns a curried function, no error), and the final call re-checks all
+  parameters — including ones bound earlier (`f("x")(1)` fails).
+- Error values are exempted on the interpreter's internal check path and on
+  the built-in checks / `std.Type.of` (diagnostic exemption):
+  `Number.check(1 / 0)` is `false`, `Any.check(1 / 0)` is `true`. Composite
+  and user checks are **not** exempted — an error argument to
+  `Array(Positive).check` follows the normal error-argument rules.
+
+### TypeCheck error semantics
+
+A failed check produces a **`TypeCheck` error value** — a distinct kind from
+`TypeMismatch` — which flows through `?` / `??` / `isError` like any error:
+
+```qlang
+let x: Number = "a";
+x.type      // "TypeCheck"
+x.message   // 'value of type "String" does not match the annotated type "Number"'
+```
+
+- If the check itself errors, the check **fails** — an error never masquerades
+  as a pass: `std.Type.make((v) -> 1 / 0)` yields a `TypeCheck` error whose
+  `cause` chain contains the check's `DivisionByZero`.
+- If the checked value is an error value (e.g. `let x: Number = risky()`), the
+  `TypeCheck` error chains it as `cause`, keeping the root cause visible.
+- An annotation that is not a type value — a plain value, or a shadowed
+  constant — yields `TypeCheck: type annotation is not a type value`.
+
+### Shadowing and protected members
+
+- Names can be shadowed: `let Number = 42` is legal (like `Infinity`/`NaN`).
+  After that, `let y: Number = 5` evaluates the annotation to `42` →
+  `TypeCheck` error value. Shadowing is local, visible, and recoverable — it
+  cannot silently corrupt the type mechanism (unlike overwriting `check`).
+- The built-in type objects' core members — `check`, `raise`, `of`, `make` —
+  are **protected**: writing them aborts the program (host) / propagates a
+  Custom error (boot). This prevents one accidental write from destroying the
+  type mechanism.
+- Free member mounts are still allowed: `Number.myHelper = 1` works — built-in
+  types are protected, not sealed.
+
+**Migration notes from the type-system round:**
+
+- `Error("msg")` no longer exists — `Error` is now the error *type object*
+  `{ check, raise }`, and building an error value is `Error.raise("msg")`
+  (with cause: `Error.raise("msg", cause)`). The boot's internal 3-argument
+  `std.Error.raise(kind, message, cause)` is unchanged.
+- `std.Type.of` returns type values (see above).
 
 ## Project Structure
 
@@ -736,7 +908,7 @@ qlang/
 │   └── test.ql           # Demo programs
 ├── verify_bootstrap.ql   # Bootstrapped semantics assertions (33 checks)
 ├── test_fix_regression.ql / test_json5_*.ql   # Regression tests
-├── difftest.py           # Differential test harness (123 cases + 78 V8-referenced)
+├── difftest.py           # Differential test harness (165 cases + 78 V8-referenced)
 ├── fuzzexpr.py           # Random expression fuzzing with a Python oracle (390 cases)
 ├── Cargo.toml
 └── README.md
@@ -772,15 +944,21 @@ cargo run -- verify_bootstrap.ql
 
 `difftest.py` runs the same QLang source through both the Rust host
 interpreter and the bootstrapped interpreter and asserts identical results —
-123 cases: 75 safe cases (batch-run), 23 risky cases (isolated processes,
+165 cases: 114 safe cases (batch-run), 26 risky cases (isolated processes,
 capturing exit codes and stderr), and 25 complex multi-feature cases. Safe
-cases include 21 error-value cases (e01-e21) exercising `?`, `??`, `isError`,
+cases include 24 error-value cases (e01-e24) exercising `?`, `??`, `isError`,
 error chains inside functions, and the error kind of a recursion-guard
-`StackOverflow`; risky cases r22-r25 and r27-r34 (12 cases)
-cover erroring expressions that escape to the top level (division by zero,
-negative-wrap out-of-bounds, `UndefinedField`, `TypeMismatch`, argument
-rejection, stack overflow, and the `??`-vs-`?` interaction of r34). Both sides
-must produce the same result — or the same error.
+`StackOverflow`, plus 36 annotation/type-system cases (t01-t37) covering
+annotation checks (let/params/reassignment), shadowing, the `Array`/`Object`
+constructors, free member mounts on type objects, and the currying ×
+annotation interaction (checks deferred to the completing call). Risky cases
+r22-r25 and r27-r35 (13 cases) cover erroring expressions that escape to the
+top level (division by zero, negative-wrap out-of-bounds, `UndefinedField`,
+`TypeMismatch`, argument rejection, stack overflow, and the `??`-vs-`?`
+interaction of r34); p1/p2 assert that protected members are not writable; r35
+pins the spec's "no global `Type`" (the boot's former bare-`Type` seeding was
+removed in Task 12). Both sides must produce the same result — or the same
+error.
 
 ### Error values
 
@@ -806,10 +984,12 @@ Error {
 }
 ```
 
-Errors are produced automatically by erroring operations, or explicitly:
-`Error("msg")` builds one, and `Error("msg", cause)` attaches a root cause.
-There is no throw/raise keyword — `return Error("...")` is how you raise one
-(Go-style).
+Errors are produced automatically by erroring operations, or explicitly via
+the `Error` type object's `raise` member (type-system round: `Error("msg")`
+was replaced by `Error.raise("msg")` — see [Type System](#type-system)):
+`Error.raise("msg")` builds one (kind `"Error"`), and
+`Error.raise("msg", cause)` attaches a root cause. There is no throw/raise
+keyword — `return Error.raise("...")` is how you raise one (Go-style).
 
 | Situation | Result |
 |---|---|
@@ -844,7 +1024,7 @@ There is no throw/raise keyword — `return Error("...")` is how you raise one
 // out-of-range indices — a real error source; nothing is thrown
 let first = (s) -> {
     let c = std.String.at(s, 0);
-    if isError(c) { return Error("empty string", c); }   // wrap with cause
+    if isError(c) { return Error.raise("empty string", c); }   // wrap with cause
     return c;
 };
 
@@ -856,7 +1036,7 @@ isError(e)          // true
 e.type              // "IndexOutOfBounds"
 e.message           // "index 5 out of bounds for length 3"
 
-let wrapped = first("");             // Error("empty string", cause)
+let wrapped = first("");             // Error.raise("empty string", cause)
 wrapped.type        // "Error"
 wrapped.cause.type  // "IndexOutOfBounds"
 
@@ -880,8 +1060,9 @@ a user-function boundary into a database or other external system. Structural
 reads do not chain: reading an unknown field of an error value (`err.foo`)
 yields a bare `UndefinedField`, and indexing it (`err[0]`) a bare
 `CannotIndex`. Only the diagnostic natives may receive error values:
-`print` / `println`, `isError`, `Error`, `std.Error.raise`,
-`std.Error.toString`, and `std.Type.of`. Full diagnostics render with
+`print` / `println`, `isError`, `Error.raise`, `std.Error.raise`,
+`std.Error.toString`, `std.Type.of`, and the built-in type checks
+(`Number.check` etc.). Full diagnostics render with
 positions and the cause chain (the stack frame is appended at top level):
 
 ```
@@ -896,7 +1077,7 @@ TypeMismatch: cannot apply addition to Number and Error (at line 5, col 12)
   so `!` is not an error test.
 - `x && err` returns the bare `err` (logical operators pass an evaluated right
   operand through), while `x + err` wraps it in a new error with `cause`.
-- `(Error("boom") ?) ?? 42` propagates to top level instead of falling back:
+- `(Error.raise("boom") ?) ?? 42` propagates to top level instead of falling back:
   `??` catches only *error values*, not the internal propagation signal that
   `?` raises (that signal has already left the expression when `??` would
   apply).

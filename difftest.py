@@ -159,9 +159,9 @@ SAFE_CASES = [
     ("e20", 'let f = () -> { Error.raise("boom") }; let g = (e) -> { e.message }; let r = g(f()); isError(r);'),
     # e21: assert the error KIND of a top-level recursion-guard error (r28 in
     # RISKY_CASES only compares that both sides error; this one checks the kind
-    # is StackOverflow on both sides — the bare self-call stays under both the
-    # boot guard (~35 levels since Task 10's probe migration) and the host
-    # guard (300), so neither stack blows)
+    # is StackOverflow on both sides — the bare self-call trips the boot guard
+    # (33 since Task 10/11) and the host guard (300) as recoverable errors
+    # before either stack blows)
     ("e21", "let f = (n) -> f(n - 1); let r = f(10000); r.type;"),
     # e22: null is the single empty value — the type name is "Null" (not "Void")
     # and its string form is "null" (no "void" spelling anywhere in the language).
@@ -204,6 +204,51 @@ SAFE_CASES = [
     # review supplement — Array(Number) is a Type.make product, .check is the
     # wrapped object's member read by the boot MemberAccess path
     ("t21", "Array(Number).check([1, 2]);"),
+    # ---- Task 12: annotation / constructor / mount boundary cases (brief t22-t33) ----
+    # t22: Object(Type) keys-all-of-T constructor member passes an object of
+    # string keys; t23: a TYPE object is not an Object(T) value (type objects
+    # are their own category, excluded from the Object family)
+    ("t22", 'let x: Object(String) = {a: 1}; x;'),
+    ("t23", 'let x: Object(String) = Number; isError(x);'),
+    # t24/t25: annotations must be TYPE values — a plain value (or a shadowed
+    # constant name) makes the annotation "not a type" → TypeCheck error value
+    # (shadowing is legal; it is local, visible, and recoverable — the
+    # "silently broken check" hazard is what the protected members prevent)
+    ("t24", 'let T = 42; let x: T = 5; isError(x);'),
+    # t25: the shadow is CONTAINED in a function body — a top-level
+    # `let Number = 42` would rebind the shared global for the rest of the
+    # single-process host suite (subsequent cases would see 42, not the type
+    # constant) and the suite would abort at t26's member write
+    ("t25", 'let f = () -> { let Number = 42; let y: Number = 5; isError(y); }; f();'),
+    # t26: built-in type objects accept free member mounts (only the protected
+    # members check/raise/of/make are read-only). The boot writes into the raw
+    # shared constant — this is the T11 review observation ③ one-line fix.
+    ("t26", 'Number.myHelper = 1; Number.myHelper;'),
+    # t27: canonical union definition (spec §4.2) used as an annotation
+    ("t27", 'let U = std.Type.make((v) -> Number.check(v) || String.check(v)); let x: U = 42; x;'),
+    # t28: Type.of returns the TYPE VALUE AnyArray for arrays (not a string)
+    ("t28", 'std.Type.of([1]) == AnyArray;'),
+    # t29: invalid constructor shape → error value, never silent
+    ("t29", 'let x = Array(3.5); isError(x);'),
+    # t30: tuple union constructor member — per-position element types
+    ("t30", 'let x: Array([Number, String]) = [1, "a"]; x;'),
+    # t31: reassigning an annotated param re-checks the new value → TypeCheck
+    ("t31", 'let f = (a: Number) -> { a = "x"; return a; }; let r = f(1); isError(r);'),
+    # t32: a check that ERRORS (1/0) counts as a FAILED check, never a pass
+    ("t32", 'let Bad = std.Type.make((v) -> 1 / 0); let x: Bad = 5; isError(x);'),
+    # t33: an error value under a Number annotation fails the check, and the
+    # TypeCheck error chains the original error as cause
+    ("t33", 'let x: Number = Error.raise("boom"); x.cause.type;'),
+    # ---- Task 12 ledger: currying × annotation interaction (T5 review minor) ----
+    # Param checks are deferred to the COMPLETING call: f("x") is a legal
+    # partial application (no error — host h2/boot probe both false), and the
+    # final call re-checks ALL params (including ones bound earlier)
+    ("t34", 'let f = (a: Number, b: Number) -> a + b; let r = f(1)("x"); isError(r);'),
+    ("t35", 'let f = (a: Number, b: Number) -> a + b; let r = f("x"); isError(r);'),
+    ("t36", 'let f = (a: Number, b: Number) -> a + b; let r = f("x")(1); isError(r);'),
+    # ---- Task 12 ledger: raw-object member write (T11 observation ③) ----
+    # Same fix as t26 but on a plain std module object (not a type constant)
+    ("t37", 'std.Math.myHelper = 1; std.Math.myHelper;'),
 ]
 
 # Complex cases: multi-feature combinations (recursion / closure mutation / higher-order
@@ -251,8 +296,13 @@ COMPLEX_CASES = [
     ("x20", "let stats = { min: 999, max: -999, sum: 0 }; let arr = [4, 2, 7, 1, 5]; let i = 0; while i < arr.length { let v = arr[i]; if v < stats.min { stats.min = v; }; if v > stats.max { stats.max = v; }; stats.sum = stats.sum + v; i = i + 1; }; stats.min + stats.max + stats.sum;"),
     # Early return from inside a while loop
     ("x21", "let firstEven = (arr) -> { let i = 0; while i < arr.length { if arr[i] % 2 == 0 { return arr[i]; }; i = i + 1; }; -1; }; firstEven([1, 3, 5, 8, 9]);"),
-    # Deep recursion (each boot level costs ~6 host call frames; host guard 300 → boot limit ~50 levels)
-    ("x22", "let f = (n) -> { if n == 0 { return 0; }; f(n - 1) + n; }; f(40);"),
+    # Deep recursion at the boot's maximum SAFE depth. The boot guard was
+    # lowered 45 → 35 → 33 (Tasks 10-11; each boot level costs ~8 host frames),
+    # so f(33) already trips the guard → StackOverflow error value (kind
+    # asserted by e21, bare shape by r28). f(32) is the deepest depth both
+    # sides compute successfully — Task 12 migrated this from f(40) (baseline
+    # red: boot guarded, host computed 820) to go green.
+    ("x22", "let f = (n) -> { if n == 0 { return 0; }; f(n - 1) + n; }; f(32);"),
     # Array reversal
     ("x23", "let reverse = (arr) -> { let out = []; let i = arr.length - 1; while i >= 0 { out[out.length] = arr[i]; i = i - 1; }; out; }; let r = reverse([1, 2, 3]); r[0] + r[1] + r[2];"),
     # String indexing + object fields
@@ -316,6 +366,15 @@ RISKY_CASES = [
     # returns the boot's Number constant, wrapped {type:"Type", value: Number}
     # by the call path) must not bypass the protection — host aborts here too.
     ("p2", "let t = std.Type.of(42); t.check = 42;"),
+    # ---- Task 12: no bare `Type` global (ledger T11 minor #4 — the boot's
+    # Type seeding at interpreter.ql:43 is removed) ----
+    # The ledger's literal `Type;` cannot be used: the boot reports undefined
+    # variables as null (documented boundary) while the host errors, so a bare
+    # reference can never match. The annotation form errors on both sides
+    # (TypeCheck: annotation is not a type value) AND catches a regression of
+    # the seeding: with `Type` still defined the boot would check Number
+    # against Type and succeed, turning this case red.
+    ("r35", "let x: Type = Number; isError(x);"),
 ]
 
 # Node.js reference cases: (cid, js_src). js_src is a faithful JavaScript translation
@@ -376,7 +435,7 @@ NODE_CASES = [
     ("x19", "let compose = (f, g) => (x) => f(g(x)); let inc = (x) => x + 1; let dbl = (x) => x * 2; compose(inc, dbl)(5);"),
     ("x20", "let stats = { min: 999, max: -999, sum: 0 }; let arr = [4, 2, 7, 1, 5]; let i = 0; while (i < arr.length) { let v = arr[i]; if (v < stats.min) { stats.min = v; }; if (v > stats.max) { stats.max = v; }; stats.sum = stats.sum + v; i = i + 1; }; stats.min + stats.max + stats.sum;"),
     ("x21", "let firstEven = (arr) => { let i = 0; while (i < arr.length) { if (arr[i] % 2 === 0) { return arr[i]; } i = i + 1; } return -1; }; firstEven([1, 3, 5, 8, 9]);"),
-    ("x22", "let f = (n) => { if (n === 0) { return 0; } return f(n - 1) + n; }; f(40);"),
+    ("x22", "let f = (n) => { if (n === 0) { return 0; } return f(n - 1) + n; }; f(32);"),
     ("x23", "let reverse = (arr) => { let out = []; let i = arr.length - 1; while (i >= 0) { out[out.length] = arr[i]; i = i - 1; } return out; }; let r = reverse([1, 2, 3]); r[0] + r[1] + r[2];"),
     ("x24", "let s = \"abc\"; let o = { first: s[0], rest: s.length - 1 }; o.first + String(o.rest);"),
     ("x25", "let f = (a) => (b) => (c) => a * b + c; f(2)(3)(4);"),

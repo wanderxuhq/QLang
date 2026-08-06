@@ -3,21 +3,26 @@
 import ./bootstrapped/main.ql;
 
 let check = (name, actual, expected) -> {
+  // Task 12: std.Type.of now returns type VALUES (type-system Task 3), not
+  // strings; compare against the built-in type constants by identity (host
+  // context: the registry returns the same canonical instances the globals
+  // point at). The "got a non-scalar" branch is only reachable on FAIL (all
+  // assertions below expect Number/String/Boolean scalars).
   let at = std.Type.of(actual);
-  if at == "Number" {
+  if at == Number {
     if actual == expected {
       println("PASS " + name);
     } else {
       println("FAIL " + name + ": got " + std.Number.toString(actual) + " expected " + std.Number.toString(expected));
     };
-  } else if at == "Boolean" || at == "String" {
+  } else if at == Boolean || at == String {
     if actual == expected {
       println("PASS " + name);
     } else {
       println("FAIL " + name + ": got " + std.String.toString(actual) + " expected " + std.String.toString(expected));
     };
   } else {
-    println("FAIL " + name + ": got type " + at);
+    println("FAIL " + name + ": got a non-scalar value");
   };
 };
 
@@ -135,8 +140,11 @@ check("native call concat", r25.value.value, "012");
 let r26 = runSource("let stats = { min: 999, max: -999, sum: 0 }; let arr = [4, 2, 7, 1, 5]; let i = 0; while i < arr.length { let v = arr[i]; if v < stats.min { stats.min = v; }; if v > stats.max { stats.max = v; }; stats.sum = stats.sum + v; i = i + 1; }; stats.min + stats.max + stats.sum;", "t26");
 check("object accumulator", r26.value.value, 27);
 
-// 26. Deep recursion (each boot level costs ~6 host call frames; host guard 300 → boot limit ~50 levels)
-let r27 = runSource("let f = (n) -> { if n == 0 { return 0; }; f(n - 1) + n; }; f(40);", "t27");
-check("deep recursion", r27.value.value, 820);
+// 26. Deep recursion (each boot level costs ~8 host call frames; the boot
+// recursion guard was lowered 45 → 33 by Task 10-11, so the deepest depth that
+// completes is f(32) — f(33) already trips the guard (probed; the guard's
+// StackOverflow error value is covered by difftest e21/r28 instead)
+let r27 = runSource("let f = (n) -> { if n == 0 { return 0; }; f(n - 1) + n; }; f(32);", "t27");
+check("deep recursion", r27.value.value, 528);
 
 println("verify_bootstrap done");

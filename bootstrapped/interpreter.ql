@@ -29,6 +29,9 @@ let Interpreter = () -> {
   // comparisons like `std.Type.of(42) == Number` hold inside the boot; the
   // host's globals would be cross-interpreter identities and never compare
   // equal). Error is already defined above (stdlib.ql's Error constant).
+  // Task 12: NO bare `Type` global — the spec has no global Type alias (§3.5,
+  // annotation form is `std.Type`), and the host does not define one; removing
+  // the seeding aligns both sides (difftest r35 asserts both error on `Type`).
   globalEnv._define("Number", Number);
   globalEnv._define("String", String);
   globalEnv._define("Boolean", Boolean);
@@ -40,7 +43,6 @@ let Interpreter = () -> {
   globalEnv._define("Never", Never);
   globalEnv._define("Array", Array);
   globalEnv._define("Object", Object);
-  globalEnv._define("Type", Type);
 
   // User-function call depth guard: each boot level costs several host frames,
   // so the boot's own limit must stay well below the host stack's capacity
@@ -342,9 +344,16 @@ let Interpreter = () -> {
             obj.value[target.field] = value;
             null;
           };
-        } else if t == null && isProtectedType(obj) && isProtectedField(target.field) {
-          // 受保护成员写入:内置类型对象(裸常量)的 check/raise/of/make
-          protectedWriteError(target.field);
+        } else if t == null {
+          if isProtectedType(obj) && isProtectedField(target.field) {
+            // 受保护成员写入:内置类型对象(裸常量)的 check/raise/of/make
+            protectedWriteError(target.field);
+          } else {
+            // 裸宿主对象字段写(std 模块/类型常量):与宿主一致执行写入——旧行为
+            // 静默丢弃(T11 审查观察 ③,difftest t26 依赖此路径)。
+            obj[target.field] = value;
+            null;
+          };
         } else {
           null;
         };
@@ -385,9 +394,17 @@ let Interpreter = () -> {
           } else {
             null;
           };
-        } else if t == null && arr != null && index != null && index.type == "String" && isProtectedType(arr) && isProtectedField(index.value) {
-          // obj["check"] = x 形式的受保护写入(与字段写法同规则)
-          protectedWriteError(index.value);
+        } else if t == null {
+          if arr != null && index != null && index.type == "String" && isProtectedType(arr) && isProtectedField(index.value) {
+            // obj["check"] = x 形式的受保护写入(与字段写法同规则)
+            protectedWriteError(index.value);
+          } else if arr != null && index != null && index.type == "String" {
+            // 裸宿主对象键写(与 MemberAccess 同规则):obj[key] = value
+            arr[index.value] = value;
+            null;
+          } else {
+            null;
+          };
         } else {
           null;
         };
