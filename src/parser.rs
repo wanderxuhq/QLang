@@ -186,10 +186,9 @@ impl Parser {
         let name = self.expect_identifier()?;
 
         // Optional type annotation: let x: Number = 10;
-        // Check whether there is a colon
+        // 标注是完整表达式,求值得到类型值(运行时断言)
         let type_annotation = if self.match_token(&TokenKind::Colon) {
-            // Parse the type name
-            Some(self.parse_type_annotation()?)
+            Some(self.parse_expression()?)
         } else {
             None
         };
@@ -663,17 +662,31 @@ impl Parser {
                 // Try to parse as a parameter list or an expression
                 let first = self.parse_expression()?;
 
+                // 参数类型标注:`(a: Type, ...) -> ...`(仅标识符参数可带标注)
+                let mut annotation: Option<Expression> = None;
+                if matches!(first, Expression::Identifier(_)) && self.check(&TokenKind::Colon) {
+                    self.advance();
+                    annotation = Some(self.parse_expression()?);
+                }
+
                 // Check whether it is multi-parameter (comma-separated)
-                if self.check(&TokenKind::Comma) ||
-                   // or the right paren is followed by an arrow (parameter list)
-                   (self.check(&TokenKind::RightParen) && self.peek_next_is_arrow()) {
+                // 有标注时强制走参数路径(避免 (x: T) 被静默当作分组)
+                let is_param_list = self.check(&TokenKind::Comma)
+                    || (self.check(&TokenKind::RightParen) && self.peek_next_is_arrow())
+                    || annotation.is_some();
+                if is_param_list {
                     // This is a function parameter list
-                    let mut params = vec![self.expression_to_parameter(first)?];
+                    let mut params = vec![self.expression_to_parameter_annotated(first, annotation)?];
 
                     // Continue parsing comma-separated parameters
                     while self.match_token(&TokenKind::Comma) {
                         let param_expr = self.parse_expression()?;
-                        params.push(self.expression_to_parameter(param_expr)?);
+                        let mut ann = None;
+                        if matches!(param_expr, Expression::Identifier(_)) && self.check(&TokenKind::Colon) {
+                            self.advance();
+                            ann = Some(self.parse_expression()?);
+                        }
+                        params.push(self.expression_to_parameter_annotated(param_expr, ann)?);
                     }
 
                     // Consume the right paren
@@ -690,7 +703,7 @@ impl Parser {
 
                 // Check whether an arrow follows the paren (function definition)
                 if self.match_token(&TokenKind::Arrow) {
-                    let params = vec![self.expression_to_parameter(first)?];
+                    let params = vec![self.expression_to_parameter_annotated(first, None)?];
                     return self.parse_function_body(params, token.span.start);
                 }
 
@@ -1219,21 +1232,15 @@ impl Parser {
         }
     }
 
-    /// Parses a type annotation
-    ///
-    /// Grammar rules:
-    /// ```qlang
-    /// : TypeName
-    /// ```
-    ///
-    /// Note: this is a reserved feature and is not fully implemented yet.
-    fn parse_type_annotation(&mut self) -> Result<TypeAnnotation, ParseError> {
-        let start = self.current_span().start;
-        // Parse the type name (identifier)
-        let name = self.expect_identifier()?;
-        let end = self.previous().span.end;
-
-        Ok(TypeAnnotation::new(name, Span::new(start, end)))
+    /// Converts an expression into a function parameter, attaching its type annotation
+    fn expression_to_parameter_annotated(
+        &mut self,
+        expr: Expression,
+        annotation: Option<Expression>,
+    ) -> Result<Parameter, ParseError> {
+        let mut param = self.expression_to_parameter(expr)?;
+        param.type_annotation = annotation;
+        Ok(param)
     }
 
     /// Gets the binary operator for the current token

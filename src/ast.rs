@@ -120,8 +120,8 @@ pub enum Statement {
 pub struct LetStmt {
     /// The variable name
     pub name: String,
-    /// Type annotation (reserved for future use)
-    pub type_annotation: Option<TypeAnnotation>,
+    /// 类型标注:完整表达式,求值得到类型值(运行时断言)
+    pub type_annotation: Option<Expression>,
     /// The initial value expression
     pub value: Expression,
     /// The position of the declaration statement in the source code
@@ -766,8 +766,8 @@ impl FunctionExpr {
 pub struct Parameter {
     /// The parameter name
     pub name: String,
-    /// Type annotation (reserved for future use)
-    pub type_annotation: Option<TypeAnnotation>,
+    /// 类型标注:完整表达式,求值得到类型值(运行时断言)
+    pub type_annotation: Option<Expression>,
 }
 
 impl Parameter {
@@ -1127,31 +1127,6 @@ impl ImportExpr {
     /// Creates a new import expression
     pub fn new(path: String, span: Span) -> Self {
         ImportExpr { path, span }
-    }
-}
-
-/// Type annotation
-///
-/// Reserved for future use, for static type checking.
-///
-/// # Intended syntax
-///
-/// ```qlang
-/// let x: Number = 10;
-/// let greet: (String) -> String = (name) -> "Hello, " + name;
-/// ```
-#[derive(Debug, Clone)]
-pub struct TypeAnnotation {
-    /// The type name
-    pub name: String,
-    /// Position
-    pub span: Span,
-}
-
-impl TypeAnnotation {
-    /// Creates a new type annotation
-    pub fn new(name: String, span: Span) -> Self {
-        TypeAnnotation { name, span }
     }
 }
 
