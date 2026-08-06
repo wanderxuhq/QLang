@@ -40,6 +40,34 @@ fn builtin_types_registered() {
 }
 
 #[test]
+fn protected_members_are_read_only() {
+    // 覆盖核心成员 → 运行时错误(赋值是语句,错误经异常通道,与 set_field 的
+    // NotAnObject 一致;`x = v` 不能作为表达式)
+    assert!(Interpreter::new().run_source("Number.check = 42;", "t".into()).is_err());
+    assert!(Interpreter::new().run_source("Error.raise = 1;", "t".into()).is_err());
+    assert!(Interpreter::new().run_source("std.Type.of = 1;", "t".into()).is_err());
+    // 自由挂载新成员照旧
+    assert_eq!(run("Number.myHelper = 1; Number.myHelper;"), "1");
+    // 用户类型不受保护
+    assert_eq!(run("let T = std.Type.make((v) -> true); T.check = 42; std.Type.check(T);"), "false");
+    // 标记字段不泄漏
+    assert_eq!(run("std.Object.keys(Number).length;"), "1");  // 只有 check
+}
+
+#[test]
+fn type_of_returns_type_values() {
+    assert_eq!(run("std.Type.of(42) == Number;"), "true");
+    assert_eq!(run("std.Type.of(\"a\") == String;"), "true");
+    assert_eq!(run("std.Type.of(true) == Boolean;"), "true");
+    assert_eq!(run("std.Type.of(null) == Null;"), "true");
+    assert_eq!(run("std.Type.of([1]) == AnyArray;"), "true");
+    assert_eq!(run("std.Type.of({}) == AnyObject;"), "true");
+    assert_eq!(run("std.Type.of(() -> 1) == Function;"), "true");
+    assert_eq!(run("std.Type.of(Error.raise(\"x\")) == Error;"), "true");
+    assert_eq!(run("std.Type.of(Number) == std.Type;"), "true");
+}
+
+#[test]
 fn let_annotation_checks() {
     assert_eq!(run("let x: Number = 42; x;"), "42");
     assert_eq!(run("let x: Number = \"a\"; isError(x);"), "true");

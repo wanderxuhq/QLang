@@ -1061,9 +1061,20 @@ impl Interpreter {
         }
     }
 
+    /// 拒绝向内置(受保护)类型对象的受保护成员写入;普通对象与自由成员不受限。
+    fn check_protected(&self, object: &Value, field: &str) -> Result<(), RuntimeError> {
+        if crate::types::is_protected_object(object) && crate::types::PROTECTED_FIELDS.contains(&field) {
+            return Err(RuntimeError::Custom(format!(
+                "cannot overwrite protected member '{}' of built-in type", field
+            )));
+        }
+        Ok(())
+    }
+
     fn set_field(&self, object: &Value, field: &str, value: Value) -> Result<(), RuntimeError> {
         match object {
             Value::Object(obj) => {
+                self.check_protected(object, field)?;
                 obj.borrow_mut().fields.insert(field.to_string(), value);
                 Ok(())
             }
@@ -1158,6 +1169,7 @@ impl Interpreter {
                 }
             }
             (Value::Object(obj), Value::String(key)) => {
+                self.check_protected(object, key)?;
                 obj.borrow_mut().fields.insert(key.clone(), value);
                 Ok(())
             }

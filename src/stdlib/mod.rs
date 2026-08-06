@@ -1378,8 +1378,9 @@ fn create_object_module() -> Value {
         func: Box::new(|_ctx, args| {
             match args.first() {
                 Some(Value::Object(obj)) => {
-                    let keys: Vec<Value> = obj.borrow().fields.keys()
-                        .map(|k| Value::String(k.clone()))
+                    let keys: Vec<Value> = obj.borrow().fields.iter()
+                        .filter(|(k, _)| *k != crate::types::TYPE_MARKER)
+                        .map(|(k, _)| Value::String(k.clone()))
                         .collect();
                     Ok(Value::Array(Rc::new(RefCell::new(keys))))
                 }
@@ -1396,8 +1397,9 @@ fn create_object_module() -> Value {
         func: Box::new(|_ctx, args| {
             match args.first() {
                 Some(Value::Object(obj)) => {
-                    let values: Vec<Value> = obj.borrow().fields.values()
-                        .map(|v| v.clone())
+                    let values: Vec<Value> = obj.borrow().fields.iter()
+                        .filter(|(k, _)| *k != crate::types::TYPE_MARKER)
+                        .map(|(_, v)| v.clone())
                         .collect();
                     Ok(Value::Array(Rc::new(RefCell::new(values))))
                 }

@@ -134,34 +134,37 @@ SAFE_CASES = [
     # ---- error-value semantics: `?` / `??` / isError / error read zone ----
     # (last expressions are scalars; the error values themselves stay inside
     # runSource, so both sides render the same scalar)
-    ("e01", 'let f = () -> { Error("boom") }; isError(f());'),
-    ("e02", 'let f = () -> { Error("boom") }; f() ?? "fallback";'),
-    ("e03", 'let f = () -> { Error("boom") }; let x = f() ?? 42; x;'),
-    ("e04", 'Error("a").type;'),
-    ("e05", 'Error("a").message;'),
-    ("e06", 'let e = Error("outer", Error("inner")); e.cause.message;'),
+    ("e01", 'let f = () -> { Error.raise("boom") }; isError(f());'),
+    ("e02", 'let f = () -> { Error.raise("boom") }; f() ?? "fallback";'),
+    ("e03", 'let f = () -> { Error.raise("boom") }; let x = f() ?? 42; x;'),
+    ("e04", 'Error.raise("a").type;'),
+    ("e05", 'Error.raise("a").message;'),
+    ("e06", 'let e = Error.raise("outer", Error.raise("inner")); e.cause.message;'),
     ("e07", "isError(42);"),
-    ('e08', 'isError(Error("x"));'),
-    ("e09", 'let f = () -> { let e = Error("boom"); e ?; }; let r = f(); isError(r);'),
-    ("e10", 'let f = () -> { let e = Error("boom"); e ?; }; let r = f(); r.message;'),
-    ("e11", 'let f = () -> { let e = Error("boom"); e ?; }; let r = f(); r.cause;'),
-    ("e12", 'let f = () -> { let e = Error("boom"); e ?; }; let g = () -> { let r = f(); r ?; }; isError(g());'),
+    ('e08', 'isError(Error.raise("x"));'),
+    ("e09", 'let f = () -> { let e = Error.raise("boom"); e ?; }; let r = f(); isError(r);'),
+    ("e10", 'let f = () -> { let e = Error.raise("boom"); e ?; }; let r = f(); r.message;'),
+    ("e11", 'let f = () -> { let e = Error.raise("boom"); e ?; }; let r = f(); r.cause;'),
+    ("e12", 'let f = () -> { let e = Error.raise("boom"); e ?; }; let g = () -> { let r = f(); r ?; }; isError(g());'),
     ("e13", 'let f = () -> { 1 / 0 }; let r = f(); r.type;'),
     ("e14", 'let f = () -> { [1][5] }; let r = f(); r.type;'),
     ("e15", 'let o = {}; let r = o.x; r.type;'),
     ('e16', 'let o = {}; let r = o["x"]; r.type;'),
-    ("e17", 'let f = () -> { Error("a", Error("b", Error("c"))) }; let e = f(); e.cause.cause.message;'),
-    ("e18", 'let f = () -> { let e = Error("boom"); e ?; }; let r = f() ?? "ok"; r;'),
-    ("e19", 'let f = () -> { Error("boom") }; let x = 1 + f(); x.type;'),
-    ("e20", 'let f = () -> { Error("boom") }; let g = (e) -> { e.message }; let r = g(f()); isError(r);'),
+    ("e17", 'let f = () -> { Error.raise("a", Error.raise("b", Error.raise("c"))) }; let e = f(); e.cause.cause.message;'),
+    ("e18", 'let f = () -> { let e = Error.raise("boom"); e ?; }; let r = f() ?? "ok"; r;'),
+    ("e19", 'let f = () -> { Error.raise("boom") }; let x = 1 + f(); x.type;'),
+    ("e20", 'let f = () -> { Error.raise("boom") }; let g = (e) -> { e.message }; let r = g(f()); isError(r);'),
     # e21: assert the error KIND of a top-level recursion-guard error (r28 in
     # RISKY_CASES only compares that both sides error; this one checks the kind
     # is StackOverflow on both sides — the bare self-call stays under both the
     # boot guard (~45 levels) and the host guard (300), so neither stack blows)
     ("e21", "let f = (n) -> f(n - 1); let r = f(10000); r.type;"),
     # e22: null is the single empty value — the type name is "Null" (not "Void")
-    # and its string form is "null" (no "void" spelling anywhere in the language)
-    ("e22", "std.Type.of(null);"),
+    # and its string form is "null" (no "void" spelling anywhere in the language).
+    # Type.of now returns the Null type VALUE, so assert via comparison (a
+    # boolean renders identically on both sides; a type object's textual form
+    # would not).
+    ("e22", "std.Type.of(null) == Null;"),
     ("e23", "println(null); 1/0 ?? null;"),
     # e24: ?? is error-only — a null left operand passes through untouched
     # (no null-coalescing; null is a legitimate value, not an error stand-in)
@@ -248,7 +251,7 @@ RISKY_CASES = [
     ("r23", "0 / 0;"),                           # DivisionByZero
     ("r24", "[1, 2][-3];"),                      # IndexOutOfBounds (neg wrap)
     ("r25", '"abc"[-4];'),                       # IndexOutOfBounds (neg wrap)
-    ("r27", 'let f = () -> { let e = Error("boom"); e ?; }; f();'),  # ? stops at the function boundary
+    ("r27", 'let f = () -> { let e = Error.raise("boom"); e ?; }; f();'),  # ? stops at the function boundary
     # r28: recursion shape matters — the recursion guards fire at different
     # host-frame costs on each side. If-block tail recursion
     # (`if n > 0 { f(n - 1) }`) blows the host stack inside the boot
@@ -260,14 +263,14 @@ RISKY_CASES = [
     ("r29", "let o = {}; o.x;"),                 # UndefinedField
     ("r30", 'let o = {}; o["x"];'),              # UndefinedField (obj["x"] missing → error, not JS undefined)
     ("r31", '1 + "a";'),                         # TypeMismatch
-    ("r32", 'let f = () -> { Error("boom") }; let g = (e) -> { e.message }; g(f());'),  # arg rejection
-    ("r33", 'let f = () -> { Error("boom") }; f() + 1;'),  # op on error value
+    ("r32", 'let f = () -> { Error.raise("boom") }; let g = (e) -> { e.message }; g(f());'),  # arg rejection
+    ("r33", 'let f = () -> { Error.raise("boom") }; f() + 1;'),  # op on error value
     # Task 4 ledger: `??` catches only Value::Error, NOT the UserError signal
-    # raised by `?` — so `(Error("boom") ?) ?? 42` propagates to top level
+    # raised by `?` — so `(Error.raise("boom") ?) ?? 42` propagates to top level
     # (host: exit 1 + diagnostic on stderr; boot: flow "Error" +
     # std.Error.toString diagnostic on stdout). Both are canonicalized to
     # ERROR_TOKEN with kind "err" by diff_case.
-    ("r34", '(Error("boom") ?) ?? 42;'),
+    ("r34", '(Error.raise("boom") ?) ?? 42;'),
 ]
 
 # Node.js reference cases: (cid, js_src). js_src is a faithful JavaScript translation
@@ -337,13 +340,21 @@ NODE_CASES = [
 
 
 def host_disp():
+    """Host-side disp: compares std.Type.of(v) against the type-value constants
+    (Type.of no longer returns strings — type-system Task 3). The fallback
+    branches render the type's label ("?Array" etc.) so whole objects/arrays
+    match the Node reference (node_disp) textually."""
     return (
         "let disp = (v) -> {\n"
         '  if v == null { "null" }\n'
-        '  else if std.Type.of(v) == "Number" { std.Number.toString(v) }\n'
-        '  else if std.Type.of(v) == "String" { v }\n'
-        '  else if std.Type.of(v) == "Boolean" { if v { "true" } else { "false" } }\n'
-        '  else { "?" + std.Type.of(v) };\n'
+        '  else if std.Type.of(v) == Number { std.Number.toString(v) }\n'
+        '  else if std.Type.of(v) == String { v }\n'
+        '  else if std.Type.of(v) == Boolean { if v { "true" } else { "false" } }\n'
+        '  else if std.Type.of(v) == AnyArray { "?Array" }\n'
+        '  else if std.Type.of(v) == AnyObject { "?Object" }\n'
+        '  else if std.Type.of(v) == Function { "?Function" }\n'
+        '  else if std.Type.of(v) == Error { "?Error" }\n'
+        '  else { "?Type" };\n'
         "};\n"
     )
 

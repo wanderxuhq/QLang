@@ -307,6 +307,10 @@ pub enum RuntimeError {
     #[error("Stack overflow: maximum recursion depth exceeded")]
     StackOverflow,
 
+    /// Arbitrary runtime error message (protected member writes, etc.).
+    #[error("{0}")]
+    Custom(String),
+
     /// Internal propagation signal for the postfix `?` operator.
     /// Caught at function-call boundaries and the top level; never user-visible.
     #[error("user error: {0}")]
