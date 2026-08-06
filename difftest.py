@@ -312,6 +312,10 @@ RISKY_CASES = [
     # Custom error → top-level diagnostic + flow "Error"). norm_err canonicalizes
     # both to ERROR_TOKEN (see the "Error: " stderr rule).
     ("p1", "Number.check = 42;"),
+    # p2: the same write through a WRAPPED built-in constant (std.Type.of(42)
+    # returns the boot's Number constant, wrapped {type:"Type", value: Number}
+    # by the call path) must not bypass the protection — host aborts here too.
+    ("p2", "let t = std.Type.of(42); t.check = 42;"),
 ]
 
 # Node.js reference cases: (cid, js_src). js_src is a faithful JavaScript translation

@@ -333,8 +333,15 @@ let Interpreter = () -> {
         if isError(t) { t = null; }
         if t == "Object" || t == "Type" {
           // AST field name is target.field (MemberAccessExpr(object, field))
-          obj.value[target.field] = value;
-          null;
+          // 包装对象写入:内层可能是受保护的内置常量——经调用路径的 typeTag
+          // 包装(如 std.Type.of(42) 产物 {type:"Type", value: Number}),obj.value
+          // 即共享的裸常量,直接写会绕过保护(宿主对常量对象写入中止)。
+          if isProtectedType(obj.value) && isProtectedField(target.field) {
+            protectedWriteError(target.field);
+          } else {
+            obj.value[target.field] = value;
+            null;
+          };
         } else if t == null && isProtectedType(obj) && isProtectedField(target.field) {
           // 受保护成员写入:内置类型对象(裸常量)的 check/raise/of/make
           protectedWriteError(target.field);
@@ -364,14 +371,20 @@ let Interpreter = () -> {
             }
           }
           null;
-        } else if t == "Object" {
-          // JS semantics: obj[key] = value
-          if index != null {
-            if index.type == "String" {
+        } else if t == "Object" || t == "Type" {
+          // JS semantics: obj[key] = value;"Type" 标签并入(包装的内置常量,
+          // 如 std.Type.of(42) 产物)——同 MemberAccess:写入前按内层复查
+          // 受保护成员,避免绕过;宿主对常量对象写入中止,不能静默丢弃。
+          if index != null && index.type == "String" {
+            if isProtectedType(arr.value) && isProtectedField(index.value) {
+              protectedWriteError(index.value);
+            } else {
               arr.value[index.value] = value;
-            }
-          }
-          null;
+              null;
+            };
+          } else {
+            null;
+          };
         } else if t == null && arr != null && index != null && index.type == "String" && isProtectedType(arr) && isProtectedField(index.value) {
           // obj["check"] = x 形式的受保护写入(与字段写法同规则)
           protectedWriteError(index.value);
