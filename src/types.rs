@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::environment::EnvRef;
+use crate::token::Span;
 use crate::value::{CallContext, ErrorValue, NativeFunction, ObjectValue, RuntimeError, Value};
 
 /// 内置类型对象上不可覆盖的核心成员。
@@ -176,4 +177,175 @@ pub fn register_type_system(global_env: &EnvRef) {
     if let Value::Object(std_obj) = std_val {
         std_obj.borrow_mut().fields.insert("Type".to_string(), type_t);
     }
+}
+
+/// 注册类型构造器 Array/Object 为全局函数。
+pub fn register_constructors(global_env: &EnvRef) {
+    global_env.borrow_mut().define("Array".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
+        name: "Array".to_string(), arity: Some(1), accepts_errors: false,
+        func: Box::new(|_ctx, args| build_array_type(&args[0])),
+    })));
+    global_env.borrow_mut().define("Object".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
+        name: "Object".to_string(), arity: Some(1), accepts_errors: false,
+        func: Box::new(|_ctx, args| build_object_type(&args[0])),
+    })));
+}
+
+/// 取出类型对象的 check 函数值(类型值必有此字段)。
+fn type_check_field(t: &Value) -> Option<Value> {
+    if let Value::Object(o) = t {
+        o.borrow().fields.get("check").cloned()
+    } else {
+        None
+    }
+}
+
+/// 检查闭包公共骨架:对每个目标值调用检查,任一失败/出错 → false。
+fn all_check(ctx: &mut dyn CallContext, targets: Vec<Value>, check: &Value) -> Result<Value, RuntimeError> {
+    for t in targets {
+        match ctx.call(check.clone(), vec![t], Span::new(0, 0)) {
+            Ok(Value::Error(_)) => return Ok(Value::Boolean(false)),
+            Ok(r) if !r.is_truthy() => return Ok(Value::Boolean(false)),
+            Ok(_) => {}
+            Err(_) => return Ok(Value::Boolean(false)),
+        }
+    }
+    Ok(Value::Boolean(true))
+}
+
+fn array_check(mode: ArrayMode) -> Value {
+    Value::NativeFunction(Rc::new(NativeFunction {
+        name: "<Array.check>".to_string(), arity: Some(1), accepts_errors: false,
+        func: Box::new(move |ctx, args| {
+            let elems = match &args[0] {
+                Value::Array(a) => a.borrow().clone(),
+                _ => return Ok(Value::Boolean(false)),
+            };
+            match &mode {
+                ArrayMode::FixedLen(len) => Ok(Value::Boolean(elems.len() == *len)),
+                ArrayMode::Element(check) => all_check(ctx, elems, check),
+                ArrayMode::Tuple(checks) => {
+                    if elems.len() != checks.len() { return Ok(Value::Boolean(false)); }
+                    for (e, c) in elems.iter().zip(checks.iter()) {
+                        match ctx.call(c.clone(), vec![e.clone()], Span::new(0, 0)) {
+                            Ok(Value::Error(_)) => return Ok(Value::Boolean(false)),
+                            Ok(r) if !r.is_truthy() => return Ok(Value::Boolean(false)),
+                            Ok(_) => {}
+                            Err(_) => return Ok(Value::Boolean(false)),
+                        }
+                    }
+                    Ok(Value::Boolean(true))
+                }
+            }
+        }),
+    }))
+}
+
+enum ArrayMode {
+    FixedLen(usize),
+    Element(Value),      // check 函数
+    Tuple(Vec<Value>),   // 每位的 check 函数
+}
+
+fn build_array_type(x: &Value) -> Result<Value, RuntimeError> {
+    // union 成员 1:Number(定长,元素任意)
+    if let Value::Number(n) = x {
+        if n.fract() != 0.0 || *n < 0.0 {
+            return Ok(arg_error("Array", "length must be a non-negative integer"));
+        }
+        return Ok(user_type(array_check(ArrayMode::FixedLen(*n as usize))));
+    }
+    // union 成员 2:Type(元素类型)
+    if is_type_value(x) {
+        let check = type_check_field(x).expect("type value has check");
+        return Ok(user_type(array_check(ArrayMode::Element(check))));
+    }
+    // union 成员 3:[Type](逐位类型)
+    if let Value::Array(elems) = x {
+        let mut checks = Vec::with_capacity(elems.borrow().len());
+        for e in elems.borrow().iter() {
+            if !is_type_value(e) {
+                return Ok(arg_error("Array", "tuple elements must all be type values"));
+            }
+            checks.push(type_check_field(e).expect("type value has check"));
+        }
+        return Ok(user_type(array_check(ArrayMode::Tuple(checks))));
+    }
+    // union 成员 4:{length, element}(元数据组合)
+    if let Value::Object(obj) = x {
+        if !is_type_value(x) {
+            let fields = obj.borrow();
+            let length = match fields.fields.get("length") {
+                Some(Value::Number(n)) if n.fract() == 0.0 && *n >= 0.0 => *n as usize,
+                _ => return Ok(arg_error("Array", "metadata must have a non-negative integer 'length'")),
+            };
+            let element = match fields.fields.get("element") {
+                Some(e) if is_type_value(e) => type_check_field(e).expect("type value has check"),
+                _ => return Ok(arg_error("Array", "metadata must have a type 'element'")),
+            };
+            return Ok(user_type(array_check(ArrayMode::Tuple(
+                std::iter::repeat(element).take(length).collect()
+            ))));
+        }
+    }
+    Ok(arg_error("Array", "argument must be a length, a type, a list of types, or {length, element}"))
+}
+
+fn object_check_keys(key_check: Value) -> Value {
+    Value::NativeFunction(Rc::new(NativeFunction {
+        name: "<Object.check>".to_string(), arity: Some(1), accepts_errors: false,
+        func: Box::new(move |ctx, args| {
+            let fields = match &args[0] {
+                Value::Object(o) if !is_type_value(&args[0]) => o.borrow().fields.clone(),
+                _ => return Ok(Value::Boolean(false)),
+            };
+            let keys: Vec<Value> = fields.keys().map(|k| Value::String(k.clone())).collect();
+            all_check(ctx, keys, &key_check)
+        }),
+    }))
+}
+
+fn object_check_schema(schema: Vec<(String, Value)>) -> Value {
+    Value::NativeFunction(Rc::new(NativeFunction {
+        name: "<Object.check>".to_string(), arity: Some(1), accepts_errors: false,
+        func: Box::new(move |ctx, args| {
+            let fields = match &args[0] {
+                Value::Object(o) if !is_type_value(&args[0]) => o.borrow().fields.clone(),
+                _ => return Ok(Value::Boolean(false)),
+            };
+            for (k, check) in schema.iter() {
+                let fv = match fields.get(k) {
+                    Some(fv) => fv.clone(),
+                    None => return Ok(Value::Boolean(false)), // 缺字段
+                };
+                match ctx.call(check.clone(), vec![fv], Span::new(0, 0)) {
+                    Ok(Value::Error(_)) => return Ok(Value::Boolean(false)),
+                    Ok(r) if !r.is_truthy() => return Ok(Value::Boolean(false)),
+                    Ok(_) => {}
+                    Err(_) => return Ok(Value::Boolean(false)),
+                }
+            }
+            Ok(Value::Boolean(true))
+        }),
+    }))
+}
+
+fn build_object_type(x: &Value) -> Result<Value, RuntimeError> {
+    // union 成员 1:Type(keys 全为 T;Object(String) ≡ AnyObject)
+    if is_type_value(x) {
+        let check = type_check_field(x).expect("type value has check");
+        return Ok(user_type(object_check_keys(check)));
+    }
+    // union 成员 2:形状对象(schema)
+    if let Value::Object(obj) = x {
+        let mut schema = Vec::new();
+        for (k, v) in obj.borrow().fields.iter() {
+            if !is_type_value(v) {
+                return Ok(arg_error("Object", &format!("schema field '{}' is not a type value", k)));
+            }
+            schema.push((k.clone(), type_check_field(v).expect("type value has check")));
+        }
+        return Ok(user_type(object_check_schema(schema)));
+    }
+    Ok(arg_error("Object", "argument must be a type (keys) or a shape object (schema)"))
 }

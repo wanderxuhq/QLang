@@ -1425,8 +1425,11 @@ fn create_object_module() -> Value {
                             match inner_args.first() {
                                 Some(Value::Object(obj2)) => {
                                     let mut merged = obj1_clone.borrow().clone();
+                                    merged.fields.remove(crate::types::TYPE_MARKER);
                                     for (k, v) in obj2.borrow().fields.iter() {
-                                        merged.fields.insert(k.clone(), v.clone());
+                                        if *k != crate::types::TYPE_MARKER {
+                                            merged.fields.insert(k.clone(), v.clone());
+                                        }
                                     }
                                     Ok(Value::Object(Rc::new(RefCell::new(merged))))
                                 }

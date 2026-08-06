@@ -113,3 +113,49 @@ fn reassignment_rechecks_annotation() {
     // 函数参数带标注,体内重赋值再查
     assert_eq!(run("let f = (a: Number) -> { a = \"x\"; return a; }; let r = f(1); isError(r);"), "true");
 }
+
+#[test]
+fn array_constructor_union_params() {
+    // Type 成员:元素类型
+    assert_eq!(run("let x: Array(Number) = [1, 2]; x;"), "[1, 2]");
+    assert_eq!(run("let x: Array(Number) = [1, \"a\"]; isError(x);"), "true");
+    // Number 成员:定长
+    assert_eq!(run("let x: Array(3) = [1, 2, 3]; x;"), "[1, 2, 3]");
+    assert_eq!(run("let x: Array(3) = [1, 2]; isError(x);"), "true");
+    // [Type] 成员:逐位类型(tuple)
+    assert_eq!(run("let x: Array([Number, String]) = [1, \"a\"]; x;"), "[1, a]");
+    assert_eq!(run("let x: Array([Number, String]) = [1, 2]; isError(x);"), "true");
+    // 元数据成员:{length, element}
+    assert_eq!(run("let x: Array({length: 2, element: Number}) = [1, 2]; x;"), "[1, 2]");
+    assert_eq!(run("let x: Array({length: 2, element: Number}) = [1]; isError(x);"), "true");
+    // 非法形态 → 构造错误值
+    assert_eq!(run("let x = Array(3.5); isError(x);"), "true");
+    assert_eq!(run("let x = Array([1, 2]); isError(x);"), "true"); // [Type] 里非类型
+    // 嵌套 + 用户类型
+    assert_eq!(run("let Positive = std.Type.make((v) -> v > 0); let x: Array(Positive) = [1, 2]; x;"), "[1, 2]");
+}
+
+#[test]
+fn object_constructor_union_params() {
+    // Type 成员:keys 全为 T(Object(String) ≡ AnyObject)
+    // 注:host 对象渲染按 HashMap 哈希序(非插入序),整值渲染断言对 2 字段对象只接受两种排列
+    let r = run("let x: Object(String) = {a: 1, b: \"s\"}; x;");
+    assert!(r == "{a: 1, b: s}" || r == "{b: s, a: 1}", "unexpected render: {}", r);
+    assert_eq!(run("let x: Object(String) = Number; isError(x);"), "true"); // 类型对象不是 Object
+    // schema 成员:必选字段子集,额外字段允许
+    let r = run("let x: Object({name: String}) = {name: \"a\", age: 1}; x;");
+    assert!(r == "{name: a, age: 1}" || r == "{age: 1, name: a}", "unexpected render: {}", r);
+    assert_eq!(run("let x: Object({name: String}) = {age: 1}; isError(x);"), "true"); // 缺字段
+    assert_eq!(run("let x: Object({name: String}) = {name: 1}; isError(x);"), "true"); // 字段类型不符
+    // schema 构造验证
+    assert_eq!(run("let x = Object({bad: 42}); isError(x);"), "true");
+    // 嵌套 schema
+    assert_eq!(run("let x: Object({user: Object({name: String})}) = {user: {name: \"a\"}}; x;"), "{user: {name: a}}");
+}
+
+#[test]
+fn object_merge_does_not_copy_type_marker() {
+    // 合并入类型对象不连带 TYPE_MARKER:结果非受保护对象,check 可覆写(Task 7 记档,本任务顺带修复)
+    assert_eq!(run("let m = std.Object.merge(Number)({x: 1}); m.check = 42; m.check;"), "42");
+    assert_eq!(run("let m = std.Object.merge({x: 1})(Number); m.check = 42; m.check;"), "42");
+}
