@@ -174,6 +174,20 @@ SAFE_CASES = [
     # parses annotations, t02 stays red (boot has no check yet) until Task 11 ----
     ("t01", 'let x: Number = 42; x;'),
     ("t02", 'let x: Number = "a"; isError(x);'),
+    # ---- boot type library (Task 10): type constants, merged Type module,
+    # Array/Object constructors — the boot's own stdlib.ql library must behave
+    # like the host's; t10/t11 consume annotations (Task 11), t12 needs the
+    # boot's Error type object ----
+    ("t03", 'Number.check(42);'),
+    ("t04", 'Number.check("a");'),
+    ("t05", 'std.Type.of(42) == Number;'),
+    ("t06", 'std.Type.of(null) == Null;'),
+    ("t07", 'std.Type.of(Number) == std.Type;'),
+    ("t08", 'std.Type.check(Number);'),
+    ("t09", 'std.Type.make((v) -> v > 0).check(5);'),
+    ("t10", 'let x: Array(Number) = [1, 2]; x;'),
+    ("t11", 'let x: Object({name: String}) = {name: "a"}; x;'),
+    ("t12", 'let e = Error.raise("boom"); std.Type.of(e) == Error;'),
 ]
 
 # Complex cases: multi-feature combinations (recursion / closure mutation / higher-order

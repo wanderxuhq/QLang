@@ -30,7 +30,7 @@ let runSource = (source, path) -> {
   let result = interpreter.runProgram(program);
 
   println("Execution complete.");
-  if result.flow == "Propagate" || (std.Type.of(result.value) == "Object" && result.value != null && std.Type.of(result.value.type) == "String" && result.value.type == "Error") {
+  if result.flow == "Propagate" || (result.value != null && !isError(result.value.type) && result.value.type == "Error") {
     // Top-level error value — raised by `?`, or a bare error value left by the
     // last expression (e.g. a program ending in `1 / 0;`): errors must never
     // vanish silently. Print the diagnostic (kind + message + cause chain, no

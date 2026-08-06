@@ -8,20 +8,22 @@ let Environment = (parent) -> {
   let doDefine = (name, value) -> { values[name] = value; };
   let doGet = (name) -> {
     // Note: probing a missing key on a raw object now yields an UndefinedField
-    // error VALUE (host error-as-value), never null; detect via std.Type.of
+    // error VALUE (host error-as-value), never null; detect via isError (the
+    // host native — cross-interpreter safe, unlike std.Type.of(x) == "Error"
+    // which compares type values from different interpreter instances).
     let v = values[name];
-    if std.Type.of(v) != "Error" && v != null { v }
+    if !isError(v) && v != null { v }
     else if parent != null {
       // parent can be:
       // 1. A QL Environment object with _get method
       // 2. A QL Object with .get method (like parentEnv from GlobalEnvironment)
       // 3. A Rust NativeFunction (callable directly)
       let g1 = parent["_get"];
-      if std.Type.of(g1) != "Error" && g1 != null {
+      if !isError(g1) && g1 != null {
         g1(name);
       } else {
         let g2 = parent["get"];
-        if std.Type.of(g2) != "Error" && g2 != null {
+        if !isError(g2) && g2 != null {
           g2(name);
         } else {
           parent(name);
@@ -31,7 +33,7 @@ let Environment = (parent) -> {
     else { null }
   };
   let doAssign = (name, value) -> {
-    if std.Type.of(values[name]) != "Error" && values[name] != null {
+    if !isError(values[name]) && values[name] != null {
       values[name] = value;
       true;
     } else if parent != null {
@@ -39,11 +41,11 @@ let Environment = (parent) -> {
       // (found by differential testing: the old local-only assign did not propagate,
       // closure counters stayed 0; the lexer worked only because it runs in the host)
       let a1 = parent["_assign"];
-      if std.Type.of(a1) != "Error" && a1 != null {
+      if !isError(a1) && a1 != null {
         a1(name, value);
       } else {
         let a2 = parent["assign"];
-        if std.Type.of(a2) != "Error" && a2 != null {
+        if !isError(a2) && a2 != null {
           a2(name, value);
         } else {
           false;

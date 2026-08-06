@@ -24,10 +24,31 @@ let Interpreter = () -> {
   globalEnv._define("Error", Error);
   globalEnv._define("isError", isError);
 
+  // Task 10: seed the boot global environment with the boot's OWN type library
+  // (stdlib.ql constants — same module as std.Type.of's results, so user-code
+  // comparisons like `std.Type.of(42) == Number` hold inside the boot; the
+  // host's globals would be cross-interpreter identities and never compare
+  // equal). Error is already defined above (stdlib.ql's Error constant).
+  globalEnv._define("Number", Number);
+  globalEnv._define("String", String);
+  globalEnv._define("Boolean", Boolean);
+  globalEnv._define("Null", Null);
+  globalEnv._define("AnyArray", AnyArray);
+  globalEnv._define("AnyObject", AnyObject);
+  globalEnv._define("Function", Function);
+  globalEnv._define("Any", Any);
+  globalEnv._define("Never", Never);
+  globalEnv._define("Array", Array);
+  globalEnv._define("Object", Object);
+  globalEnv._define("Type", Type);
+
   // User-function call depth guard: each boot level costs several host frames,
-  // so the boot's own limit must stay well below the host's 300.
+  // so the boot's own limit must stay well below the host's 300. Measured:
+  // with the Task 10 probe migration (isError/wrapper-field probes) each boot
+  // level costs ~8 host frames, and f(40) in a 40-level recursion blows the
+  // host stack before the old limit of 45 fires — the guard must sit at ~35.
   let depth = 0;
-  let maxDepth = 45;
+  let maxDepth = 35;
 
   // Helper functions that don't use std
   let getArrayLength = (arr) -> {
@@ -67,18 +88,17 @@ let Interpreter = () -> {
     else { true };
   };
 
-  // Wrapped error check: only wrapped values ({type, value, ...}) have a safe
-  // .type probe; raw host values (natives, std modules, leaked raw errors)
-  // would poison a == comparison, so gate on std.Type.of first.
+  // Wrapped value check: probing .type on a raw host value (natives, std
+  // modules) yields an error value (host error-as-value), never a string, so
+  // `!isError(v.type)` cleanly separates boot wrappers {type, value} from raw
+  // values (a raw Error probes its kind — still a string, treated as wrapped,
+  // which keeps leaked raw errors flowing like wrappers).
   let isWrapped = (v) -> {
-    std.Type.of(v) == "Object" && v != null;
+    v != null && !isError(v.type);
   };
 
   let isErrorVal = (v) -> {
-    // v.type on a raw host object (std modules) yields an UndefinedField error
-    // value (never a string), which would poison the == comparison below;
-    // require the probe to actually be a string first
-    isWrapped(v) && std.Type.of(v.type) == "String" && v.type == "Error";
+    isWrapped(v) && v.type == "Error";
   };
 
   let isPropagating = (v) -> {
@@ -204,8 +224,8 @@ let Interpreter = () -> {
       let obj = evaluate(target.object, env);
       if obj != null {
         let t = obj["type"];
-        if std.Type.of(t) != "String" { t = null; }
-        if t == "Object" {
+        if isError(t) { t = null; }
+        if t == "Object" || t == "Type" {
           // AST field name is target.field (MemberAccessExpr(object, field))
           obj.value[target.field] = value;
         }
@@ -215,7 +235,7 @@ let Interpreter = () -> {
       let index = evaluate(target.index, env);
       if arr != null {
         let t = arr["type"];
-        if std.Type.of(t) != "String" { t = null; }
+        if isError(t) { t = null; }
         if t == "Array" {
           if index != null {
             if index.type == "Number" {
@@ -356,15 +376,17 @@ let Interpreter = () -> {
       let fieldName = expr.field;
       if obj != null {
         // Normalize the probe: raw host values probe as error values, which
-        // would poison the == comparisons below; treat them as null instead.
+        // would poison the == comparisons below; treat them as null instead
+        // (isError: host native, cross-interpreter safe).
         let t = obj["type"];
-        if std.Type.of(t) != "String" { t = null; }
-        if t == "Object" {
-          // A wrapped object's value is a plain object { name: wrapper }; missing
-          // fields yield UndefinedField error values (host semantics), wrapped
-          // here so the error keeps flowing as a value.
+        if isError(t) { t = null; }
+        if t == "Object" || t == "Type" {
+          // A wrapped object's value is a plain object { name: wrapper } (a
+          // "Type"-tagged wrapper is the same shape holding a boot type
+          // value); missing fields yield UndefinedField error values (host
+          // semantics), wrapped here so the error keeps flowing as a value.
           let fieldValue = obj.value[fieldName];
-          if std.Type.of(fieldValue) != "Error" && fieldValue != null {
+          if !isError(fieldValue) && fieldValue != null {
             fieldValue;
           } else {
             { type: "Error", value: std.Object.field(obj.value, fieldName), propagate: false };
@@ -416,17 +438,19 @@ let Interpreter = () -> {
           // Error read zone (matches host error_read_zone): err.type → kind,
           // err.message → message, err.cause → error/null, err.line/err.col → numbers
           let rv = obj.value[fieldName];
-          if std.Type.of(rv) == "Error" {
+          if isError(rv) {
             { type: "Error", value: rv, propagate: false };
           } else if rv == null {
             { type: "Null", value: null };
           } else {
-            { type: std.Type.of(rv), value: rv };
+            // Raw read-zone value (kind/message string, line/col number):
+            // wrap with the string tag via typeTag (stdlib.ql helper)
+            { type: typeTag(rv), value: rv };
           };
         } else {
           // Raw host object (std modules, etc.): fetch the field directly
           let fieldValue = obj[fieldName];
-          if std.Type.of(fieldValue) != "Error" && fieldValue != null {
+          if !isError(fieldValue) && fieldValue != null {
             fieldValue;
           } else {
             { type: "Error", value: std.Object.field(obj, fieldName), propagate: false };
@@ -442,7 +466,7 @@ let Interpreter = () -> {
       if isPropagating(index) { return index; }
       if arr != null {
         let t = arr["type"];
-        if std.Type.of(t) != "String" { t = null; }
+        if isError(t) { t = null; }
         if t == "Array" {
           if index != null {
             if index.type == "Number" {
@@ -485,12 +509,12 @@ let Interpreter = () -> {
               }
             }
           }
-        } else if t == "Object" {
+        } else if t == "Object" || t == "Type" {
           // JS semantics: obj[key] missing → UndefinedField error value (host)
           if index != null {
             if index.type == "String" {
               let v = arr.value[index.value];
-              if std.Type.of(v) != "Error" && v != null {
+              if !isError(v) && v != null {
                 v;
               } else {
                 { type: "Error", value: std.Object.field(arr.value, index.value), propagate: false };
@@ -501,12 +525,12 @@ let Interpreter = () -> {
           // Error read zone via index access too (err["message"] works like err.message)
           if index != null {
             let rv = arr.value[index.value];
-            if std.Type.of(rv) == "Error" {
+            if isError(rv) {
               { type: "Error", value: rv, propagate: false };
             } else if rv == null {
               { type: "Null", value: null };
             } else {
-              { type: std.Type.of(rv), value: rv };
+              { type: typeTag(rv), value: rv };
             };
           };
         } else {
@@ -531,17 +555,22 @@ let Interpreter = () -> {
   // function argument — the host rejects error values as user-function
   // arguments). This replaces the old raiseTypeMismatch helper.
   let evalDelegated = (op, l, r) -> {
-    let lv = if std.Type.of(l) == "Object" && l != null && l.type == "Number" { getNumberValue(l); }
-      else if std.Type.of(l) == "Object" && l != null && l.type == "String" { l.value; }
-      else if std.Type.of(l) == "Object" && l != null && l.type == "Boolean" { l.value; }
-      else if std.Type.of(l) == "Object" && l != null && l.type == "Null" { null; }
-      else if std.Type.of(l) == "Object" && l != null && l.type == "Error" { l.value; }
+    // Unwrap boot wrappers by their type tag (a "Type"-tagged wrapper holds a
+    // boot type value and unwraps like any other; raw values probe as error
+    // values and pass through untouched).
+    let lv = if l != null && !isError(l.type) && l.type == "Number" { getNumberValue(l); }
+      else if l != null && !isError(l.type) && l.type == "String" { l.value; }
+      else if l != null && !isError(l.type) && l.type == "Boolean" { l.value; }
+      else if l != null && !isError(l.type) && l.type == "Null" { null; }
+      else if l != null && !isError(l.type) && l.type == "Error" { l.value; }
+      else if l != null && !isError(l.type) && l.type == "Type" { l.value; }
       else { l; };
-    let rv = if std.Type.of(r) == "Object" && r != null && r.type == "Number" { getNumberValue(r); }
-      else if std.Type.of(r) == "Object" && r != null && r.type == "String" { r.value; }
-      else if std.Type.of(r) == "Object" && r != null && r.type == "Boolean" { r.value; }
-      else if std.Type.of(r) == "Object" && r != null && r.type == "Null" { null; }
-      else if std.Type.of(r) == "Object" && r != null && r.type == "Error" { r.value; }
+    let rv = if r != null && !isError(r.type) && r.type == "Number" { getNumberValue(r); }
+      else if r != null && !isError(r.type) && r.type == "String" { r.value; }
+      else if r != null && !isError(r.type) && r.type == "Boolean" { r.value; }
+      else if r != null && !isError(r.type) && r.type == "Null" { null; }
+      else if r != null && !isError(r.type) && r.type == "Error" { r.value; }
+      else if r != null && !isError(r.type) && r.type == "Type" { r.value; }
       else { r; };
     let rawRes = if op == "+" { lv + rv }
       else if op == "-" { lv - rv }
@@ -561,13 +590,15 @@ let Interpreter = () -> {
       else if op == "!=" { lv != rv }
       else { lv + rv };
     // Wrap inline: error results must not flow through a boot function argument
-    // (the host rejects error values as user-function arguments)
-    if std.Type.of(rawRes) == "Error" {
+    // (the host rejects error values as user-function arguments). The wrapper
+    // tag is the STRING type name from typeTag (std.Type.of now returns type
+    // VALUES, which cannot serve as wrapper tags).
+    if isError(rawRes) {
       { type: "Error", value: rawRes, propagate: false };
     } else if rawRes == null {
       { type: "Null", value: null };
     } else {
-      { type: std.Type.of(rawRes), value: rawRes };
+      { type: typeTag(rawRes), value: rawRes };
     };
   };
 
@@ -592,19 +623,19 @@ let Interpreter = () -> {
   let evalUnaryOp = (op, value) -> {
     if isPropagating(value) { return value; }
     if op == "-" {
-      if std.Type.of(value) == "Object" && value != null && value.type == "Number" {
+      if value != null && !isError(value.type) && value.type == "Number" {
         { type: "Number", value: 0 - getNumberValue(value) };
       } else {
         // Non-Number (or Error): the host's unary negation produces the same
         // TypeMismatch error value (with cause for error operands)
-        let raw = if std.Type.of(value) == "Object" && value != null { value.value; } else { value; };
+        let raw = if value != null && !isError(value.type) { value.value; } else { value; };
         let rawRes = -(raw);
-        if std.Type.of(rawRes) == "Error" {
+        if isError(rawRes) {
           { type: "Error", value: rawRes, propagate: false };
         } else if rawRes == null {
           { type: "Null", value: null };
         } else {
-          { type: std.Type.of(rawRes), value: rawRes };
+          { type: typeTag(rawRes), value: rawRes };
         };
       }
     } else if op == "!" {
@@ -619,7 +650,7 @@ let Interpreter = () -> {
       // Normalize the probe: raw host values (natives, boot functions, std
       // modules) probe as error values; unify them to null → native branch.
       let ft = func["type"];
-      if std.Type.of(ft) != "String" { ft = null; }
+      if isError(ft) { ft = null; }
       if ft == "Error" {
         // Calling an error value: NotCallable (matches the host)
         { type: "Error", value: std.Error.raise("NotCallable", "Not callable: Error", null), propagate: false };
@@ -683,53 +714,67 @@ let Interpreter = () -> {
           result.value;
         };
       } else if ft == null {
-        // ---- native function (host NativeFunction) or raw boot function ----
+        // ---- host native (Rust stdlib) or host QLang function (stdlib.ql) ----
+        // Distinguish by func.name: natives expose a name string, QLang
+        // functions probe as an error value.
+        // Host natives receive UNWRAPPED raw args (the Rust std expects raw
+        // values); host QLang functions (the boot's type library: the
+        // constants' checks, std.Type.of/check/make, Array/Object constructors,
+        // Error.raise) receive boot WRAPPERS — their bodies test v.type on the
+        // wrapper shape, so unwrapping would destroy the type predicates.
         // Diagnostic natives are exempt from the error-argument check:
-        // print / println / Error / isError / raise / std.Type.of
-        let isDiag = func == println || func == print || func == Error || func == isError || func == std.Error.raise || func == std.Error.toString || func == std.Type.of;
+        // print / println / Error / isError / raise / std.Type.of / Error.raise
+        let isNative = func != null && !isError(func.name);
+        let isDiag = func == println || func == print || func == Error || func == isError || func == std.Error.raise || func == std.Error.toString || func == std.Type.of || func == Error.raise;
         if !isDiag {
           let j = 0;
           while j < args.length {
             if args[j] != null && isErrorVal(args[j]) {
-              let nativeName = if func.name == null { "?" } else { func.name };
+              let nativeName = if func.name == null || isError(func.name) { "?" } else { func.name };
               return { type: "Error", value: std.Error.raise("TypeMismatch", "attempt to pass error value as argument to " + nativeName, args[j].value), propagate: false };
             }
             j = j + 1;
           }
         }
-        // Unwrap args to raw values, call via the host, wrap the result as { type, value }
+        // Unwrap args: Null-tagged wrappers always become raw null (null
+        // travels unwrapped in the boot); host natives additionally unwrap the
+        // other scalar/array/error tags. Wrapped objects, functions and type
+        // values stay wrapped (their members are boot values, not raw ones).
         let rawArgs = [];
         let i = 0;
         while i < args.length {
           let a = args[i];
-          // Unwrap boot wrappers ({type, value}) only when the "type" probe is a
-          // real string; raw host objects (std.JSON.parse results, nested objects
-          // returned by natives) have no "type" field and would probe as an
-          // UndefinedField error VALUE (never null), which must keep them intact.
-          if std.Type.of(a) == "Object" && a != null && std.Type.of(a["type"]) == "String" && a["type"] != "Object" && a["type"] != "Function" {
+          // Probe the wrapper tag; raw host values probe as an error VALUE
+          // (never null), which must keep them intact.
+          let tag = a["type"];
+          if isError(tag) { tag = null; }
+          if tag == "Null" {
+            rawArgs[rawArgs.length] = null;
+          } else if isNative && tag != "Object" && tag != "Function" && tag != "Type" {
             rawArgs[rawArgs.length] = a.value;
           } else {
             rawArgs[rawArgs.length] = a;
           }
           i = i + 1;
         }
-        // Native args are spread positionally (func(a) / func(a, b)); never pass the array as a whole
+        // Args are spread positionally (func(a) / func(a, b)); never pass the array as a whole
         let raw = if rawArgs.length == 1 { func(rawArgs[0]); }
         else if rawArgs.length == 2 { func(rawArgs[0], rawArgs[1]); }
         else if rawArgs.length == 3 { func(rawArgs[0], rawArgs[1], rawArgs[2]); }
         else if rawArgs.length == 4 { func(rawArgs[0], rawArgs[1], rawArgs[2], rawArgs[3]); }
         else { func(rawArgs); };
-        if std.Type.of(raw) == "Null" {
+        // Note: the isError check must come BEFORE `raw == null` — comparing
+        // an error operand with == yields an error value, which is truthy and
+        // would wrongly take the null branch.
+        if isError(raw) {
+          // Error results get the dedicated wrapper
+          { type: "Error", value: raw, propagate: false };
+        } else if raw == null {
           { type: "Null", value: null };
         } else {
-          // Note: this boot source runs in the host interpreter, so std.Type.of(raw)
-          // returns a raw string directly; error results get the dedicated wrapper
-          let t = std.Type.of(raw);
-          if t == "Error" {
-            { type: "Error", value: raw, propagate: false };
-          } else {
-            { type: t, value: raw };
-          };
+          // Wrapper tag is the STRING type name from typeTag (stdlib.ql);
+          // std.Type.of now returns type VALUES, which cannot serve as tags
+          { type: typeTag(raw), value: raw };
         };
       } else {
         // Other wrapped types are not callable

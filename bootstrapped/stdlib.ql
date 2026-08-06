@@ -1,180 +1,19 @@
 // QLang Standard Library - Ultra simplified version
-// Note: do NOT shadow the built-in std (keep native implementations like
-// Number.toString / Type.of); only add methods missing from the Rust std (String.toChars)
-
-let Array = {
-  length: (arr) -> {
-    let count = 0;
-    let i = 0;
-    while i < arr.length {
-      count = count + 1;
-      i = i + 1;
-    }
-    count;
-  },
-  get: (arr) -> (idx) -> {
-    let len = arr.length;
-    let i = idx;
-    if i < 0 { i = len + i; }
-    if i < 0 { null; }
-    else if i >= len { null; }
-    else {
-      let j = 0;
-      let result = null;
-      while j < len {
-        if j == i { result = arr[j]; }
-        j = j + 1;
-      }
-      result;
-    };
-  },
-  push: (arr) -> (elem) -> {
-    arr[arr.length] = elem;
-    arr;
-  },
-  reverse: (arr) -> {
-    let len = arr.length;
-    let result = [];
-    let i = 0;
-    while i < len {
-      result[i] = arr[len - 1 - i];
-      i = i + 1;
-    }
-    result;
-  },
-  indexOf: (arr) -> (elem) -> {
-    let found = -1;
-    let i = 0;
-    while i < arr.length {
-      if arr[i] == elem { found = i; }
-      i = i + 1;
-    }
-    found;
-  },
-  includes: (arr) -> (elem) -> {
-    let found = false;
-    let i = 0;
-    while i < arr.length {
-      if arr[i] == elem { found = true; }
-      i = i + 1;
-    }
-    found;
-  },
-};
-
-let String = {
-  toChars: (s) -> {
-    let parts = [];
-    let i = 0;
-    while i < s.length {
-      parts[parts.length] = s[i];
-      i = i + 1;
-    }
-    parts;
-  },
-  length: (s) -> {
-    let len = 0;
-    let i = 0;
-    while i < s.length {
-      len = len + 1;
-      i = i + 1;
-    }
-    len;
-  },
-  includes: (s) -> (sub) -> {
-    let found = false;
-    let i = 0;
-    while i < s.length {
-      let match = true;
-      let j = 0;
-      while j < sub.length {
-        if i + j >= s.length { match = false; }
-        else if s[i + j] != sub[j] { match = false; }
-        j = j + 1;
-      }
-      if match { found = true; }
-      i = i + 1;
-    }
-    found;
-  },
-  repeat: (s) -> (n) -> {
-    let result = "";
-    let i = 0;
-    while i < n {
-      result = result + s;
-      i = i + 1;
-    }
-    result;
-  },
-  trim: (s) -> {
-    let start = 0;
-    while start < s.length {
-      if s[start] == " " { start = start + 1; }
-      else { start = s.length; };
-    }
-    let end = s.length;
-    while end > start {
-      if s[end - 1] == " " { end = end - 1; }
-      else { end = 0; };
-    }
-    let result = "";
-    let i = start;
-    while i < end {
-      result = result + s[i];
-      i = i + 1;
-    }
-    result;
-  },
-  split: (s) -> (sep) -> {
-    // Handle empty separator - return array of single characters
-    if sep.length == 0 {
-      let parts = [];
-      let i = 0;
-      while i < s.length {
-        parts[parts.length] = s[i];
-        i = i + 1;
-      }
-      parts;
-    } else {
-      let parts = [];
-      let current = "";
-      let i = 0;
-      while i < s.length {
-        let match = true;
-        let j = 0;
-        while j < sep.length {
-          if i + j >= s.length { match = false; }
-          else if s[i + j] != sep[j] { match = false; }
-          j = j + 1;
-        }
-        if match {
-          parts[parts.length] = current;
-          current = "";
-          i = i + sep.length;
-        } else {
-          current = current + s[i];
-          i = i + 1;
-        }
-      }
-      parts[parts.length] = current;
-      parts;
-    }
-  },
-  toString: (v) -> {
-    if v == null { "null"; }
-    else if v == true { "true"; }
-    else if v == false { "false"; }
-    else { v; };
-  },
-};
-
-let Object = {
-  keys: (obj) -> { [] },
-  get: (obj) -> (key) -> obj[key],
-  set: (obj) -> (key) -> (val) -> { obj[key] = val; obj; },
-  values: (obj) -> { [] },
-  merge: (a) -> (b) -> { a; },
-};
+//
+// Task 10: this module carries the boot's OWN type library (type constants,
+// the merged Type module with check/of/make, the Array/Object constructors and
+// the Error type object) as plain QLang objects/functions. The old stub
+// modules (Array/String/Object/Number/Boolean) are replaced by the constants/
+// constructors: the boot's real std access goes through the host's `std`
+// object, whose only missing piece is std.Object.entries (added below).
+//
+// Cross-interpreter identity (host run_import creates a fresh Interpreter per
+// imported file): comparing std.Type.of(x) against a constant defined in
+// ANOTHER module is always false (type-value Rcs are per-interpreter). All
+// comparisons inside this module therefore use either boot-wrapper fields
+// (v.type == "..."), the host isError() native, or the HOST type values
+// captured below (__host* — same source as std.Type.of's results at capture
+// time, i.e. the host std.Type before it is replaced).
 
 let Math = {
   sqrt: (n) -> { if n < 0 { 0; } else { n; }; },
@@ -191,74 +30,264 @@ let Math = {
   PI: 3.14159,
 };
 
-let Number = {
-  isFinite: (n) -> n.type == "Number",
-  isNaN: (n) -> n.type != "Number",
-  parseFloat: (s) -> {
-    let result = 0;
-    let i = 0;
-    let hasDecimal = false;
-    let decimalDiv = 1;
-    while i < s.length {
-      let c = s[i];
-      let digit = 0;
-      if c == "0" { digit = 0; }
-      else if c == "1" { digit = 1; }
-      else if c == "2" { digit = 2; }
-      else if c == "3" { digit = 3; }
-      else if c == "4" { digit = 4; }
-      else if c == "5" { digit = 5; }
-      else if c == "6" { digit = 6; }
-      else if c == "7" { digit = 7; }
-      else if c == "8" { digit = 8; }
-      else if c == "9" { digit = 9; }
-      else if c == "." { digit = -1; }
-      else { digit = -2; }
-      if digit >= 0 {
-        if hasDecimal { decimalDiv = decimalDiv * 10; }
-        result = result * 10 + digit;
-      } else if digit == -1 {
-        hasDecimal = true;
-      }
-      i = i + 1;
-    }
-    if hasDecimal { result / decimalDiv; } else { result; }
-  },
-};
-
-let Type = {
-  of: (v) -> {
-    if v == null { "Null"; }
-    else if v.type == "Number" { "Number"; }
-    else if v.type == "String" { "String"; }
-    else if v.type == "Array" { "Array"; }
-    else if v.type == "Object" { "Object"; }
-    else if v.type == "Function" { "Function"; }
-    else { "Unknown"; };
-  },
-};
-
 let JSON = {
   stringify: (v) -> std.String.toString(v),
   parse: (s) -> s,
 };
 
-let Boolean = {
+// ---- Task 10: boot type library ----
+
+// Host type machinery captured BEFORE the boot constants shadow the names and
+// BEFORE std.Type is replaced below: the host std.Type.of native and the host
+// type values it returns. Same-source comparisons (t == __hostX) are safe.
+let __hostTypeOf = std.Type.of;
+let __hostNumber = Number;
+let __hostString = String;
+let __hostBoolean = Boolean;
+let __hostNull = Null;
+let __hostAnyArray = AnyArray;
+let __hostAnyObject = AnyObject;
+let __hostFunction = Function;
+let __hostError = Error;
+let __hostType = __hostTypeOf(Number);
+
+// 类型值判定:对象且带可调用 check 成员。boot 的类型常量是 {check: <函数>}
+// 对象(std.Type.make 产物同理);boot 用户函数是 {type: "Function", ...} 记录,
+// 作为 check 成员时其 .type 探测为 "Function"。包装值(无 check)与普通对象
+// (check 非函数)均判否。注意:表达式不得跨行(host 解析器以换行结束语句)。
+let isTypeValue = (v) -> v != null && (__hostTypeOf(v.check) == __hostFunction || v.check.type == "Function");
+
+// 9 个类型常量 + Error 类型对象。判定基于 boot 值包装 {type, value}(null 无
+// 包装):调用路径(interpreter.ql)对宿主 QLang 函数传包装值,对宿主原生传裸值,
+// null 一律裸传,故 check 直接探测包装字段即可。
+let Number   = { check: (v) -> v != null && v.type == "Number" };
+let String   = { check: (v) -> v != null && v.type == "String" };
+let Boolean  = { check: (v) -> v != null && v.type == "Boolean" };
+let Null     = { check: (v) -> v == null };
+let AnyArray = { check: (v) -> v != null && v.type == "Array" };
+let AnyObject= { check: (v) -> v != null && v.type == "Object" && !isTypeValue(v) };
+// boot 函数记录的包装标签是大写 "Function"(brief 的 "function"/"native" 一并
+// 兼容);裸原生函数在宿主探测下无 type 字段(brief 注明的变体)。
+let Function = { check: (v) -> v != null && (v.type == "Function" || v.type == "function" || v.type == "native") };
+let Any      = { check: (v) -> true };
+let Never    = { check: (v) -> false };
+// Error 类型对象:raise 复用宿主 Error 类型对象的原生构造器(arity 不定,
+// (msg) / (msg, cause) 均可用;boot 的 QLang 函数无法表达可选参数,且部分应用
+// 会把 1 参调用变成柯里化函数,故直接挂原生)。
+let Error    = { check: (v) -> v != null && v.type == "Error",
+                 raise: Error.raise };
+
+// 合并的 Type 模块(模块兼类型值):check / of / make。of 接收包装值
+// (调用路径保证),常量一律返回本模块内同源对象(互比安全)。
+let Type = {
+  check: (v) -> isTypeValue(v),
   of: (v) -> {
-    if v == null { false; }
-    else if v == 0 { false; }
-    else if v == "" { false; }
-    else if v == false { false; }
-    else { true; };
+    if v == null { Null; }
+    else if isTypeValue(v) { Type; }
+    else if v.type == "Number" { Number; }
+    else if v.type == "String" { String; }
+    else if v.type == "Boolean" { Boolean; }
+    else if v.type == "Array" { AnyArray; }
+    else if v.type == "Object" { AnyObject; }
+    else if v.type == "Function" || v.type == "function" || v.type == "native" { Function; }
+    else if v.type == "Error" { Error; }
+    else { Type; };
   },
+  make: (f) -> { return { check: f }; },
 };
+
+// boot 对象包装的 entries(host 的 std.Object 无 entries):obj 是
+// {type:"Object", value: 字段表},返回 [[key, value], ...](value 为字段值)。
+let __objectEntries = (obj) -> {
+  let fields = obj.value;
+  let keys = std.Object.keys(fields);
+  let out = [];
+  let i = 0;
+  while i < keys.length {
+    out[out.length] = [keys[i], fields[keys[i]]];
+    i = i + 1;
+  };
+  out;
+};
+std.Object.entries = __objectEntries;
+
+// 逐元素检查骨架(注意:boot 的 stdlib 没有 forEach,用 while)
+let allMatch = (arr, check) -> {
+  let ok = true;
+  let i = 0;
+  while i < arr.length && ok {
+    let r = check(arr[i]);
+    if r == null || r == false || isError(r) { ok = false; };
+    i = i + 1;
+  };
+  ok;
+};
+
+// Array 构造器:union 参数(Number | Type | [Type] | {length, element})
+// mode: { length: Number|null, element: check|null, tuple: [check]|null }
+let arrayCheck = (mode) -> (v) -> {
+  if v == null || v.type != "Array" { false; }
+  else if mode.length != null {
+    if v.value.length != mode.length { false; }
+    else if mode.element != null { allMatch(v.value, mode.element); }
+    else { true; };
+  }
+  else if mode.tuple != null {
+    if v.value.length != mode.tuple.length { false; }
+    else {
+      let ok = true;
+      let i = 0;
+      while i < mode.tuple.length && ok {
+        let r = mode.tuple[i](v.value[i]);
+        if r == null || r == false || isError(r) { ok = false; };
+        i = i + 1;
+      };
+      ok;
+    };
+  }
+  else if mode.element != null { allMatch(v.value, mode.element); }
+  else { true; };
+};
+
+let Array = (x) -> {
+  // 注意:裸值(如类型常量)的 x.type 探测是错误值,error == "X" 也是错误值
+  // (truthy)——必须先 !isError(x.type) 再比较标签,否则裸常量会误入定长分支。
+  if x != null && !isError(x.type) && x.type == "Number" && x.value >= 0 && x.value % 1 == 0 {
+    Type.make(arrayCheck({ length: x.value, element: null, tuple: null }));
+  }
+  else if isTypeValue(x) {
+    Type.make(arrayCheck({ length: null, element: x.check, tuple: null }));
+  }
+  else if x != null && !isError(x.type) && x.type == "Array" {
+    // [Type] 成员:逐位类型(构造时验证每个元素都是类型)
+    let checks = [];
+    let i = 0;
+    while i < x.value.length {
+      let t = x.value[i];
+      if !isTypeValue(t) {
+        return std.Error.raise("TypeMismatch", "Array: tuple elements must all be type values", null);
+      };
+      checks[checks.length] = t.check;
+      i = i + 1;
+    };
+    Type.make(arrayCheck({ length: null, element: null, tuple: checks }));
+  }
+  else if x != null && !isError(x.type) && x.type == "Object" && !isTypeValue(x) {
+    // {length, element} 元数据成员
+    let length = x.value["length"];
+    let element = x.value["element"];
+    if length == null || length.type != "Number" || length.value < 0 || length.value % 1 != 0 {
+      std.Error.raise("TypeMismatch", "Array: metadata must have a non-negative integer 'length'", null);
+    }
+    else if element == null || !isTypeValue(element) {
+      std.Error.raise("TypeMismatch", "Array: metadata must have a type 'element'", null);
+    }
+    else {
+      Type.make(arrayCheck({ length: length.value, element: element.check, tuple: null }));
+    };
+  }
+  else {
+    std.Error.raise("TypeMismatch", "Array: argument must be a length, a type, a list of types, or {length, element}", null);
+  };
+};
+
+// Object 构造器:union 参数(Type | 形状对象)
+let Object = (x) -> {
+  if isTypeValue(x) {
+    // Type 成员:keys 全为 T(Object(String) ≡ AnyObject)
+    Type.make((v) -> {
+      if v == null || v.type != "Object" || isTypeValue(v) { false; }
+      else {
+        // boot 包装的对象:字段在 v.value;keys 为裸字符串,先包成
+        // {type:"String", value: key} 再喂给 key 检查(检查接收包装值)。
+        let keys = std.Object.keys(v.value);
+        let ok = true;
+        let i = 0;
+        while i < keys.length && ok {
+          let r = x.check({ type: "String", value: keys[i] });
+          if r == null || r == false || isError(r) { ok = false; };
+          i = i + 1;
+        };
+        ok;
+      };
+    });
+  }
+  else if x != null && !isError(x.type) && x.type == "Object" && !isTypeValue(x) {
+    // 形状对象成员:schema(构造时验证值都是类型;缺字段/字段不符 → false)
+    let entries = std.Object.entries(x);
+    let i = 0;
+    while i < entries.length {
+      if !isTypeValue(entries[i][1]) {
+        return std.Error.raise("TypeMismatch", "Object: schema field '" + entries[i][0] + "' is not a type value", null);
+      };
+      i = i + 1;
+    };
+    Type.make((v) -> {
+      if v == null || v.type != "Object" || isTypeValue(v) { false; }
+      else {
+        let ok = true;
+        let j = 0;
+        while j < entries.length && ok {
+          let key = entries[j][0];
+          let fv = v.value[key];
+          if fv == null {
+            ok = false; // 缺字段
+          }
+          else {
+            let r = entries[j][1].check(fv);
+            if r == null || r == false || isError(r) { ok = false; };
+          };
+          j = j + 1;
+        };
+        ok;
+      };
+    });
+  }
+  else {
+    std.Error.raise("TypeMismatch", "Object: argument must be a type (keys) or a shape object (schema)", null);
+  };
+};
+
+// std.String.toChars:宿主 std.String 没有该方法,但 boot 的 lexer 依赖它
+// (把源码转成字符数组)。保持旧 stdlib 的附加方式(仅补宿主缺失的方法)。
+let __toChars = (s) -> {
+  let parts = [];
+  let i = 0;
+  while i < s.length {
+    parts[parts.length] = s[i];
+    i = i + 1;
+  }
+  parts;
+};
+std.String.toChars = __toChars;
+
+// 裸宿主值 -> 包装类型名(字符串)。host 的 std.Type.of 现在返回类型值(对象),
+// 不能直接用作包装标签;interpreter.ql 的包装点经此函数取字符串标签。
+// 只处理裸值(包装值按对象处理);与 __host* 常量同源互比。
+let typeTag = (raw) -> {
+  let t = __hostTypeOf(raw);
+  if t == __hostNumber { "Number"; }
+  else if t == __hostString { "String"; }
+  else if t == __hostBoolean { "Boolean"; }
+  else if t == __hostNull { "Null"; }
+  else if t == __hostAnyArray { "Array"; }
+  else if t == __hostAnyObject { "Object"; }
+  else if t == __hostFunction { "Function"; }
+  else if t == __hostError { "Error"; }
+  else if t == __hostType { "Type"; }
+  else { "Unknown"; };
+};
+
+// 替换宿主 std.Type:用户代码的 std.Type 必须是本模块的合并 Type(其 of 返回
+// 本模块同源常量,boot 内互比安全)。宿主原生 Type.of 已在上方捕获为
+// __hostTypeOf。
+std.Type = Type;
 
 let fs = {
   readFileText: (path) -> "",
 };
 
-// Only add methods missing from the Rust std
-std.String.toChars = String.toChars;
-std.String.repeat = String.repeat;
-
-export std;
+// 导出类型库:interpreter.ql 用它填充 boot 全局环境(Number/String/.../
+// Array/Object/Type)与包装点(typeTag);宿主 std 对象经 std.Type 替换后由
+// 用户代码经 std.Type.* 访问。
+export { std, isTypeValue, Number, String, Boolean, Null, AnyArray, AnyObject, Function, Any, Never, Error, Array, Object, Type, typeTag };
