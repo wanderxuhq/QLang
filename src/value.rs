@@ -91,16 +91,23 @@ pub struct FunctionValue {
     pub closure: EnvRef,
 }
 
+/// Call-back interface natives use to invoke user functions (e.g. type-check closures).
+pub trait CallContext {
+    fn call(&mut self, callee: Value, args: Vec<Value>, span: Span) -> Result<Value, RuntimeError>;
+}
+
 /// Native function
 pub struct NativeFunction {
     pub name: String,
     pub arity: Option<usize>,
-    pub func: Box<dyn Fn(Vec<Value>) -> Result<Value, RuntimeError> + 'static>,
+    /// Whether this native may receive error values as arguments (diagnostic natives).
+    pub accepts_errors: bool,
+    pub func: Box<dyn Fn(&mut dyn CallContext, Vec<Value>) -> Result<Value, RuntimeError> + 'static>,
 }
 
 impl NativeFunction {
-    pub fn new(name: String, arity: Option<usize>, func: Box<dyn Fn(Vec<Value>) -> Result<Value, RuntimeError> + 'static>) -> Self {
-        NativeFunction { name, arity, func }
+    pub fn new(name: String, arity: Option<usize>, func: Box<dyn Fn(&mut dyn CallContext, Vec<Value>) -> Result<Value, RuntimeError> + 'static>) -> Self {
+        NativeFunction { name, arity, accepts_errors: false, func }
     }
 }
 
@@ -117,7 +124,8 @@ impl Clone for NativeFunction {
         NativeFunction {
             name: self.name.clone(),
             arity: self.arity,
-            func: Box::new(move |_args| Err(RuntimeError::NotCallable("cloned native function".to_string()))),
+            accepts_errors: self.accepts_errors,
+            func: Box::new(move |_ctx, _args| Err(RuntimeError::NotCallable("cloned native function".to_string()))),
         }
     }
 }

@@ -35,7 +35,8 @@ pub fn register_builtins(env: &EnvRef) {
     env_mut.define("print".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "print".to_string(),
         arity: Some(1),
-        func: Box::new(|args| {
+        accepts_errors: true,
+        func: Box::new(|_ctx, args| {
             if let Some(value) = args.first() {
                 print!("{}", value.to_string());
             }
@@ -45,7 +46,8 @@ pub fn register_builtins(env: &EnvRef) {
     env_mut.define("println".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "println".to_string(),
         arity: Some(1),
-        func: Box::new(|args| {
+        accepts_errors: true,
+        func: Box::new(|_ctx, args| {
             if let Some(value) = args.first() {
                 println!("{}", value.to_string());
             }
@@ -57,7 +59,8 @@ pub fn register_builtins(env: &EnvRef) {
     env_mut.define("isError".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "isError".to_string(),
         arity: Some(1),
-        func: Box::new(|args| {
+        accepts_errors: true,
+        func: Box::new(|_ctx, args| {
             Ok(Value::Boolean(matches!(args.first(), Some(Value::Error(_)))))
         }),
     })));
@@ -66,7 +69,8 @@ pub fn register_builtins(env: &EnvRef) {
     env_mut.define("Error".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "Error".to_string(),
         arity: None,  // 1 或 2 个参数
-        func: Box::new(|args| {
+        accepts_errors: true,
+        func: Box::new(|_ctx, args| {
             let msg = match args.first() {
                 Some(Value::String(s)) => s.clone(),
                 Some(v) => v.to_string(),
@@ -90,7 +94,8 @@ pub fn register_builtins(env: &EnvRef) {
     env_mut.define("debug".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "debug".to_string(),
         arity: Some(1),
-        func: Box::new(|args| {
+        accepts_errors: false,
+        func: Box::new(|_ctx, args| {
             if let Some(value) = args.first() {
                 eprintln!("[DEBUG] {:?}", value);
             }
@@ -102,7 +107,8 @@ pub fn register_builtins(env: &EnvRef) {
     env_mut.define("input".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "input".to_string(),
         arity: Some(0),
-        func: Box::new(|_args| {
+        accepts_errors: false,
+        func: Box::new(|_ctx, _args| {
             let mut input = String::new();
             match io::stdin().read_line(&mut input) {
                 Ok(_) => {
@@ -154,7 +160,8 @@ fn create_math_module() -> Value {
     fields.insert("abs".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "Math.abs".to_string(),
         arity: Some(1),
-        func: Box::new(|args| {
+        accepts_errors: false,
+        func: Box::new(|_ctx, args| {
             match args.first() {
                 Some(Value::Number(n)) => Ok(Value::Number(n.abs())),
                 _ => Ok(type_mismatch_error("Math.abs", args.first().map(|v| v.type_name().to_string()).unwrap_or("none".to_string()), "Number".to_string())),
@@ -166,7 +173,8 @@ fn create_math_module() -> Value {
     fields.insert("floor".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "Math.floor".to_string(),
         arity: Some(1),
-        func: Box::new(|args| {
+        accepts_errors: false,
+        func: Box::new(|_ctx, args| {
             match args.first() {
                 Some(Value::Number(n)) => Ok(Value::Number(n.floor())),
                 _ => Ok(type_mismatch_error("Math.floor", args.first().map(|v| v.type_name().to_string()).unwrap_or("none".to_string()), "Number".to_string())),
@@ -178,7 +186,8 @@ fn create_math_module() -> Value {
     fields.insert("ceil".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "Math.ceil".to_string(),
         arity: Some(1),
-        func: Box::new(|args| {
+        accepts_errors: false,
+        func: Box::new(|_ctx, args| {
             match args.first() {
                 Some(Value::Number(n)) => Ok(Value::Number(n.ceil())),
                 _ => Ok(type_mismatch_error("Math.ceil", args.first().map(|v| v.type_name().to_string()).unwrap_or("none".to_string()), "Number".to_string())),
@@ -190,7 +199,8 @@ fn create_math_module() -> Value {
     fields.insert("round".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "Math.round".to_string(),
         arity: Some(1),
-        func: Box::new(|args| {
+        accepts_errors: false,
+        func: Box::new(|_ctx, args| {
             match args.first() {
                 Some(Value::Number(n)) => Ok(Value::Number(n.round())),
                 _ => Ok(type_mismatch_error("Math.round", args.first().map(|v| v.type_name().to_string()).unwrap_or("none".to_string()), "Number".to_string())),
@@ -202,7 +212,8 @@ fn create_math_module() -> Value {
     fields.insert("sqrt".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "Math.sqrt".to_string(),
         arity: Some(1),
-        func: Box::new(|args| {
+        accepts_errors: false,
+        func: Box::new(|_ctx, args| {
             match args.first() {
                 Some(Value::Number(n)) => {
                     if *n >= 0.0 {
@@ -220,14 +231,16 @@ fn create_math_module() -> Value {
     fields.insert("pow".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "Math.pow".to_string(),
         arity: Some(1),
-        func: Box::new(|args| {
+        accepts_errors: false,
+        func: Box::new(|_ctx, args| {
             match args.first() {
                 Some(Value::Number(base)) => {
                     let base_val = *base;
                     Ok(Value::NativeFunction(Rc::new(NativeFunction {
                         name: "Math.pow<curried>".to_string(),
                         arity: Some(1),
-                        func: Box::new(move |inner_args| {
+                        accepts_errors: false,
+                        func: Box::new(move |_ctx, inner_args| {
                             match inner_args.first() {
                                 Some(Value::Number(exp)) => Ok(Value::Number(base_val.powf(*exp))),
                                 _ => Ok(type_mismatch_error("Math.pow", inner_args.first().map(|v| v.type_name().to_string()).unwrap_or("none".to_string()), "Number".to_string())),
@@ -244,7 +257,8 @@ fn create_math_module() -> Value {
     fields.insert("max".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "Math.max".to_string(),
         arity: None,
-        func: Box::new(|args| {
+        accepts_errors: false,
+        func: Box::new(|_ctx, args| {
             let mut max_val = std::f64::MIN;
             for arg in args {
                 match arg {
@@ -266,7 +280,8 @@ fn create_math_module() -> Value {
     fields.insert("min".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "Math.min".to_string(),
         arity: None,
-        func: Box::new(|args| {
+        accepts_errors: false,
+        func: Box::new(|_ctx, args| {
             let mut min_val = std::f64::MAX;
             for arg in args {
                 match arg {
@@ -288,7 +303,8 @@ fn create_math_module() -> Value {
     fields.insert("random".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "Math.random".to_string(),
         arity: Some(0),
-        func: Box::new(|_args| {
+        accepts_errors: false,
+        func: Box::new(|_ctx, _args| {
             Ok(Value::Number(rand::random()))
         }),
     })));
@@ -297,7 +313,8 @@ fn create_math_module() -> Value {
     fields.insert("sin".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "Math.sin".to_string(),
         arity: Some(1),
-        func: Box::new(|args| {
+        accepts_errors: false,
+        func: Box::new(|_ctx, args| {
             match args.first() {
                 Some(Value::Number(n)) => Ok(Value::Number(n.sin())),
                 _ => Ok(type_mismatch_error("Math.sin", args.first().map(|v| v.type_name().to_string()).unwrap_or("none".to_string()), "Number".to_string())),
@@ -309,7 +326,8 @@ fn create_math_module() -> Value {
     fields.insert("cos".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "Math.cos".to_string(),
         arity: Some(1),
-        func: Box::new(|args| {
+        accepts_errors: false,
+        func: Box::new(|_ctx, args| {
             match args.first() {
                 Some(Value::Number(n)) => Ok(Value::Number(n.cos())),
                 _ => Ok(type_mismatch_error("Math.cos", args.first().map(|v| v.type_name().to_string()).unwrap_or("none".to_string()), "Number".to_string())),
@@ -321,7 +339,8 @@ fn create_math_module() -> Value {
     fields.insert("trunc".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "Math.trunc".to_string(),
         arity: Some(1),
-        func: Box::new(|args| {
+        accepts_errors: false,
+        func: Box::new(|_ctx, args| {
             match args.first() {
                 Some(Value::Number(n)) => Ok(Value::Number(n.trunc())),
                 _ => Ok(type_mismatch_error("Math.trunc", args.first().map(|v| v.type_name().to_string()).unwrap_or("none".to_string()), "Number".to_string())),
@@ -340,7 +359,8 @@ fn create_json_module() -> Value {
     fields.insert("stringify".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "JSON.stringify".to_string(),
         arity: Some(1),
-        func: Box::new(|args| {
+        accepts_errors: false,
+        func: Box::new(|_ctx, args| {
             match args.first() {
                 Some(value) => Ok(Value::String(json_stringify(value))),
                 _ => Ok(Value::String("null".to_string())),
@@ -352,7 +372,8 @@ fn create_json_module() -> Value {
     fields.insert("parse".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "JSON.parse".to_string(),
         arity: Some(1),
-        func: Box::new(|args| {
+        accepts_errors: false,
+        func: Box::new(|_ctx, args| {
             match args.first() {
                 Some(Value::String(s)) => json_parse(s),
                 _ => Ok(type_mismatch_error("JSON.parse", args.first().map(|v| v.type_name().to_string()).unwrap_or("none".to_string()), "String".to_string())),
@@ -624,7 +645,8 @@ fn create_array_module() -> Value {
     fields.insert("length".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "Array.length".to_string(),
         arity: Some(1),
-        func: Box::new(|args| {
+        accepts_errors: false,
+        func: Box::new(|_ctx, args| {
             match args.first() {
                 Some(Value::Array(arr)) => Ok(Value::Number(arr.borrow().len() as f64)),
                 _ => Ok(type_mismatch_error("Array.length", args.first().map(|v| v.type_name().to_string()).unwrap_or("none".to_string()), "Array".to_string())),
@@ -636,7 +658,8 @@ fn create_array_module() -> Value {
     fields.insert("toString".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "Array.toString".to_string(),
         arity: Some(1),
-        func: Box::new(|args| {
+        accepts_errors: false,
+        func: Box::new(|_ctx, args| {
             match args.first() {
                 Some(Value::Array(arr)) => {
                     let elements: Vec<String> = arr.borrow().iter()
@@ -654,14 +677,16 @@ fn create_array_module() -> Value {
     fields.insert("add".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "Array.add".to_string(),
         arity: Some(1),
-        func: Box::new(|args| {
+        accepts_errors: false,
+        func: Box::new(|_ctx, args| {
             match args.first() {
                 Some(Value::Array(arr)) => {
                     let arr_clone = Rc::clone(arr);
                     Ok(Value::NativeFunction(Rc::new(NativeFunction {
                         name: "Array.add<curried>".to_string(),
                         arity: Some(1),
-                        func: Box::new(move |inner_args| {
+                        accepts_errors: false,
+                        func: Box::new(move |_ctx, inner_args| {
                             if let Some(element) = inner_args.first() {
                                 arr_clone.borrow_mut().push(element.clone());
                             }
@@ -678,14 +703,16 @@ fn create_array_module() -> Value {
     fields.insert("remove".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "Array.remove".to_string(),
         arity: Some(1),
-        func: Box::new(|args| {
+        accepts_errors: false,
+        func: Box::new(|_ctx, args| {
             match args.first() {
                 Some(Value::Array(arr)) => {
                     let arr_clone = Rc::clone(arr);
                     Ok(Value::NativeFunction(Rc::new(NativeFunction {
                         name: "Array.remove<curried>".to_string(),
                         arity: Some(1),
-                        func: Box::new(move |inner_args| {
+                        accepts_errors: false,
+                        func: Box::new(move |_ctx, inner_args| {
                             if let Some(Value::Number(idx)) = inner_args.first() {
                                 let len = arr_clone.borrow().len();
                                 if let Ok(index) = normalize_index(*idx, len) {
@@ -705,14 +732,16 @@ fn create_array_module() -> Value {
     fields.insert("push".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "Array.push".to_string(),
         arity: Some(1),
-        func: Box::new(|args| {
+        accepts_errors: false,
+        func: Box::new(|_ctx, args| {
             match args.first() {
                 Some(Value::Array(arr)) => {
                     let arr_clone = Rc::clone(arr);
                     Ok(Value::NativeFunction(Rc::new(NativeFunction {
                         name: "Array.push<curried>".to_string(),
                         arity: Some(1),
-                        func: Box::new(move |inner_args| {
+                        accepts_errors: false,
+                        func: Box::new(move |_ctx, inner_args| {
                             if let Some(element) = inner_args.first() {
                                 arr_clone.borrow_mut().push(element.clone());
                             }
@@ -729,14 +758,16 @@ fn create_array_module() -> Value {
     fields.insert("pop".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "Array.pop".to_string(),
         arity: Some(1),
-        func: Box::new(|args| {
+        accepts_errors: false,
+        func: Box::new(|_ctx, args| {
             match args.first() {
                 Some(Value::Array(arr)) => {
                     let arr_clone = Rc::clone(arr);
                     Ok(Value::NativeFunction(Rc::new(NativeFunction {
                         name: "Array.pop<curried>".to_string(),
                         arity: Some(0),
-                        func: Box::new(move |_inner_args| {
+                        accepts_errors: false,
+                        func: Box::new(move |_ctx, _inner_args| {
                             let mut borrowed = arr_clone.borrow_mut();
                             if !borrowed.is_empty() {
                                 Ok(borrowed.pop().unwrap_or(Value::Void))
@@ -755,14 +786,16 @@ fn create_array_module() -> Value {
     fields.insert("get".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "Array.get".to_string(),
         arity: Some(1),
-        func: Box::new(|args| {
+        accepts_errors: false,
+        func: Box::new(|_ctx, args| {
             match args.first() {
                 Some(Value::Array(arr)) => {
                     let arr_clone = Rc::clone(arr);
                     Ok(Value::NativeFunction(Rc::new(NativeFunction {
                         name: "Array.get<curried>".to_string(),
                         arity: Some(1),
-                        func: Box::new(move |inner_args| {
+                        accepts_errors: false,
+                        func: Box::new(move |_ctx, inner_args| {
                             if let Some(Value::Number(idx)) = inner_args.first() {
                                 let len = arr_clone.borrow().len();
                                 let index = if *idx < 0.0 {
@@ -796,14 +829,16 @@ fn create_array_module() -> Value {
     fields.insert("indexOf".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "Array.indexOf".to_string(),
         arity: Some(1),
-        func: Box::new(|args| {
+        accepts_errors: false,
+        func: Box::new(|_ctx, args| {
             match args.first() {
                 Some(Value::Array(arr)) => {
                     let arr_clone = Rc::clone(arr);
                     Ok(Value::NativeFunction(Rc::new(NativeFunction {
                         name: "Array.indexOf<curried>".to_string(),
                         arity: Some(1),
-                        func: Box::new(move |inner_args| {
+                        accepts_errors: false,
+                        func: Box::new(move |_ctx, inner_args| {
                             let target = inner_args.first().cloned().unwrap_or(Value::Void);
                             let borrowed = arr_clone.borrow();
                             let idx = borrowed.iter().position(|v| v == &target);
@@ -824,14 +859,16 @@ fn create_array_module() -> Value {
     fields.insert("includes".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "Array.includes".to_string(),
         arity: Some(1),
-        func: Box::new(|args| {
+        accepts_errors: false,
+        func: Box::new(|_ctx, args| {
             match args.first() {
                 Some(Value::Array(arr)) => {
                     let arr_clone = Rc::clone(arr);
                     Ok(Value::NativeFunction(Rc::new(NativeFunction {
                         name: "Array.includes<curried>".to_string(),
                         arity: Some(1),
-                        func: Box::new(move |inner_args| {
+                        accepts_errors: false,
+                        func: Box::new(move |_ctx, inner_args| {
                             let target = inner_args.first().cloned().unwrap_or(Value::Void);
                             let borrowed = arr_clone.borrow();
                             let found = borrowed.iter().any(|v| v == &target);
@@ -848,14 +885,16 @@ fn create_array_module() -> Value {
     fields.insert("join".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "Array.join".to_string(),
         arity: Some(1),
-        func: Box::new(|args| {
+        accepts_errors: false,
+        func: Box::new(|_ctx, args| {
             match args.first() {
                 Some(Value::Array(arr)) => {
                     let arr_clone = Rc::clone(arr);
                     Ok(Value::NativeFunction(Rc::new(NativeFunction {
                         name: "Array.join<curried>".to_string(),
                         arity: Some(1),
-                        func: Box::new(move |inner_args| {
+                        accepts_errors: false,
+                        func: Box::new(move |_ctx, inner_args| {
                             let separator = match inner_args.first() {
                                 Some(Value::String(s)) => s.clone(),
                                 _ => ",".to_string(),
@@ -877,7 +916,8 @@ fn create_array_module() -> Value {
     fields.insert("reverse".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "Array.reverse".to_string(),
         arity: Some(1),
-        func: Box::new(|args| {
+        accepts_errors: false,
+        func: Box::new(|_ctx, args| {
             match args.first() {
                 Some(Value::Array(arr)) => {
                     let borrowed = arr.borrow();
@@ -894,14 +934,16 @@ fn create_array_module() -> Value {
     fields.insert("concat".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "Array.concat".to_string(),
         arity: Some(1),
-        func: Box::new(|args| {
+        accepts_errors: false,
+        func: Box::new(|_ctx, args| {
             match args.first() {
                 Some(Value::Array(arr1)) => {
                     let arr1_clone = Rc::clone(arr1);
                     Ok(Value::NativeFunction(Rc::new(NativeFunction {
                         name: "Array.concat<curried>".to_string(),
                         arity: Some(1),
-                        func: Box::new(move |inner_args| {
+                        accepts_errors: false,
+                        func: Box::new(move |_ctx, inner_args| {
                             match inner_args.first() {
                                 Some(Value::Array(arr2)) => {
                                     let mut result = arr1_clone.borrow().clone();
@@ -924,7 +966,8 @@ fn create_array_module() -> Value {
     fields.insert("at".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "Array.at".to_string(),
         arity: Some(2),
-        func: Box::new(|args| {
+        accepts_errors: false,
+        func: Box::new(|_ctx, args| {
             match (args.first(), args.get(1)) {
                 (Some(Value::Array(arr)), Some(Value::Number(n))) => {
                     let len = arr.borrow().len();
@@ -950,7 +993,8 @@ fn create_string_module() -> Value {
     fields.insert("length".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "String.length".to_string(),
         arity: Some(1),
-        func: Box::new(|args| {
+        accepts_errors: false,
+        func: Box::new(|_ctx, args| {
             match args.first() {
                 Some(Value::String(s)) => Ok(Value::Number(s.chars().count() as f64)),
                 _ => Ok(type_mismatch_error("String.length", args.first().map(|v| v.type_name().to_string()).unwrap_or("none".to_string()), "String".to_string()))
@@ -962,7 +1006,8 @@ fn create_string_module() -> Value {
     fields.insert("concat".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "String.concat".to_string(),
         arity: Some(2),
-        func: Box::new(|args| {
+        accepts_errors: false,
+        func: Box::new(|_ctx, args| {
             match (&args[0], &args[1]) {
                 (Value::String(a), Value::String(b)) => Ok(Value::String(format!("{}{}", a, b))),
                 _ => Ok(type_mismatch_error("String.concat", args[0].type_name().to_string(), args[1].type_name().to_string())),
@@ -974,7 +1019,8 @@ fn create_string_module() -> Value {
     fields.insert("toString".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "String.toString".to_string(),
         arity: Some(1),
-        func: Box::new(|args| {
+        accepts_errors: false,
+        func: Box::new(|_ctx, args| {
             Ok(Value::String(args.first().map(|v| v.to_string()).unwrap_or_else(|| "null".to_string())))
         }),
     })));
@@ -983,7 +1029,8 @@ fn create_string_module() -> Value {
     fields.insert("trim".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "String.trim".to_string(),
         arity: Some(1),
-        func: Box::new(|args| {
+        accepts_errors: false,
+        func: Box::new(|_ctx, args| {
             match args.first() {
                 Some(Value::String(s)) => Ok(Value::String(s.trim().to_string())),
                 _ => Ok(type_mismatch_error("String.trim", args.first().map(|v| v.type_name().to_string()).unwrap_or("none".to_string()), "String".to_string()))
@@ -995,7 +1042,8 @@ fn create_string_module() -> Value {
     fields.insert("toUpperCase".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "String.toUpperCase".to_string(),
         arity: Some(1),
-        func: Box::new(|args| {
+        accepts_errors: false,
+        func: Box::new(|_ctx, args| {
             match args.first() {
                 Some(Value::String(s)) => Ok(Value::String(s.to_uppercase())),
                 _ => Ok(type_mismatch_error("String.toUpperCase", args.first().map(|v| v.type_name().to_string()).unwrap_or("none".to_string()), "String".to_string()))
@@ -1007,7 +1055,8 @@ fn create_string_module() -> Value {
     fields.insert("toLowerCase".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "String.toLowerCase".to_string(),
         arity: Some(1),
-        func: Box::new(|args| {
+        accepts_errors: false,
+        func: Box::new(|_ctx, args| {
             match args.first() {
                 Some(Value::String(s)) => Ok(Value::String(s.to_lowercase())),
                 _ => Ok(type_mismatch_error("String.toLowerCase", args.first().map(|v| v.type_name().to_string()).unwrap_or("none".to_string()), "String".to_string()))
@@ -1019,14 +1068,16 @@ fn create_string_module() -> Value {
     fields.insert("includes".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "String.includes".to_string(),
         arity: Some(1),
-        func: Box::new(|args| {
+        accepts_errors: false,
+        func: Box::new(|_ctx, args| {
             match args.first() {
                 Some(Value::String(s)) => {
                     let s_clone = s.clone();
                     Ok(Value::NativeFunction(Rc::new(NativeFunction {
                         name: "String.includes<curried>".to_string(),
                         arity: Some(1),
-                        func: Box::new(move |inner_args| {
+                        accepts_errors: false,
+                        func: Box::new(move |_ctx, inner_args| {
                             if let Some(Value::String(sub)) = inner_args.first() {
                                 Ok(Value::Boolean(s_clone.contains(sub)))
                             } else {
@@ -1044,14 +1095,16 @@ fn create_string_module() -> Value {
     fields.insert("replace".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "String.replace".to_string(),
         arity: Some(1),
-        func: Box::new(|args| {
+        accepts_errors: false,
+        func: Box::new(|_ctx, args| {
             match args.first() {
                 Some(Value::String(s)) => {
                     let s_clone = s.clone();
                     Ok(Value::NativeFunction(Rc::new(NativeFunction {
                         name: "String.replace<curried1>".to_string(),
                         arity: Some(1),
-                        func: Box::new(move |inner_args| {
+                        accepts_errors: false,
+                        func: Box::new(move |_ctx, inner_args| {
                             let s_for_fallback = s_clone.clone();
                             if let Some(Value::String(old)) = inner_args.first() {
                                 let old_clone = old.clone();
@@ -1059,7 +1112,8 @@ fn create_string_module() -> Value {
                                 Ok(Value::NativeFunction(Rc::new(NativeFunction {
                                     name: "String.replace<curried2>".to_string(),
                                     arity: Some(1),
-                                    func: Box::new(move |inner_args2| {
+                                    accepts_errors: false,
+                                    func: Box::new(move |_ctx, inner_args2| {
                                         if let Some(Value::String(new)) = inner_args2.first() {
                                             let new_clone = new.clone();
                                             Ok(Value::String(s_inner.replace(&old_clone, &new_clone)))
@@ -1072,7 +1126,8 @@ fn create_string_module() -> Value {
                                 Ok(Value::NativeFunction(Rc::new(NativeFunction {
                                     name: "String.replace<curried1>".to_string(),
                                     arity: Some(1),
-                                    func: Box::new(move |_inner_args| {
+                                    accepts_errors: false,
+                                    func: Box::new(move |_ctx, _inner_args| {
                                         Ok(Value::String(s_for_fallback.clone()))
                                     }),
                                 })))
@@ -1089,14 +1144,16 @@ fn create_string_module() -> Value {
     fields.insert("split".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "String.split".to_string(),
         arity: Some(1),
-        func: Box::new(|args| {
+        accepts_errors: false,
+        func: Box::new(|_ctx, args| {
             match args.first() {
                 Some(Value::String(s)) => {
                     let s_clone = s.clone();
                     Ok(Value::NativeFunction(Rc::new(NativeFunction {
                         name: "String.split<curried>".to_string(),
                         arity: Some(1),
-                        func: Box::new(move |inner_args| {
+                        accepts_errors: false,
+                        func: Box::new(move |_ctx, inner_args| {
                             if let Some(Value::String(sep)) = inner_args.first() {
                                 let sep_clone = sep.clone();
                                 let parts: Vec<Value> = s_clone.split(&sep_clone)
@@ -1118,14 +1175,16 @@ fn create_string_module() -> Value {
     fields.insert("repeat".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "String.repeat".to_string(),
         arity: Some(1),
-        func: Box::new(|args| {
+        accepts_errors: false,
+        func: Box::new(|_ctx, args| {
             match args.first() {
                 Some(Value::String(s)) => {
                     let s_clone = s.clone();
                     Ok(Value::NativeFunction(Rc::new(NativeFunction {
                         name: "String.repeat<curried>".to_string(),
                         arity: Some(1),
-                        func: Box::new(move |inner_args| {
+                        accepts_errors: false,
+                        func: Box::new(move |_ctx, inner_args| {
                             if let Some(Value::Number(count)) = inner_args.first() {
                                 let count_val = *count;
                                 Ok(Value::String(s_clone.repeat(count_val as usize)))
@@ -1144,14 +1203,16 @@ fn create_string_module() -> Value {
     fields.insert("startsWith".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "String.startsWith".to_string(),
         arity: Some(1),
-        func: Box::new(|args| {
+        accepts_errors: false,
+        func: Box::new(|_ctx, args| {
             match args.first() {
                 Some(Value::String(s)) => {
                     let s_clone = s.clone();
                     Ok(Value::NativeFunction(Rc::new(NativeFunction {
                         name: "String.startsWith<curried>".to_string(),
                         arity: Some(1),
-                        func: Box::new(move |inner_args| {
+                        accepts_errors: false,
+                        func: Box::new(move |_ctx, inner_args| {
                             if let Some(Value::String(prefix)) = inner_args.first() {
                                 Ok(Value::Boolean(s_clone.starts_with(prefix)))
                             } else {
@@ -1169,14 +1230,16 @@ fn create_string_module() -> Value {
     fields.insert("endsWith".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "String.endsWith".to_string(),
         arity: Some(1),
-        func: Box::new(|args| {
+        accepts_errors: false,
+        func: Box::new(|_ctx, args| {
             match args.first() {
                 Some(Value::String(s)) => {
                     let s_clone = s.clone();
                     Ok(Value::NativeFunction(Rc::new(NativeFunction {
                         name: "String.endsWith<curried>".to_string(),
                         arity: Some(1),
-                        func: Box::new(move |inner_args| {
+                        accepts_errors: false,
+                        func: Box::new(move |_ctx, inner_args| {
                             if let Some(Value::String(suffix)) = inner_args.first() {
                                 Ok(Value::Boolean(s_clone.ends_with(suffix)))
                             } else {
@@ -1194,14 +1257,16 @@ fn create_string_module() -> Value {
     fields.insert("join".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "String.join".to_string(),
         arity: Some(1),
-        func: Box::new(|args| {
+        accepts_errors: false,
+        func: Box::new(|_ctx, args| {
             match args.first() {
                 Some(Value::Array(arr)) => {
                     let arr_clone = Rc::clone(arr);
                     Ok(Value::NativeFunction(Rc::new(NativeFunction {
                         name: "String.join<curried>".to_string(),
                         arity: Some(1),
-                        func: Box::new(move |inner_args| {
+                        accepts_errors: false,
+                        func: Box::new(move |_ctx, inner_args| {
                             if let Some(Value::String(sep)) = inner_args.first() {
                                 let sep_clone = sep.clone();
                                 let elements: Vec<String> = arr_clone.borrow().iter()
@@ -1225,7 +1290,8 @@ fn create_string_module() -> Value {
     fields.insert("at".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "String.at".to_string(),
         arity: Some(2),
-        func: Box::new(|args| {
+        accepts_errors: false,
+        func: Box::new(|_ctx, args| {
             match (args.first(), args.get(1)) {
                 (Some(Value::String(s)), Some(Value::Number(n))) => {
                     let chars: Vec<char> = s.chars().collect();
@@ -1252,7 +1318,8 @@ fn create_number_module() -> Value {
     fields.insert("toString".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "Number.toString".to_string(),
         arity: Some(1),
-        func: Box::new(|args| {
+        accepts_errors: false,
+        func: Box::new(|_ctx, args| {
             Ok(Value::String(args.first().map(|v| v.to_string()).unwrap_or_else(|| "null".to_string())))
         }),
     })));
@@ -1261,7 +1328,8 @@ fn create_number_module() -> Value {
     fields.insert("isNaN".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "Number.isNaN".to_string(),
         arity: Some(1),
-        func: Box::new(|args| {
+        accepts_errors: false,
+        func: Box::new(|_ctx, args| {
             match args.first() {
                 Some(Value::Number(n)) => Ok(Value::Boolean(n.is_nan())),
                 _ => Ok(Value::Boolean(false)),
@@ -1273,7 +1341,8 @@ fn create_number_module() -> Value {
     fields.insert("isFinite".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "Number.isFinite".to_string(),
         arity: Some(1),
-        func: Box::new(|args| {
+        accepts_errors: false,
+        func: Box::new(|_ctx, args| {
             match args.first() {
                 Some(Value::Number(n)) => Ok(Value::Boolean(n.is_finite())),
                 _ => Ok(Value::Boolean(false)),
@@ -1285,7 +1354,8 @@ fn create_number_module() -> Value {
     fields.insert("parseFloat".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "Number.parseFloat".to_string(),
         arity: Some(1),
-        func: Box::new(|args| {
+        accepts_errors: false,
+        func: Box::new(|_ctx, args| {
             match args.first() {
                 Some(Value::String(s)) => {
                     match s.trim().parse::<f64>() {
@@ -1309,7 +1379,8 @@ fn create_boolean_module() -> Value {
     fields.insert("toString".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "Boolean.toString".to_string(),
         arity: Some(1),
-        func: Box::new(|args| {
+        accepts_errors: false,
+        func: Box::new(|_ctx, args| {
             match args.first() {
                 Some(Value::Boolean(b)) => Ok(Value::String(b.to_string())),
                 Some(other) => Ok(Value::String(other.to_string())),
@@ -1329,7 +1400,8 @@ fn create_object_module() -> Value {
     fields.insert("keys".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "Object.keys".to_string(),
         arity: Some(1),
-        func: Box::new(|args| {
+        accepts_errors: false,
+        func: Box::new(|_ctx, args| {
             match args.first() {
                 Some(Value::Object(obj)) => {
                     let keys: Vec<Value> = obj.borrow().fields.keys()
@@ -1346,7 +1418,8 @@ fn create_object_module() -> Value {
     fields.insert("values".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "Object.values".to_string(),
         arity: Some(1),
-        func: Box::new(|args| {
+        accepts_errors: false,
+        func: Box::new(|_ctx, args| {
             match args.first() {
                 Some(Value::Object(obj)) => {
                     let values: Vec<Value> = obj.borrow().fields.values()
@@ -1363,14 +1436,16 @@ fn create_object_module() -> Value {
     fields.insert("merge".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "Object.merge".to_string(),
         arity: Some(1),
-        func: Box::new(|args| {
+        accepts_errors: false,
+        func: Box::new(|_ctx, args| {
             match args.first() {
                 Some(Value::Object(obj1)) => {
                     let obj1_clone = Rc::clone(obj1);
                     Ok(Value::NativeFunction(Rc::new(NativeFunction {
                         name: "Object.merge<curried>".to_string(),
                         arity: Some(1),
-                        func: Box::new(move |inner_args| {
+                        accepts_errors: false,
+                        func: Box::new(move |_ctx, inner_args| {
                             match inner_args.first() {
                                 Some(Value::Object(obj2)) => {
                                     let mut merged = obj1_clone.borrow().clone();
@@ -1393,14 +1468,16 @@ fn create_object_module() -> Value {
     fields.insert("hasOwn".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "Object.hasOwn".to_string(),
         arity: Some(1),
-        func: Box::new(|args| {
+        accepts_errors: false,
+        func: Box::new(|_ctx, args| {
             match args.first() {
                 Some(Value::Object(obj)) => {
                     let obj_clone = Rc::clone(obj);
                     Ok(Value::NativeFunction(Rc::new(NativeFunction {
                         name: "Object.hasOwn<curried>".to_string(),
                         arity: Some(1),
-                        func: Box::new(move |inner_args| {
+                        accepts_errors: false,
+                        func: Box::new(move |_ctx, inner_args| {
                             if let Some(Value::String(key)) = inner_args.first() {
                                 let has = obj_clone.borrow().fields.contains_key(key);
                                 Ok(Value::Boolean(has))
@@ -1419,14 +1496,16 @@ fn create_object_module() -> Value {
     fields.insert("get".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "Object.get".to_string(),
         arity: Some(1),
-        func: Box::new(|args| {
+        accepts_errors: false,
+        func: Box::new(|_ctx, args| {
             match args.first() {
                 Some(Value::Object(obj)) => {
                     let obj_clone = Rc::clone(obj);
                     Ok(Value::NativeFunction(Rc::new(NativeFunction {
                         name: "Object.get<curried>".to_string(),
                         arity: Some(1),
-                        func: Box::new(move |inner_args| {
+                        accepts_errors: false,
+                        func: Box::new(move |_ctx, inner_args| {
                             if let Some(Value::String(key)) = inner_args.first() {
                                 if let Some(val) = obj_clone.borrow().fields.get(key) {
                                     Ok(val.clone())
@@ -1450,7 +1529,8 @@ fn create_object_module() -> Value {
     fields.insert("field".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "Object.field".to_string(),
         arity: Some(2),
-        func: Box::new(|args| {
+        accepts_errors: false,
+        func: Box::new(|_ctx, args| {
             match (args.first(), args.get(1)) {
                 (Some(Value::Object(obj)), Some(Value::String(name))) => {
                     Ok(obj.borrow().fields.get(name)
@@ -1474,7 +1554,8 @@ fn create_error_module() -> Value {
             fields.insert("raise".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
                 name: "Error.raise".to_string(),
                 arity: Some(3),
-                func: Box::new(|args| {
+                accepts_errors: true,
+                func: Box::new(|_ctx, args| {
                     let kind = args.get(0).map(|v| match v { Value::String(s) => s.clone(), _ => "Error".to_string() }).unwrap_or_else(|| "Error".to_string());
                     let message = args.get(1).map(|v| match v { Value::String(s) => s.clone(), v => v.to_string() }).unwrap_or_default();
                     let cause = match args.get(2) { Some(Value::Error(e)) => Some(Rc::clone(e)), _ => None };
@@ -1487,7 +1568,8 @@ fn create_error_module() -> Value {
             fields.insert("toString".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
                 name: "Error.toString".to_string(),
                 arity: Some(1),
-                func: Box::new(|args| match args.first() {
+                accepts_errors: true,
+                func: Box::new(|_ctx, args| match args.first() {
                     Some(Value::Error(e)) => {
                         let mut out = format!("{}: {}", e.kind, e.message);
                         let mut cause = e.cause.as_ref();
@@ -1513,7 +1595,8 @@ fn create_type_module() -> Value {
     fields.insert("of".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "Type.of".to_string(),
         arity: Some(1),
-        func: Box::new(|args| {
+        accepts_errors: true,
+        func: Box::new(|_ctx, args| {
             Ok(Value::String(args.first().map(|v| v.type_name()).unwrap_or("Null").to_string()))
         }),
     })));
@@ -1529,7 +1612,8 @@ fn create_fs_module() -> Value {
     fields.insert("readFileText".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "fs.readFileText".to_string(),
         arity: Some(1),
-        func: Box::new(|args| {
+        accepts_errors: false,
+        func: Box::new(|_ctx, args| {
             match args.first() {
                 Some(Value::String(path)) => {
                     match std::fs::read_to_string(path) {

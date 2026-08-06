@@ -10,7 +10,7 @@ use crate::ast::*;
 use crate::lexer::Lexer;
 use crate::parser::Parser;
 use crate::token::Span;
-use crate::value::{Value, ObjectValue, FunctionValue, NativeFunction, RuntimeError, ErrorValue, StackFrame, is_error_value};
+use crate::value::{Value, ObjectValue, FunctionValue, NativeFunction, CallContext, RuntimeError, ErrorValue, StackFrame, is_error_value};
 use crate::environment::{EnvRef, new_env, child_env};
 use crate::stdlib::register_builtins;
 
@@ -62,14 +62,6 @@ fn error_cause(v: &Value) -> Option<Rc<ErrorValue>> {
         Value::Error(e) => Some(Rc::clone(e)),
         _ => None,
     }
-}
-
-/// Natives that are allowed to receive error values as arguments: the diagnostic
-/// printers (print/println), the error constructor/checkers (Error, isError,
-/// std.Error.raise — their cause/arg may itself be an error) and the type probe
-/// (std.Type.of — the boot layer detects host error values via its type).
-fn is_diagnostic_native(name: &str) -> bool {
-    matches!(name, "print" | "println" | "isError" | "Error" | "Error.raise" | "Error.toString" | "Type.of")
 }
 
 /// Maximum recursion call depth, preventing deep user recursion from blowing the host stack.
@@ -661,7 +653,8 @@ impl Interpreter {
                     return Ok(Value::NativeFunction(Rc::new(NativeFunction {
                         name: "<curried>".to_string(),
                         arity: Some(func.parameters.len() - args.len()),
-                        func: Box::new(move |inner_args: Vec<Value>| {
+                        accepts_errors: false,
+                        func: Box::new(move |_ctx, inner_args: Vec<Value>| {
                             let mut all_args = captured_args.clone();
                             all_args.extend(inner_args);
 
@@ -751,9 +744,10 @@ impl Interpreter {
             }
 
             Value::NativeFunction(native_fn) => {
-                // Argument check: only the diagnostic natives (print/println plus the
-                // error constructors/checkers and the type probe) accept error values
-                if !is_diagnostic_native(&native_fn.name) {
+                // Argument check: only the diagnostic natives (accepts_errors —
+                // print/println plus the error constructors/checkers and the type
+                // probe) accept error values
+                if !native_fn.accepts_errors {
                     if let Some(bad) = args.iter().find(|a| matches!(a, Value::Error(_))) {
                         return Ok(self.make_error(
                             "TypeMismatch",
@@ -775,7 +769,7 @@ impl Interpreter {
                     }
                 }
 
-                (native_fn.func)(args)
+                (native_fn.func)(self, args)
             }
 
             _ => Ok(self.make_error(
@@ -958,7 +952,8 @@ impl Interpreter {
                         Ok(Value::NativeFunction(Rc::new(NativeFunction {
                             name: "Array.add".to_string(),
                             arity: Some(1),
-                            func: Box::new(move |args| {
+                            accepts_errors: false,
+                            func: Box::new(move |_ctx, args| {
                                 if let Some(element) = args.first() {
                                     arr_clone.borrow_mut().push(element.clone());
                                 }
@@ -972,7 +967,8 @@ impl Interpreter {
                         Ok(Value::NativeFunction(Rc::new(NativeFunction {
                             name: "Array.remove".to_string(),
                             arity: Some(1),
-                            func: Box::new(move |args| {
+                            accepts_errors: false,
+                            func: Box::new(move |_ctx, args| {
                                 if let Some(Value::Number(idx)) = args.first() {
                                     let len = arr_clone.borrow().len();
                                     if let Ok(index) = normalize_index(*idx, len) {
@@ -1127,5 +1123,11 @@ pub(crate) fn normalize_index(n: f64, len: usize) -> Result<usize, usize> {
         Ok(idx)
     } else {
         Err(idx)
+    }
+}
+
+impl CallContext for Interpreter {
+    fn call(&mut self, callee: Value, args: Vec<Value>, span: Span) -> Result<Value, RuntimeError> {
+        self.call_function(callee, args, span)
     }
 }
