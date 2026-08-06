@@ -824,7 +824,7 @@ if args.len() < func.parameters.len() {
 - [ ] **Step 7: 运行验证**
 
 Run: `cargo test --test type_system` 与 `python3 difftest.py`(柯里化用例 r/cases 须仍绿)
-Expected: 新测试 PASS;difftest 柯里化与闭包用例不变。
+Expected: 新测试 PASS;difftest **已知红区**:Task 3 已把 host 的 `std.Type.of` 改为类型值,boot 解释器核心(interpreter.ql 的 isWrapped 等)与旧断言尚未迁移(Task 10/11/7 处理)——失败清单见 task-3-report.md,本任务只要求**不新增** difftest 失败。
 
 - [ ] **Step 8: 提交**
 
@@ -974,7 +974,7 @@ for (i, (param, arg)) in func.parameters.iter().zip(args).enumerate() {
 - [ ] **Step 6: 运行验证**
 
 Run: `cargo test --test type_system` 与 `python3 difftest.py`
-Expected: 新测试 PASS;既有用例不受影响。
+Expected: 新测试 PASS;difftest **已知红区**(同 Task 5 注:Type.of 迁移窗口,失败清单见 task-3-report.md),本任务只要求**不新增** difftest 失败。
 
 - [ ] **Step 7: 提交**
 
@@ -1325,7 +1325,7 @@ fn build_object_type(x: &Value) -> Result<Value, RuntimeError> {
 - [ ] **Step 5: 运行验证**
 
 Run: `cargo test --test type_system` 与 `python3 difftest.py`
-Expected: 新测试 PASS;difftest 不受影响(新语法未用)。
+Expected: 新测试 PASS;difftest **已知红区**(同 Task 5 注:Type.of 迁移窗口,失败清单见 task-3-report.md),本任务只要求**不新增** difftest 失败。
 
 - [ ] **Step 6: 提交**
 
