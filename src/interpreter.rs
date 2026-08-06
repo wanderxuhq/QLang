@@ -428,11 +428,23 @@ impl Interpreter {
             }
 
             Expression::Function(func) => {
+                // 参数标注在定义时求值(引用定义处环境,含遮蔽语义)
+                let mut param_types = Vec::with_capacity(func.parameters.len());
+                for p in func.parameters.iter() {
+                    match &p.type_annotation {
+                        Some(ann) => {
+                            let ty = self.eval_expression(ann, env)?;
+                            param_types.push(Some((ty, self.annotation_text(ann))));
+                        }
+                        None => param_types.push(None),
+                    }
+                }
                 // Rc-shared AST children: zero deep copies when creating function values (hot-path optimization)
                 Ok(Value::Function(Rc::new(FunctionValue {
                     parameters: Rc::clone(&func.parameters),
                     body: Rc::clone(&func.body),
                     closure: Rc::clone(env),
+                    param_types: Rc::new(param_types),
                 })))
             }
 
@@ -656,57 +668,24 @@ impl Interpreter {
                     }
                 }
 
-                // Support currying - if not enough args, return a partial function
+                // Support currying - if not enough args, return a partial function.
+                // The curried native captures the function value and the call-site span,
+                // then routes the completed application through ctx.call so the full
+                // call logic (param annotation checks, error-arg checks, recursion depth,
+                // call stack) runs uniformly on every application step.
                 if args.len() < func.parameters.len() {
-                    // Create a closure that captures the partial application
-                    // (Rc clones: no deep copy of the function body AST)
-                    let captured_args = args.clone();
-                    let captured_params = Rc::clone(&func.parameters);
-                    let captured_body = Rc::clone(&func.body);
-                    let captured_closure = Rc::clone(&func.closure);
-                    let captured_source = self.current_source.clone();
-
+                    let captured_func = Value::Function(Rc::clone(&func));
+                    let all_args = args.clone();
                     return Ok(Value::NativeFunction(Rc::new(NativeFunction {
                         name: "<curried>".to_string(),
                         arity: Some(func.parameters.len() - args.len()),
                         accepts_errors: false,
-                        func: Box::new(move |_ctx, inner_args: Vec<Value>| {
-                            let mut all_args = captured_args.clone();
-                            all_args.extend(inner_args);
-
-                            // Simple interpreter to execute the body
-                            let mut interp = Interpreter {
-                                global_env: captured_closure.clone(),
-                                call_stack: Vec::new(),
-                                exports: HashMap::new(),
-                                recursion_depth: 0,
-                                current_source: captured_source.clone(),
-                            };
-
-                            if all_args.len() != captured_params.len() {
-                                return Ok(interp.make_error(
-                                    "ArityMismatch",
-                                    format!("Arity mismatch: expected {} arguments, got {}", captured_params.len(), all_args.len()),
-                                    None,
-                                    None,
-                                ));
-                            }
-
-                            let call_env = child_env(&captured_closure);
-                            for (param, arg) in captured_params.iter().zip(all_args) {
-                                call_env.borrow_mut().define(param.name.clone(), arg);
-                            }
-
-                            match interp.run_block(&captured_body, &call_env) {
-                                Ok(flow) => Ok(match flow {
-                                    ControlFlow::Return(value) => value,
-                                    ControlFlow::Value(value) => value,
-                                    ControlFlow::None => Value::Void,
-                                }),
-                                // `?` inside the function body: the error becomes the function's return value
-                                Err(RuntimeError::UserError(e)) => Ok(Value::Error(e)),
-                                Err(other) => Err(other),
-                            }
+                        // Native dispatch enforces exact arity, so the closure runs once
+                        // with `arity` inner args; rebuild base+inner from the captured base.
+                        func: Box::new(move |ctx, inner_args| {
+                            let mut combined = all_args.clone();
+                            combined.extend(inner_args);
+                            ctx.call(captured_func.clone(), combined, span)
                         }),
                     })));
                 }
@@ -718,6 +697,21 @@ impl Interpreter {
                         Some(span),
                         None,
                     ));
+                }
+
+                // 参数标注检查:失败 → 函数体不执行,返回 TypeCheck 错误值
+                for (i, (_param, arg)) in func.parameters.iter().zip(args.iter()).enumerate() {
+                    if let Some(Some((ty, text))) = func.param_types.get(i) {
+                        match self.check_value(arg, ty, Some(span)) {
+                            Ok(true) => {}
+                            Ok(false) => return Ok(self.make_error(
+                                "TypeCheck",
+                                format!("argument {} does not match the annotated type \"{}\"", i + 1, text),
+                                Some(span), None,
+                            )),
+                            Err(e) => return Ok(e),
+                        }
+                    }
                 }
 
                 // Recursion depth guard: deep user recursion becomes a recoverable

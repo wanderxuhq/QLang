@@ -58,3 +58,19 @@ fn let_annotation_checks() {
     // 无标注 = 完全动态
     assert_eq!(run("let x = \"a\"; x;"), "a");
 }
+
+#[test]
+fn param_annotations_checked_at_call() {
+    assert_eq!(run("let f = (a: Number) -> a + 1; f(5);"), "6");
+    assert_eq!(run("let f = (a: Number) -> a + 1; let r = f(\"x\"); isError(r);"), "true");
+    assert_eq!(run("let f = (a: Number) -> a + 1; let r = f(\"x\"); r.type;"), "TypeCheck");
+    // 检查失败 → 函数体不执行
+    assert_eq!(run("let f = (a: Number) -> { 1 / 0; }; let r = f(\"x\"); isError(r);"), "true");
+    // 多参数(QLang 无 Number+String 自动拼接,用 std.Number.toString 显式转换)
+    assert_eq!(run("let f = (a: Number, b: String) -> std.Number.toString(a) + b; f(1, \"x\");"), "1x");
+    assert_eq!(run("let f = (a: Number, b: String) -> a + b; let r = f(\"x\", \"y\"); isError(r);"), "true");
+    // 标注在定义时求值(引用外层变量)
+    assert_eq!(run("let T = Number; let f = (a: T) -> a; f(1);"), "1");
+    // 遮蔽后标注求值指向遮蔽值
+    assert_eq!(run("let Number = 42; let f = (a: Number) -> a; let r = f(1); isError(r);"), "true");
+}

@@ -89,6 +89,8 @@ pub struct FunctionValue {
     pub parameters: Rc<Vec<Parameter>>,
     pub body: Rc<Block>,
     pub closure: EnvRef,
+    /// 定义时求值的参数标注:(类型值, 源码文本);None = 该参数无标注。
+    pub param_types: Rc<Vec<Option<(Value, String)>>>,
 }
 
 /// Call-back interface natives use to invoke user functions (e.g. type-check closures).
