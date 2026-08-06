@@ -975,7 +975,7 @@ fn create_string_module() -> Value {
         name: "String.toString".to_string(),
         arity: Some(1),
         func: Box::new(|args| {
-            Ok(Value::String(args.first().map(|v| v.to_string()).unwrap_or_else(|| "void".to_string())))
+            Ok(Value::String(args.first().map(|v| v.to_string()).unwrap_or_else(|| "null".to_string())))
         }),
     })));
 
@@ -1253,7 +1253,7 @@ fn create_number_module() -> Value {
         name: "Number.toString".to_string(),
         arity: Some(1),
         func: Box::new(|args| {
-            Ok(Value::String(args.first().map(|v| v.to_string()).unwrap_or_else(|| "void".to_string())))
+            Ok(Value::String(args.first().map(|v| v.to_string()).unwrap_or_else(|| "null".to_string())))
         }),
     })));
 
@@ -1514,7 +1514,7 @@ fn create_type_module() -> Value {
         name: "Type.of".to_string(),
         arity: Some(1),
         func: Box::new(|args| {
-            Ok(Value::String(args.first().map(|v| v.type_name()).unwrap_or("void").to_string()))
+            Ok(Value::String(args.first().map(|v| v.type_name()).unwrap_or("Null").to_string()))
         }),
     })));
 

@@ -171,7 +171,7 @@ impl Value {
     /// Get the type name of this value
     pub fn type_name(&self) -> &'static str {
         match self {
-            Value::Void => "Void",
+            Value::Void => "Null",
             Value::Number(_) => "Number",
             Value::String(_) => "String",
             Value::Boolean(_) => "Boolean",
@@ -201,7 +201,7 @@ impl Value {
     /// Convert to string representation
     pub fn to_string(&self) -> String {
         match self {
-            Value::Void => "void".to_string(),
+            Value::Void => "null".to_string(),
             Value::Number(n) => {
                 // Non-finite numbers (NaN/Infinity) and numbers beyond i64's safe
                 // range are left to Rust's f64 Display (producing NaN / inf / -inf / 1e30, etc.).

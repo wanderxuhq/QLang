@@ -378,7 +378,7 @@ pub fn format_runtime_error(source: &str, message: &str, span: &Span) -> String 
 /// - "Array" -> "array"
 /// - "Object" -> "object"
 /// - "Function" -> "function"
-/// - "Void" -> "void"
+/// - "Null" -> "null"
 /// - Other -> lowercase form
 pub fn friendly_type_name(ty: &str) -> String {
     match ty {
@@ -388,7 +388,7 @@ pub fn friendly_type_name(ty: &str) -> String {
         "Array" => "array".to_string(),
         "Object" => "object".to_string(),
         "Function" => "function".to_string(),
-        "Void" => "void".to_string(),
+        "Null" => "null".to_string(),
         _ => ty.to_string().to_lowercase(),
     }
 }

@@ -714,7 +714,7 @@ let Interpreter = () -> {
         else if rawArgs.length == 3 { func(rawArgs[0], rawArgs[1], rawArgs[2]); }
         else if rawArgs.length == 4 { func(rawArgs[0], rawArgs[1], rawArgs[2], rawArgs[3]); }
         else { func(rawArgs); };
-        if std.Type.of(raw) == "Void" {
+        if std.Type.of(raw) == "Null" {
           { type: "Null", value: null };
         } else {
           // Note: this boot source runs in the host interpreter, so std.Type.of(raw)

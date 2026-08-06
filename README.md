@@ -166,11 +166,22 @@ person.age = 31             // Update field
 
 #### Null
 
-`null` represents the absence of a value:
+`null` is the **single empty value** — type `Null`, value `null`. There is no
+separate `void`: a function without a return statement yields `null`, and
+`std.Type.of(null)` is `"Null"`. The empty block expression `{}` also evaluates
+to `null`. In the future type system, `Null` is the unit type (its only value
+is `null`) — not the bottom type (`Never`), which is reserved for functions
+that never return (e.g. `exit`).
 
 ```qlang
 let nothing = null
+let alsoNothing = () -> { 1; }  // empty return → null
 ```
+
+`??` only falls back on **error values** — a `null` left operand passes through
+untouched (`null ?? 42` is `null`, not `42`). There is no null-coalescing:
+`null` is a legitimate value, and failure is represented by error values, not
+by `null`.
 
 ### Operators
 

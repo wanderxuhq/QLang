@@ -159,6 +159,13 @@ SAFE_CASES = [
     # is StackOverflow on both sides — the bare self-call stays under both the
     # boot guard (~45 levels) and the host guard (300), so neither stack blows)
     ("e21", "let f = (n) -> f(n - 1); let r = f(10000); r.type;"),
+    # e22: null is the single empty value — the type name is "Null" (not "Void")
+    # and its string form is "null" (no "void" spelling anywhere in the language)
+    ("e22", "std.Type.of(null);"),
+    ("e23", "println(null); 1/0 ?? null;"),
+    # e24: ?? is error-only — a null left operand passes through untouched
+    # (no null-coalescing; null is a legitimate value, not an error stand-in)
+    ("e24", "null ?? 42;"),
 ]
 
 # Complex cases: multi-feature combinations (recursion / closure mutation / higher-order
