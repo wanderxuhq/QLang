@@ -43,12 +43,16 @@ let Interpreter = () -> {
   globalEnv._define("Type", Type);
 
   // User-function call depth guard: each boot level costs several host frames,
-  // so the boot's own limit must stay well below the host's 300. Measured:
-  // with the Task 10 probe migration (isError/wrapper-field probes) each boot
-  // level costs ~8 host frames, and f(40) in a 40-level recursion blows the
-  // host stack before the old limit of 45 fires — the guard must sit at ~35.
+  // so the boot's own limit must stay well below the host stack's capacity
+  // (the host's own 300-call guard fires too late for the boot — measured: it
+  // is reached at ~37-39 boot levels, past the crash point). Task 11 added the
+  // param-annotation check frames (~0.5-1 host frame per boot level): the host
+  // stack now overflows at ~36-37 boot levels (probed: f(36) crashes with the
+  // guard disabled; Task 10 measured ~39). 35 left only ~1.5 levels of margin;
+  // 33 keeps ~3 levels below the crash boundary while covering the deepest
+  // legitimate difftest recursion (x14/x21/x22 shapes all guard before it).
   let depth = 0;
-  let maxDepth = 35;
+  let maxDepth = 33;
 
   // Helper functions that don't use std
   let getArrayLength = (arr) -> {
@@ -105,6 +109,65 @@ let Interpreter = () -> {
     isErrorVal(v) && v.propagate == true;
   };
 
+  // ---- Task 11: 标注检查语义 ----
+  //
+  // 受保护的内置类型对象(裸常量,与宿主 TYPE_MARKER 对象对应);用户类型
+  // (Type.make 产物)不在列,与宿主 user_type 不受保护一致。Array/Object 构造
+  // 器是函数,不参与字段写入。
+  let __protectedTypes = [Number, String, Boolean, Null, AnyArray, AnyObject, Function, Any, Never, Error, Type];
+
+  let isProtectedType = (o) -> {
+    let i = 0;
+    let found = false;
+    while i < __protectedTypes.length && !found {
+      if o == __protectedTypes[i] { found = true; }
+      i = i + 1;
+    }
+    found;
+  };
+
+  let isProtectedField = (f) -> f == "check" || f == "raise" || f == "of" || f == "make";
+
+  let protectedWriteError = (field) -> {
+    // 宿主侧为 RuntimeError::Custom(程序中止);boot 无退出原语,经错误通道
+    // 传播(propagate: true → 顶层打印诊断并返回 flow "Error")。消息与宿主一致。
+    { type: "Error", value: std.Error.raise("Custom", "cannot overwrite protected member '" + field + "' of built-in type", null), propagate: true };
+  };
+
+  // 标注归一:构造器产物(Array(Number)/Type.make/Object(...))经调用路径被
+  // 包成 {type:"Object", value: {check: f}} 包装——检查路径取内层类型对象;
+  // 其余(裸常量/错误值/普通对象)原样返回。
+  let normalizeAnnotation = (a) -> {
+    if a != null && !isError(a.type) && (a.type == "Object" || a.type == "Type") && isTypeValue(a.value) {
+      a.value;
+    } else {
+      a;
+    };
+  };
+
+  // TypeCheck 消息(宿主 check_annotation 同款;boot 无源码 span,标注文本用
+  // "?")。注意:错误构造必须内联在宿主层代码(Let/Assign 分支)直接调用
+  // std.Error.raise——cause 是裸错误值,若经 boot 用户函数参数传递会被调用
+  // 路径的错误值参数检查拒收(实测 makeTypeCheckError 产出 TypeMismatch)。
+  let typeCheckMsg = (typeName) -> "value of type \"" + typeName + "\" does not match the annotated type \"?\"";
+
+  // 内部检查路径:调用类型值的 check 函数,豁免错误值参数(宿主
+  // call_function_inner 的 exempt_error_args 对应;用户调用不豁免)。
+  // 返回 {type:"Boolean", value: bool},或错误包装(标注非类型值 / check 报错)。
+  let checkValue = (typeVal, v, env) -> {
+    if !isTypeValue(typeVal) {
+      { type: "Error", value: std.Error.raise("TypeCheck", "type annotation is not a type value", null), propagate: false };
+    } else {
+      let checkFn = typeVal.check;
+      let r = callFunctionInner(checkFn, [v], env, true);
+      if isErrorVal(r) {
+        r;
+      } else {
+        { type: "Boolean", value: isTruthy(r) };
+      };
+    };
+  };
+
   let runProgram = (program) -> {
     let env = globalEnv;
     return runStatements(program.statements, env);
@@ -133,14 +196,39 @@ let Interpreter = () -> {
       if isPropagating(val) {
         return { flow: "Propagate", value: val };
       }
-      env._define(stmt.name, val);
+      if stmt.annotation != null {
+        // 宿主顺序:先求值 value,再求值标注,然后检查;通过 → 带标注绑定
+        let annVal = normalizeAnnotation(evaluate(stmt.annotation, env));
+        if isPropagating(annVal) {
+          return { flow: "Propagate", value: annVal };
+        }
+        let ck = checkValue(annVal, val, env);
+        if isErrorVal(ck) {
+          // 检查自身出错(标注非类型值/check 报错):绑定该错误值(宿主同)
+          env._defineAnnotated(stmt.name, ck, { ty: annVal, text: "?" });
+        } else if isTruthy(ck) {
+          env._defineAnnotated(stmt.name, val, { ty: annVal, text: "?" });
+        } else {
+          // 检查失败 → TypeCheck 错误值(cause = 原值若为错误),带标注绑定
+          // (错误构造内联在宿主层:cause 是裸错误值,经 boot 函数参数会被拒收)
+          let typeName = if val != null && !isError(val.type) { val.type; } else { "?"; };
+          let cause = if isErrorVal(val) { val.value; } else { null; };
+          env._defineAnnotated(stmt.name, { type: "Error", value: std.Error.raise("TypeCheck", typeCheckMsg(typeName), cause), propagate: false }, { ty: annVal, text: "?" });
+        };
+      } else {
+        env._define(stmt.name, val);
+      };
       return { flow: "None", value: { type: "Null", value: null } };
     } else if stmt.type == "Assign" {
       let val = evaluate(stmt.value, env);
       if isPropagating(val) {
         return { flow: "Propagate", value: val };
       }
-      assignValue(stmt.target, val, env);
+      let res = assignValue(stmt.target, val, env);
+      if res != null && isErrorVal(res) {
+        // 受保护成员写入:经 boot 错误通道传播(顶层报错,宿主侧为 Custom 异常)
+        return { flow: "Propagate", value: res };
+      }
       return { flow: "None", value: { type: "Null", value: null } };
     } else if stmt.type == "If" {
       return runIfStatement(stmt, env);
@@ -217,9 +305,27 @@ let Interpreter = () -> {
     { flow: "None", value: { type: "Null", value: null } };
   };
 
+  // 返回 null(成功)或错误包装(受保护成员写入 → propagate: true,经 Assign
+  // 分支的错误通道传播到顶层)。
   let assignValue = (target, value, env) -> {
     if target.type == "Identifier" {
-      env._assign(target.name, value);
+      // Task 11: 重赋值检查——绑定带标注时,赋值前再查(getAnnotation 沿链)
+      let ann = env._getAnnotation(target.name);
+      if ann != null {
+        let ck = checkValue(ann.ty, value, env);
+        if isErrorVal(ck) {
+          env._assign(target.name, ck);
+        } else if isTruthy(ck) {
+          env._assign(target.name, value);
+        } else {
+          let typeName = if value != null && !isError(value.type) { value.type; } else { "?"; };
+          let cause = if isErrorVal(value) { value.value; } else { null; };
+          env._assign(target.name, { type: "Error", value: std.Error.raise("TypeCheck", typeCheckMsg(typeName), cause), propagate: false });
+        };
+      } else {
+        env._assign(target.name, value);
+      };
+      null;
     } else if target.type == "MemberAccess" {
       let obj = evaluate(target.object, env);
       if obj != null {
@@ -228,8 +334,14 @@ let Interpreter = () -> {
         if t == "Object" || t == "Type" {
           // AST field name is target.field (MemberAccessExpr(object, field))
           obj.value[target.field] = value;
-        }
-      }
+          null;
+        } else if t == null && isProtectedType(obj) && isProtectedField(target.field) {
+          // 受保护成员写入:内置类型对象(裸常量)的 check/raise/of/make
+          protectedWriteError(target.field);
+        } else {
+          null;
+        };
+      };
     } else if target.type == "IndexAccess" {
       let arr = evaluate(target.object, env);
       let index = evaluate(target.index, env);
@@ -251,6 +363,7 @@ let Interpreter = () -> {
               }
             }
           }
+          null;
         } else if t == "Object" {
           // JS semantics: obj[key] = value
           if index != null {
@@ -258,8 +371,14 @@ let Interpreter = () -> {
               arr.value[index.value] = value;
             }
           }
-        }
-      }
+          null;
+        } else if t == null && arr != null && index != null && index.type == "String" && isProtectedType(arr) && isProtectedField(index.value) {
+          // obj["check"] = x 形式的受保护写入(与字段写法同规则)
+          protectedWriteError(index.value);
+        } else {
+          null;
+        };
+      };
     }
   };
 
@@ -299,7 +418,22 @@ let Interpreter = () -> {
       let capturedEnv = env;
       let p = expr.parameters;
       let b = expr.body;
-      { type: "Function", params: p, body: b, env: capturedEnv };
+      // Task 11: 参数标注在定义时求值(宿主同——引用定义处环境,含遮蔽语义),
+      // 记录 paramTypes[i] = { ty, text } 或 null。
+      let paramTypes = [];
+      let i = 0;
+      while i < expr.parameters.length {
+        let pa = expr.parameters[i].annotation;
+        if pa != null {
+          let annVal = evaluate(pa, env);
+          if isPropagating(annVal) { return annVal; }
+          paramTypes[paramTypes.length] = { ty: normalizeAnnotation(annVal), text: "?" };
+        } else {
+          paramTypes[paramTypes.length] = null;
+        }
+        i = i + 1;
+      }
+      { type: "Function", params: p, body: b, env: capturedEnv, paramTypes: paramTypes };
     } else if expr.type == "Call" {
       let func = evaluate(expr.callee, env);
       if isPropagating(func) { return func; }
@@ -646,6 +780,13 @@ let Interpreter = () -> {
   };
 
   let callFunction = (func, args, env) -> {
+    callFunctionInner(func, args, env, false);
+  };
+
+  // 内部检查路径豁免:exemptErrorArgs = true 时跳过错误值参数检查(宿主
+  // call_function_inner 的 exempt_error_args 对应;仅 checkValue 的类型检查
+  // 用,用户调用一律 false——用户函数/原生均不豁免)。
+  let callFunctionInner = (func, args, env, exemptErrorArgs) -> {
     if func != null {
       // Normalize the probe: raw host values (natives, boot functions, std
       // modules) probe as error values; unify them to null → native branch.
@@ -656,37 +797,84 @@ let Interpreter = () -> {
         { type: "Error", value: std.Error.raise("NotCallable", "Not callable: Error", null), propagate: false };
       } else if ft == "Function" {
         // ---- user function ----
+        // 统一参数视图:柯里化记录携带 allParams/boundArgs(部分应用时捕获的
+        // 完整参数表与已绑定参数),最终应用时对全部参数做检查——与宿主
+        // curried native 完成应用时带完整参数重走调用路径一致。
+        // 注意:普通记录的 allParams/boundArgs 字段缺失,探测得错误值(不是
+        // null)——必须先 isError 归一,否则错误值参与比较(truthy)会死循环。
+        let allParams = func.allParams;
+        if isError(allParams) { allParams = null; }
+        if allParams == null { allParams = func.params; }
+        let prevBound = func.boundArgs;
+        if isError(prevBound) { prevBound = null; }
+        let allArgs = [];
+        let k = 0;
+        let boundLen = if prevBound != null { prevBound.length; } else { 0; };
+        while k < boundLen {
+          pushArray(allArgs, prevBound[k]);
+          k = k + 1;
+        }
+        let j = 0;
+        while j < args.length {
+          pushArray(allArgs, args[j]);
+          j = j + 1;
+        }
         // Argument check: user functions reject error values as arguments
-        // (only the diagnostic natives are exempt; user functions never are)
+        // (only the diagnostic natives are exempt; user functions never are;
+        // the internal check path is exempted too — check functions must
+        // receive error values, e.g. Number.check(1/0) → false)
         let argErr = null;
-        let i = 0;
-        while i < args.length {
-          if args[i] != null && isErrorVal(args[i]) { argErr = args[i]; }
-          i = i + 1;
-        }
-        if argErr != null {
-          return { type: "Error", value: std.Error.raise("TypeMismatch", "attempt to pass error value as argument", argErr.value), propagate: false };
-        }
-        if args.length < func.params.length {
-          // Partial application: matches the host — insufficient args return a curried function
-          // (params are Parameter records: { name, annotation }; annotation checks are Task 11)
-          let partialEnv = Environment(func.env);
+        if !exemptErrorArgs {
           let i = 0;
-          while i < args.length {
-            partialEnv._define(func.params[i].name, args[i]);
+          while i < allArgs.length {
+            if allArgs[i] != null && isErrorVal(allArgs[i]) { argErr = allArgs[i]; }
             i = i + 1;
+          }
+          if argErr != null {
+            return { type: "Error", value: std.Error.raise("TypeMismatch", "attempt to pass error value as argument", argErr.value), propagate: false };
+          }
+        }
+        if allArgs.length < allParams.length {
+          // Partial application: matches the host — insufficient args return
+          // a curried function. 宿主在部分应用时不检查标注(完成应用时全查);
+          // 记录携带 allParams/boundArgs/paramTypes 供最终应用统一检查。
+          let partialEnv = Environment(func.env);
+          let q = 0;
+          while q < allArgs.length {
+            partialEnv._define(allParams[q].name, allArgs[q]);
+            q = q + 1;
           }
           // Keep the remaining params as full Parameter records: the curried
           // function's later calls bind via .name, and the records carry the
           // annotation metadata the host preserves through partial application
-          // (binding needs the name string; the record must not be degraded)
           let remaining = [];
-          while i < func.params.length {
-            remaining[remaining.length] = func.params[i];
-            i = i + 1;
+          let r = allArgs.length;
+          while r < allParams.length {
+            remaining[remaining.length] = allParams[r];
+            r = r + 1;
           }
-          { type: "Function", params: remaining, body: func.body, env: partialEnv };
+          { type: "Function", params: remaining, body: func.body, env: partialEnv, allParams: allParams, boundArgs: allArgs, paramTypes: func.paramTypes };
+        } else if allArgs.length != allParams.length {
+          // 参数过多:宿主 ArityMismatch 错误值(boot 旧行为静默丢弃多余参数)
+          { type: "Error", value: std.Error.raise("ArityMismatch", "Arity mismatch: expected " + std.Number.toString(allParams.length) + " arguments, got " + std.Number.toString(allArgs.length), null), propagate: false };
         } else {
+          // 参数标注检查(宿主顺序:柯里化/arity 之后、深度守卫之前):失败 →
+          // TypeCheck 错误值,函数体不执行。
+          let p = 0;
+          while p < allParams.length {
+            let ann = func.paramTypes[p];
+            if ann != null {
+              let ck = checkValue(ann.ty, allArgs[p], env);
+              if isErrorVal(ck) {
+                // check 自身出错 → 该错误值即调用结果(宿主 Err(e) → Ok(e))
+                return ck;
+              }
+              if !isTruthy(ck) {
+                return { type: "Error", value: std.Error.raise("TypeCheck", "argument " + std.Number.toString(p + 1) + " does not match the annotated type \"?\"", null), propagate: false };
+              }
+            }
+            p = p + 1;
+          }
           // Recursion depth guard: deep user recursion becomes a recoverable
           // StackOverflow error value instead of blowing the host stack
           if depth >= maxDepth {
@@ -694,11 +882,13 @@ let Interpreter = () -> {
           }
           let localEnv = Environment(func.env);
           let i = 0;
-          while i < func.params.length {
-            if i < args.length {
-              localEnv._define(func.params[i].name, args[i]);
+          while i < allParams.length {
+            // 带标注绑定(宿主 define_annotated):函数体内重赋值参数同样复查
+            let ann2 = func.paramTypes[i];
+            if ann2 != null {
+              localEnv._defineAnnotated(allParams[i].name, allArgs[i], { ty: ann2.ty, text: "?" });
             } else {
-              localEnv._define(func.params[i].name, { type: "Null", value: null });
+              localEnv._define(allParams[i].name, allArgs[i]);
             }
             i = i + 1;
           }
@@ -731,7 +921,7 @@ let Interpreter = () -> {
         // error WRAPPER and decide via v.type == "Error" the same way.
         let isNative = func != null && !isError(func.name);
         let isDiag = func == println || func == print || func == Error || func == isError || func == std.Error.raise || func == std.Error.toString || func == std.Type.of || func == Error.raise || func == Number.check || func == String.check || func == Boolean.check || func == Null.check || func == AnyArray.check || func == AnyObject.check || func == Function.check || func == Any.check || func == Never.check || func == Error.check || func == Type.check;
-        if !isDiag {
+        if !isDiag && !exemptErrorArgs {
           let j = 0;
           while j < args.length {
             if args[j] != null && isErrorVal(args[j]) {

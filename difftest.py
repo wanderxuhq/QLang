@@ -62,7 +62,10 @@ def norm_err(v, cid=None, stderr=""):
     if cid and v.startswith(cid + "="):
         v = v[len(cid) + 1:]
     # Host top-level exit: unhandled error → exit 1 + diagnostic on stderr
-    if stderr and _TOP_LEVEL_DIAG.match(stderr):
+    # (positioned "Kind: msg (at line L, col C)" via `?`, or position-less
+    # "Error: ..." for hard runtime errors like the protected-member
+    # RuntimeError::Custom — Task 11 p1; both mean "the program errored")
+    if stderr and (_TOP_LEVEL_DIAG.match(stderr) or stderr.startswith("Error: ")):
         return ERROR_TOKEN
     # Rendered error diagnostic (host) or std.Error.toString line (boot)
     if _ERR_DIAG_LINE.match(v):
@@ -189,6 +192,18 @@ SAFE_CASES = [
     ("t10", 'let x: Array(Number) = [1, 2]; x;'),
     ("t11", 'let x: Object({name: String}) = {name: "a"}; x;'),
     ("t12", 'let e = Error.raise("boom"); std.Type.of(e) == Error;'),
+    # ---- annotation checking semantics (Task 11): let / params / reassign / Error ----
+    ("t13", 'let x: Number = "a"; isError(x);'),
+    ("t14", 'let x: Number = "a"; x.type;'),
+    ("t15", 'let f = (a: Number) -> a + 1; let r = f("x"); isError(r);'),
+    ("t16", 'let x: Number = 42; x = "a"; isError(x);'),
+    ("t18", 'let x: Error = Error.raise("boom"); x.message;'),
+    ("t19", 'let x: Array(3) = [1, 2]; isError(x);'),
+    ("t20", 'let Positive = std.Type.make((v) -> v > 0); let x: Positive = -5; isError(x);'),
+    # t21: direct constructor-product check (no annotation consumption), Task 11
+    # review supplement — Array(Number) is a Type.make product, .check is the
+    # wrapped object's member read by the boot MemberAccess path
+    ("t21", "Array(Number).check([1, 2]);"),
 ]
 
 # Complex cases: multi-feature combinations (recursion / closure mutation / higher-order
@@ -291,6 +306,12 @@ RISKY_CASES = [
     # std.Error.toString diagnostic on stdout). Both are canonicalized to
     # ERROR_TOKEN with kind "err" by diff_case.
     ("r34", '(Error.raise("boom") ?) ?? 42;'),
+    # ---- protected members (Task 11): writing check/raise/of/make on a built-in
+    # type object aborts the program on both sides (host: RuntimeError::Custom
+    # → exit 1 + "Error: ..." stderr without positions; boot: propagate-marked
+    # Custom error → top-level diagnostic + flow "Error"). norm_err canonicalizes
+    # both to ERROR_TOKEN (see the "Error: " stderr rule).
+    ("p1", "Number.check = 42;"),
 ]
 
 # Node.js reference cases: (cid, js_src). js_src is a faithful JavaScript translation
