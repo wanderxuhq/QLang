@@ -724,8 +724,13 @@ let Interpreter = () -> {
         // wrapper shape, so unwrapping would destroy the type predicates.
         // Diagnostic natives are exempt from the error-argument check:
         // print / println / Error / isError / raise / std.Type.of / Error.raise
+        // The type predicates (the 9 constants' checks and Type.check) are
+        // exempt too: the host's predicates are accepts_errors: true natives
+        // that return false/true for error arguments (Number.check(1/0) →
+        // false, Any.check(1/0) → true); the boot's QLang checks receive the
+        // error WRAPPER and decide via v.type == "Error" the same way.
         let isNative = func != null && !isError(func.name);
-        let isDiag = func == println || func == print || func == Error || func == isError || func == std.Error.raise || func == std.Error.toString || func == std.Type.of || func == Error.raise;
+        let isDiag = func == println || func == print || func == Error || func == isError || func == std.Error.raise || func == std.Error.toString || func == std.Type.of || func == Error.raise || func == Number.check || func == String.check || func == Boolean.check || func == Null.check || func == AnyArray.check || func == AnyObject.check || func == Function.check || func == Any.check || func == Never.check || func == Error.check || func == Type.check;
         if !isDiag {
           let j = 0;
           while j < args.length {

@@ -55,45 +55,65 @@ let __hostType = __hostTypeOf(Number);
 // 对象(std.Type.make 产物同理);boot 用户函数是 {type: "Function", ...} 记录,
 // 作为 check 成员时其 .type 探测为 "Function"。包装值(无 check)与普通对象
 // (check 非函数)均判否。注意:表达式不得跨行(host 解析器以换行结束语句)。
-let isTypeValue = (v) -> v != null && (__hostTypeOf(v.check) == __hostFunction || v.check.type == "Function");
+// 注意:裸值的 .check 探测是错误值,error == "X" 也是错误值(truthy),比较前
+// 必须先 !isError 守卫(与构造器分发的守卫同理)。
+let isTypeValue = (v) -> v != null && (__hostTypeOf(v.check) == __hostFunction || (!isError(v.check) && !isError(v.check.type) && v.check.type == "Function"));
 
 // 9 个类型常量 + Error 类型对象。判定基于 boot 值包装 {type, value}(null 无
 // 包装):调用路径(interpreter.ql)对宿主 QLang 函数传包装值,对宿主原生传裸值,
-// null 一律裸传,故 check 直接探测包装字段即可。
-let Number   = { check: (v) -> v != null && v.type == "Number" };
-let String   = { check: (v) -> v != null && v.type == "String" };
-let Boolean  = { check: (v) -> v != null && v.type == "Boolean" };
+// null 一律裸传。check 对错误值参数与宿主一致(宿主谓词 accepts_errors: true,
+// 返回 false/true 而非报错):裸值/错误值的 .type 探测是错误值,比较前
+// !isError 守卫。
+let Number   = { check: (v) -> v != null && !isError(v.type) && v.type == "Number" };
+let String   = { check: (v) -> v != null && !isError(v.type) && v.type == "String" };
+let Boolean  = { check: (v) -> v != null && !isError(v.type) && v.type == "Boolean" };
 let Null     = { check: (v) -> v == null };
-let AnyArray = { check: (v) -> v != null && v.type == "Array" };
-let AnyObject= { check: (v) -> v != null && v.type == "Object" && !isTypeValue(v) };
+let AnyArray = { check: (v) -> v != null && !isError(v.type) && v.type == "Array" };
+let AnyObject= { check: (v) -> v != null && !isError(v.type) && v.type == "Object" && !isTypeValue(v) };
 // boot 函数记录的包装标签是大写 "Function"(brief 的 "function"/"native" 一并
 // 兼容);裸原生函数在宿主探测下无 type 字段(brief 注明的变体)。
-let Function = { check: (v) -> v != null && (v.type == "Function" || v.type == "function" || v.type == "native") };
+let Function = { check: (v) -> v != null && !isError(v.type) && (v.type == "Function" || v.type == "function" || v.type == "native") };
 let Any      = { check: (v) -> true };
 let Never    = { check: (v) -> false };
 // Error 类型对象:raise 复用宿主 Error 类型对象的原生构造器(arity 不定,
 // (msg) / (msg, cause) 均可用;boot 的 QLang 函数无法表达可选参数,且部分应用
 // 会把 1 参调用变成柯里化函数,故直接挂原生)。
-let Error    = { check: (v) -> v != null && v.type == "Error",
+let Error    = { check: (v) -> v != null && !isError(v.type) && v.type == "Error",
                  raise: Error.raise };
 
-// 合并的 Type 模块(模块兼类型值):check / of / make。of 接收包装值
-// (调用路径保证),常量一律返回本模块内同源对象(互比安全)。
+// 合并的 Type 模块(模块兼类型值):check / of / make。of 返回本模块内同源
+// 常量(互比安全)。分发链同样需要 !isError(v.type) 守卫;裸宿主值(无 type
+// 字段,如 std 模块/JSON.parse 结果)按捕获的宿主 Type.of 判定,与宿主一致。
 let Type = {
   check: (v) -> isTypeValue(v),
   of: (v) -> {
     if v == null { Null; }
     else if isTypeValue(v) { Type; }
-    else if v.type == "Number" { Number; }
-    else if v.type == "String" { String; }
-    else if v.type == "Boolean" { Boolean; }
-    else if v.type == "Array" { AnyArray; }
-    else if v.type == "Object" { AnyObject; }
-    else if v.type == "Function" || v.type == "function" || v.type == "native" { Function; }
-    else if v.type == "Error" { Error; }
+    else if !isError(v.type) && v.type == "Number" { Number; }
+    else if !isError(v.type) && v.type == "String" { String; }
+    else if !isError(v.type) && v.type == "Boolean" { Boolean; }
+    else if !isError(v.type) && v.type == "Array" { AnyArray; }
+    else if !isError(v.type) && v.type == "Object" { AnyObject; }
+    else if !isError(v.type) && (v.type == "Function" || v.type == "function" || v.type == "native") { Function; }
+    else if !isError(v.type) && v.type == "Error" { Error; }
+    else if !isError(v.type) && v.type == "Type" { Type; }
+    else if __hostTypeOf(v) == __hostNumber { Number; }
+    else if __hostTypeOf(v) == __hostString { String; }
+    else if __hostTypeOf(v) == __hostBoolean { Boolean; }
+    else if __hostTypeOf(v) == __hostNull { Null; }
+    else if __hostTypeOf(v) == __hostAnyArray { AnyArray; }
+    else if __hostTypeOf(v) == __hostAnyObject { AnyObject; }
+    else if __hostTypeOf(v) == __hostFunction { Function; }
+    else if __hostTypeOf(v) == __hostError { Error; }
+    else if __hostTypeOf(v) == __hostType { Type; }
     else { Type; };
   },
-  make: (f) -> { return { check: f }; },
+  // 与宿主对齐:make 参数必须是函数(宿主 QLang 函数/原生/boot 函数记录),
+  // 否则 TypeMismatch 错误值(host 消息 "Type.make: expected a function")。
+  make: (f) -> {
+    if f != null && (__hostTypeOf(f) == __hostFunction || (!isError(f.type) && f.type == "Function")) { return { check: f }; }
+    else { std.Error.raise("TypeMismatch", "Type.make: expected a function", null); };
+  },
 };
 
 // boot 对象包装的 entries(host 的 std.Object 无 entries):obj 是
@@ -152,8 +172,15 @@ let arrayCheck = (mode) -> (v) -> {
 let Array = (x) -> {
   // 注意:裸值(如类型常量)的 x.type 探测是错误值,error == "X" 也是错误值
   // (truthy)——必须先 !isError(x.type) 再比较标签,否则裸常量会误入定长分支。
-  if x != null && !isError(x.type) && x.type == "Number" && x.value >= 0 && x.value % 1 == 0 {
-    Type.make(arrayCheck({ length: x.value, element: null, tuple: null }));
+  if x != null && !isError(x.type) && x.type == "Number" {
+    if x.value >= 0 && x.value % 1 == 0 {
+      Type.make(arrayCheck({ length: x.value, element: null, tuple: null }));
+    }
+    else {
+      // 与宿主对齐:负数/非整数长度报专属消息(host "Array: length must be a
+      // non-negative integer"),而非落入通用 else。
+      std.Error.raise("TypeMismatch", "Array: length must be a non-negative integer", null);
+    };
   }
   else if isTypeValue(x) {
     Type.make(arrayCheck({ length: null, element: x.check, tuple: null }));

@@ -157,7 +157,8 @@ SAFE_CASES = [
     # e21: assert the error KIND of a top-level recursion-guard error (r28 in
     # RISKY_CASES only compares that both sides error; this one checks the kind
     # is StackOverflow on both sides — the bare self-call stays under both the
-    # boot guard (~45 levels) and the host guard (300), so neither stack blows)
+    # boot guard (~35 levels since Task 10's probe migration) and the host
+    # guard (300), so neither stack blows)
     ("e21", "let f = (n) -> f(n - 1); let r = f(10000); r.type;"),
     # e22: null is the single empty value — the type name is "Null" (not "Void")
     # and its string form is "null" (no "void" spelling anywhere in the language).
