@@ -638,15 +638,16 @@ let Interpreter = () -> {
         }
         if args.length < func.params.length {
           // Partial application: matches the host — insufficient args return a curried function
+          // (params are Parameter records: { name, annotation }; annotation checks are Task 11)
           let partialEnv = Environment(func.env);
           let i = 0;
           while i < args.length {
-            partialEnv._define(func.params[i], args[i]);
+            partialEnv._define(func.params[i].name, args[i]);
             i = i + 1;
           }
           let remaining = [];
           while i < func.params.length {
-            remaining[remaining.length] = func.params[i];
+            remaining[remaining.length] = func.params[i].name;
             i = i + 1;
           }
           { type: "Function", params: remaining, body: func.body, env: partialEnv };
@@ -660,9 +661,9 @@ let Interpreter = () -> {
           let i = 0;
           while i < func.params.length {
             if i < args.length {
-              localEnv._define(func.params[i], args[i]);
+              localEnv._define(func.params[i].name, args[i]);
             } else {
-              localEnv._define(func.params[i], { type: "Null", value: null });
+              localEnv._define(func.params[i].name, { type: "Null", value: null });
             }
             i = i + 1;
           }

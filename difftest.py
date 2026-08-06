@@ -169,6 +169,11 @@ SAFE_CASES = [
     # e24: ?? is error-only — a null left operand passes through untouched
     # (no null-coalescing; null is a legitimate value, not an error stand-in)
     ("e24", "null ?? 42;"),
+    # ---- type-system annotations (Task 9+): syntax only on the boot side until
+    # Task 11 implements the checking semantics; t01 must go green once the boot
+    # parses annotations, t02 stays red (boot has no check yet) until Task 11 ----
+    ("t01", 'let x: Number = 42; x;'),
+    ("t02", 'let x: Number = "a"; isError(x);'),
 ]
 
 # Complex cases: multi-feature combinations (recursion / closure mutation / higher-order

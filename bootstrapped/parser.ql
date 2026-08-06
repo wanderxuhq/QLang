@@ -109,6 +109,14 @@ let Parser = (tokens) -> {
     let name = peek().value;
     advance(); // Skip the identifier
 
+    // Optional type annotation: let x: Number = 10; — the annotation is a full
+    // expression (evaluated to a type value at runtime; checking is Task 11)
+    let annotation = null;
+    if check(TokenKind.Colon) {
+      advance();
+      annotation = parseExpression();
+    }
+
     while !check(TokenKind.Equal) && !check(TokenKind.Semicolon) && !check(TokenKind.Eof) {
       advance();
     }
@@ -119,7 +127,7 @@ let Parser = (tokens) -> {
       let value = parseExpression();
       if check(TokenKind.Semicolon) { advance(); }
       skipNewlines();
-      return LetStmt(name, value);
+      return LetStmt(name, value, annotation);
     };
   };
 
@@ -549,16 +557,31 @@ let Parser = (tokens) -> {
         let potentialParam = firstToken.value;
         advance(); // Skip the identifier
 
-        if check(TokenKind.Comma) {
-          // This is a parameter list: (a, b, ...)
-          let params = [potentialParam];
-          advance(); // consume comma
+        // 参数类型标注:`(a: Type, ...) -> ...`(仅标识符参数可带标注;
+        // 标注是完整表达式,求值得到类型值——检查是 Task 11)
+        let annotation = null;
+        if check(TokenKind.Colon) {
+          advance();
+          annotation = parseExpression();
+        }
+
+        // 有标注时强制走参数列表路径(避免 (x: T) 被静默当作分组)
+        if annotation != null || check(TokenKind.Comma) {
+          // This is a parameter list: (a, b, ...) / (a: T, b: U, ...)
+          let params = [Parameter(potentialParam, annotation)];
+          if check(TokenKind.Comma) { advance(); }
 
           while !check(TokenKind.RightParen) && !check(TokenKind.Eof) {
             skipNewlines();
             if check(TokenKind.Identifier) {
-              params[params.length] = peek().value;
+              let paramName = peek().value;
               advance();
+              let ann = null;
+              if check(TokenKind.Colon) {
+                advance();
+                ann = parseExpression();
+              }
+              params[params.length] = Parameter(paramName, ann);
             } else if check(TokenKind.Comma) {
               advance();
             } else {
@@ -588,7 +611,7 @@ let Parser = (tokens) -> {
             // (name) -> body
             advance();
             let body = parseBlock();
-            return FunctionExpr([potentialParam], body);
+            return FunctionExpr([Parameter(potentialParam, null)], body);
           } else {
             // Grouped expression: (name)
             return IdentifierExpr(potentialParam);
@@ -607,7 +630,7 @@ let Parser = (tokens) -> {
             advance();
             let params = [];
             if expr.type == "Identifier" {
-              params[0] = expr.name;
+              params[0] = Parameter(expr.name, null);
             };
             let body = parseBlock();
             return FunctionExpr(params, body);
@@ -626,7 +649,7 @@ let Parser = (tokens) -> {
           // Convert the expression to a parameter name (not ideal but works for simple cases)
           let params = [];
           if expr.type == "Identifier" {
-            params[0] = expr.name;
+            params[0] = Parameter(expr.name, null);
           };
           let body = parseBlock();
           return FunctionExpr(params, body);

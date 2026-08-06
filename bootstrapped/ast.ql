@@ -7,8 +7,8 @@ let Program = (statements) -> {
   { type: "Program", statements: statements };
 };
 
-let LetStmt = (name, value) -> {
-  { type: "Let", name: name, value: value };
+let LetStmt = (name, value, annotation) -> {
+  { type: "Let", name: name, value: value, annotation: annotation };
 };
 
 let AssignStmt = (target, value) -> {
@@ -75,8 +75,8 @@ let FunctionExpr = (parameters, body) -> {
   { type: "Function", parameters: parameters, body: body };
 };
 
-let Parameter = (name) -> {
-  { type: "Parameter", name: name };
+let Parameter = (name, annotation) -> {
+  { type: "Parameter", name: name, annotation: annotation };
 };
 
 let CallExpr = (callee, arguments) -> {

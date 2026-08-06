@@ -176,9 +176,12 @@ let Lexer = (source) -> {
 
     let kw = kwMap;
     // Note: probing a missing key on a raw object now yields an UndefinedField
-    // error value (host error-as-value), never null; detect via std.Type.of
+    // error value (host error-as-value), never null; detect via isError (the
+    // old std.Type.of(probe) == "Error" string form broke after the type-system
+    // migration — Type.of returns type values, and cross-interpreter identity
+    // never matches; this site was missing from the Task 11 migration lists)
     let probe = kw[text];
-    let kind = if std.Type.of(probe) == "Error" {
+    let kind = if isError(probe) {
       TokenKind.Identifier;
     } else {
       probe;
