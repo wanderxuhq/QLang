@@ -229,14 +229,20 @@ impl Interpreter {
         match stmt {
             Statement::Let(let_stmt) => {
                 let value = self.eval_expression(&let_stmt.value, env)?;
+                let mut annotation = None;
                 let value = if let Some(ann) = &let_stmt.type_annotation {
                     let text = self.annotation_text(ann);
                     let ty = self.eval_expression(ann, env)?;
+                    annotation = Some((ty.clone(), text.clone()));
                     self.check_annotation(value, ty, &text, Some(ann.span()))?
                 } else {
                     value
                 };
-                env.borrow_mut().define(let_stmt.name.clone(), value);
+                if let Some(a) = annotation {
+                    env.borrow_mut().define_annotated(let_stmt.name.clone(), value, Some(a));
+                } else {
+                    env.borrow_mut().define(let_stmt.name.clone(), value);
+                }
                 Ok(ControlFlow::None)
             }
 
@@ -727,8 +733,8 @@ impl Interpreter {
                 self.recursion_depth += 1;
 
                 let call_env = child_env(&func.closure);
-                for (param, arg) in func.parameters.iter().zip(args) {
-                    call_env.borrow_mut().define(param.name.clone(), arg);
+                for (i, (param, arg)) in func.parameters.iter().zip(args).enumerate() {
+                    call_env.borrow_mut().define_annotated(param.name.clone(), arg, func.param_types[i].clone());
                 }
 
                 self.call_stack.push(CallFrame {
@@ -839,6 +845,10 @@ impl Interpreter {
     /// Assign to a target
     fn assign_value(&mut self, target: &AssignTarget, value: Value, env: &EnvRef) -> Result<(), RuntimeError> {
         if target.accessors.is_empty() {
+            let value = match env.borrow().get_annotation(&target.name) {
+                Some((ty, text)) => self.check_annotation(value, ty, &text, None)?,
+                None => value,
+            };
             env.borrow_mut().assign(&target.name, value)
         } else {
             // Handle nested assignment (a.b[0].c = value)

@@ -53,6 +53,13 @@ pub fn child_env(parent: &EnvRef) -> EnvRef {
     Rc::new(RefCell::new(Environment::with_parent(Rc::clone(parent))))
 }
 
+/// 变量绑定:值 + 可选的类型标注((求值后的类型值, 源码文本))。
+#[derive(Debug)]
+pub struct Binding {
+    pub value: Value,
+    pub annotation: Option<(Value, String)>,
+}
+
 /// Environment (scope)
 ///
 /// An environment stores the mapping from variable names to values.
@@ -92,7 +99,7 @@ pub fn child_env(parent: &EnvRef) -> EnvRef {
 #[derive(Debug)]
 pub struct Environment {
     /// Variable bindings of the current scope
-    values: HashMap<String, Value>,
+    values: HashMap<String, Binding>,
     /// Parent environment, used for scope chain lookups
     parent: Option<EnvRef>,
 }
@@ -138,7 +145,12 @@ impl Environment {
     /// env.define("x".to_string(), Value::Number(10.0));
     /// ```
     pub fn define(&mut self, name: String, value: Value) {
-        self.values.insert(name, value);
+        self.values.insert(name, Binding { value, annotation: None });
+    }
+
+    /// 带标注的绑定(标注为 Some 时,重赋值会再次检查)。
+    pub fn define_annotated(&mut self, name: String, value: Value, annotation: Option<(Value, String)>) {
+        self.values.insert(name, Binding { value, annotation });
     }
 
     /// Get a variable value
@@ -164,13 +176,16 @@ impl Environment {
     /// let unknown = env.get("y");  // None
     /// ```
     pub fn get(&self, name: &str) -> Option<Value> {
-        if let Some(value) = self.values.get(name) {
-            Some(value.clone())
-        } else if let Some(ref parent) = self.parent {
-            parent.borrow().get(name)
-        } else {
-            None
-        }
+        if let Some(b) = self.values.get(name) { Some(b.value.clone()) }
+        else if let Some(ref parent) = self.parent { parent.borrow().get(name) }
+        else { None }
+    }
+
+    /// 沿作用域链查找变量的标注(仅用于重赋值检查)。
+    pub fn get_annotation(&self, name: &str) -> Option<(Value, String)> {
+        if let Some(b) = self.values.get(name) { b.annotation.clone() }
+        else if let Some(ref parent) = self.parent { parent.borrow().get_annotation(name) }
+        else { None }
     }
 
     /// Modify a variable value
@@ -195,8 +210,8 @@ impl Environment {
     /// env.assign("y", Value::Number(30.0));  // Err(UndefinedVariable)
     /// ```
     pub fn assign(&mut self, name: &str, value: Value) -> Result<(), RuntimeError> {
-        if self.values.contains_key(name) {
-            self.values.insert(name.to_string(), value);
+        if let Some(b) = self.values.get_mut(name) {
+            b.value = value; // 保留 annotation
             Ok(())
         } else if let Some(ref parent) = self.parent {
             parent.borrow_mut().assign(name, value)
@@ -217,7 +232,7 @@ impl Environment {
     /// Used for nested assignment (e.g. modifying object fields).
     /// Only checks the current scope.
     pub fn get_mut(&mut self, name: &str) -> Option<&mut Value> {
-        self.values.get_mut(name)
+        self.values.get_mut(name).map(|b| &mut b.value)
     }
 
     /// Get a reference to the parent environment
@@ -226,12 +241,12 @@ impl Environment {
     }
 
     /// Get all bindings of the current scope (for debugging)
-    pub fn bindings(&self) -> &HashMap<String, Value> {
+    pub fn bindings(&self) -> &HashMap<String, Binding> {
         &self.values
     }
 
     /// Get an iterator over all bindings
-    pub fn iter_bindings(&self) -> impl Iterator<Item = (&String, &Value)> {
+    pub fn iter_bindings(&self) -> impl Iterator<Item = (&String, &Binding)> {
         self.values.iter()
     }
 }

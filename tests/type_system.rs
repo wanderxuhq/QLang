@@ -74,3 +74,14 @@ fn param_annotations_checked_at_call() {
     // 遮蔽后标注求值指向遮蔽值
     assert_eq!(run("let Number = 42; let f = (a: Number) -> a; let r = f(1); isError(r);"), "true");
 }
+
+#[test]
+fn reassignment_rechecks_annotation() {
+    assert_eq!(run("let x: Number = 42; x = 100; x;"), "100");
+    assert_eq!(run("let x: Number = 42; x = \"a\"; isError(x);"), "true");
+    assert_eq!(run("let x: Number = 42; x = \"a\"; x.type;"), "TypeCheck");
+    // 无标注的变量照常
+    assert_eq!(run("let x = 42; x = \"a\"; x;"), "a");
+    // 函数参数带标注,体内重赋值再查
+    assert_eq!(run("let f = (a: Number) -> { a = \"x\"; return a; }; let r = f(1); isError(r);"), "true");
+}
