@@ -44,6 +44,13 @@ pub struct Span {
     pub end: usize,
 }
 
+impl Default for Span {
+    /// Position 0:0 — used for internal calls without a source position
+    fn default() -> Self {
+        Span { start: 0, end: 0 }
+    }
+}
+
 impl Span {
     /// Creates a new Span
     ///

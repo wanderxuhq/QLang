@@ -38,3 +38,23 @@ fn builtin_types_registered() {
     assert_eq!(run("std.Type.make((v) -> v > 0).check(5);"), "true");
     assert_eq!(run("let e = Error.raise(\"boom\"); std.Type.of(e) == Error;"), "true");
 }
+
+#[test]
+fn let_annotation_checks() {
+    assert_eq!(run("let x: Number = 42; x;"), "42");
+    assert_eq!(run("let x: Number = \"a\"; isError(x);"), "true");
+    assert_eq!(run("let x: Number = \"a\"; x.type;"), "TypeCheck");
+    assert_eq!(run("let x: Error = Error.raise(\"boom\"); x.message;"), "boom");
+    assert_eq!(run("let x: Number = Error.raise(\"boom\"); isError(x);"), "true");
+    // cause 链:被检查值本身是错误值
+    assert_eq!(run("let x: Number = Error.raise(\"boom\"); x.cause.type;"), "Error");
+    // 标注不是类型值
+    assert_eq!(run("let T = 42; let x: T = 5; isError(x);"), "true");
+    // 用户自定义类型
+    assert_eq!(run("let Positive = std.Type.make((v) -> v > 0); let x: Positive = 5; x;"), "5");
+    assert_eq!(run("let Positive = std.Type.make((v) -> v > 0); let x: Positive = -5; isError(x);"), "true");
+    // check 自身出错 → 失败
+    assert_eq!(run("let Bad = std.Type.make((v) -> 1 / 0); let x: Bad = 5; isError(x);"), "true");
+    // 无标注 = 完全动态
+    assert_eq!(run("let x = \"a\"; x;"), "a");
+}

@@ -229,6 +229,13 @@ impl Interpreter {
         match stmt {
             Statement::Let(let_stmt) => {
                 let value = self.eval_expression(&let_stmt.value, env)?;
+                let value = if let Some(ann) = &let_stmt.type_annotation {
+                    let text = self.annotation_text(ann);
+                    let ty = self.eval_expression(ann, env)?;
+                    self.check_annotation(value, ty, &text, Some(ann.span()))?
+                } else {
+                    value
+                };
                 env.borrow_mut().define(let_stmt.name.clone(), value);
                 Ok(ControlFlow::None)
             }
@@ -628,17 +635,25 @@ impl Interpreter {
 
     /// Call a function
     fn call_function(&mut self, callee: Value, args: Vec<Value>, span: Span) -> Result<Value, RuntimeError> {
+        self.call_function_inner(callee, args, span, false)
+    }
+
+    /// 内部调用路径;exempt_error_args = true 时跳过用户函数的错误值参数检查
+    /// (内部类型检查路径用;原生分支仍按各自 accepts_errors 判断)。
+    fn call_function_inner(&mut self, callee: Value, args: Vec<Value>, span: Span, exempt_error_args: bool) -> Result<Value, RuntimeError> {
         match callee {
             Value::Function(func) => {
                 // Argument check: user functions reject error values as arguments
                 // (only the diagnostic natives are exempt; user functions never are)
-                if let Some(bad) = args.iter().find(|a| matches!(a, Value::Error(_))) {
-                    return Ok(self.make_error(
-                        "TypeMismatch",
-                        "attempt to pass error value as argument".to_string(),
-                        Some(span),
-                        error_cause(bad),
-                    ));
+                if !exempt_error_args {
+                    if let Some(bad) = args.iter().find(|a| matches!(a, Value::Error(_))) {
+                        return Ok(self.make_error(
+                            "TypeMismatch",
+                            "attempt to pass error value as argument".to_string(),
+                            Some(span),
+                            error_cause(bad),
+                        ));
+                    }
                 }
 
                 // Support currying - if not enough args, return a partial function
@@ -779,6 +794,51 @@ impl Interpreter {
                 Some(span),
                 None,
             )),
+        }
+    }
+
+    /// `v` 是否属于类型 `t`?t 非类型值或 check 出错 → Err(错误值)。
+    fn check_value(&mut self, v: &Value, t: &Value, span: Option<Span>) -> Result<bool, Value> {
+        if !crate::types::is_type_value(t) {
+            return Err(self.make_error("TypeCheck", "type annotation is not a type value".to_string(), span, None));
+        }
+        let check_fn = match self.get_field(t, "check", span) {
+            Ok(f) => f,
+            // 防御分支:类型值必为对象,get_field 实际不 Err;RuntimeError 无直接
+            // 到错误值的转换,按 check 失败处理(消息同下)。
+            Err(e) => return Err(self.make_error("TypeCheck", format!("type check failed: {}", e), span, None)),
+        };
+        match self.call_function_inner(check_fn, vec![v.clone()], span.unwrap_or_default(), true) {
+            Ok(Value::Error(e)) => Err(Value::Error(e)), // check 自身出错 → 失败
+            Ok(r) => Ok(r.is_truthy()),
+            Err(e) => Err(self.make_error("TypeCheck", format!("type check failed: {}", e), span, None)),
+        }
+    }
+
+    /// 标注检查:通过返回原值;失败返回 TypeCheck 错误值(消息含标注源码文本)。
+    fn check_annotation(&mut self, value: Value, ty: Value, ann_text: &str, span: Option<Span>) -> Result<Value, RuntimeError> {
+        match self.check_value(&value, &ty, span) {
+            Ok(true) => Ok(value),
+            Ok(false) => {
+                let cause = match &value { Value::Error(e) => Some(Rc::clone(e)), _ => None };
+                Ok(self.make_error(
+                    "TypeCheck",
+                    format!("value of type \"{}\" does not match the annotated type \"{}\"", value.type_name(), ann_text),
+                    span, cause,
+                ))
+            }
+            Err(e) => Ok(e),
+        }
+    }
+
+    /// 标注的源码文本(类型无名,消息里的名字来自你写下的代码)。
+    fn annotation_text(&self, expr: &Expression) -> String {
+        let span = expr.span();
+        let src = &self.current_source;
+        if src.is_empty() || span.start >= span.end || span.end > src.len() {
+            "?".to_string()
+        } else {
+            src[span.start..span.end].to_string()
         }
     }
 
