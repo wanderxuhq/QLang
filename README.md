@@ -851,8 +851,11 @@ x.message   // 'value of type "String" does not match the annotated type "Number
 ```
 
 - If the check itself errors, the check **fails** — an error never masquerades
-  as a pass: `std.Type.make((v) -> 1 / 0)` yields a `TypeCheck` error whose
-  `cause` chain contains the check's `DivisionByZero`.
+  as a pass: with `let Bad = std.Type.make((v) -> 1 / 0); let x: Bad = 5`, the
+  binding holds the check's own error value directly (`x.type` is
+  `"DivisionByZero"` — no wrapping, no added `cause`), so the annotated
+  binding never passes. To assert the annotation failed, use `isError(x)` or
+  inspect `x.type`'s kind.
 - If the checked value is an error value (e.g. `let x: Number = risky()`), the
   `TypeCheck` error chains it as `cause`, keeping the root cause visible.
 - An annotation that is not a type value — a plain value, or a shadowed

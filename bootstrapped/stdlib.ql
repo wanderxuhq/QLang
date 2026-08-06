@@ -53,11 +53,40 @@ let __hostType = __hostTypeOf(Number);
 
 // 类型值判定:对象且带可调用 check 成员。boot 的类型常量是 {check: <函数>}
 // 对象(std.Type.make 产物同理);boot 用户函数是 {type: "Function", ...} 记录,
-// 作为 check 成员时其 .type 探测为 "Function"。包装值(无 check)与普通对象
-// (check 非函数)均判否。注意:表达式不得跨行(host 解析器以换行结束语句)。
-// 注意:裸值的 .check 探测是错误值,error == "X" 也是错误值(truthy),比较前
-// 必须先 !isError 守卫(与构造器分发的守卫同理)。
-let isTypeValue = (v) -> v != null && (__hostTypeOf(v.check) == __hostFunction || (!isError(v.check) && !isError(v.check.type) && v.check.type == "Function"));
+// 作为 check 成员时其 .type 探测为 "Function"。普通对象(check 非函数)判否。
+// 第三项:调用路径(interpreter.ql)把宿主 QLang 函数(Type.make/Array/Object/
+// std.Type.of)的返回值包成 {type:"Object"|"Type", value: <类型值>} 包装——
+// 该包装形态同样是类型值(解包判定内层)。注意:表达式不得跨行(host 解析器
+// 以换行结束语句);裸值的 .check/.type 探测是错误值,error == "X" 也是错误值
+// (truthy),比较前必须先 !isError 守卫(与构造器分发的守卫同理)。
+let isTypeValue = (v) -> v != null && (__hostTypeOf(v.check) == __hostFunction || (!isError(v.check) && !isError(v.check.type) && v.check.type == "Function") || (!isError(v.type) && (v.type == "Object" || v.type == "Type") && isTypeValue(v.value)));
+
+// 类型值解包:调用产物包装({type:"Object"|"Type", value: <类型值>})取内层
+// 类型值;其余值(裸类型值常量/普通包装/原始值)原样返回。只解包装形态——内层
+// 不是类型值(如普通对象字面量)时保持原样,由调用方继续按原判定处理。
+let unwrapTypeValue = (v) -> {
+  if v != null && !isError(v.type) && (v.type == "Object" || v.type == "Type") && isTypeValue(v.value) {
+    v.value;
+  } else {
+    v;
+  };
+};
+
+// 调用类型检查函数(宿主 QLang 函数或 boot 用户函数记录)。宿主函数直接调用
+// (现有 t10/t11 路径);boot 记录只能经 boot 调用路径执行——经 std.__bootCall
+// 桥接(interpreter.ql 注入,闭包捕获本进程的 callFunctionInner),并把 boot
+// 包装结果还原为裸值(Boolean/Null/Error 解包,其余形态原样返回)。
+let callCheck = (check, v) -> {
+  if __hostTypeOf(check) == __hostFunction {
+    check(v);
+  } else {
+    let r = std.__bootCall(check, v);
+    if r != null && !isError(r.type) && r.type == "Boolean" { r.value; }
+    else if r != null && !isError(r.type) && r.type == "Null" { null; }
+    else if r != null && !isError(r.type) && r.type == "Error" { r.value; }
+    else { r; };
+  };
+};
 
 // 9 个类型常量 + Error 类型对象。判定基于 boot 值包装 {type, value}(null 无
 // 包装):调用路径(interpreter.ql)对宿主 QLang 函数传包装值,对宿主原生传裸值,
@@ -71,8 +100,9 @@ let Null     = { check: (v) -> v == null };
 let AnyArray = { check: (v) -> v != null && !isError(v.type) && v.type == "Array" };
 let AnyObject= { check: (v) -> v != null && !isError(v.type) && v.type == "Object" && !isTypeValue(v) };
 // boot 函数记录的包装标签是大写 "Function"(brief 的 "function"/"native" 一并
-// 兼容);裸原生函数在宿主探测下无 type 字段(brief 注明的变体)。
-let Function = { check: (v) -> v != null && !isError(v.type) && (v.type == "Function" || v.type == "function" || v.type == "native") };
+// 兼容);裸原生函数在宿主探测下无 type 字段(brief 注明的变体)——补宿主探测
+// 分支:裸宿主函数(原生与 QLang 函数,如 print)在宿主 Type.of 下即 Function。
+let Function = { check: (v) -> v != null && ((!isError(v.type) && (v.type == "Function" || v.type == "function" || v.type == "native")) || __hostTypeOf(v) == __hostFunction) };
 let Any      = { check: (v) -> true };
 let Never    = { check: (v) -> false };
 // Error 类型对象:raise 复用宿主 Error 类型对象的原生构造器(arity 不定,
@@ -131,12 +161,13 @@ let __objectEntries = (obj) -> {
 };
 std.Object.entries = __objectEntries;
 
-// 逐元素检查骨架(注意:boot 的 stdlib 没有 forEach,用 while)
+// 逐元素检查骨架(注意:boot 的 stdlib 没有 forEach,用 while)。元素检查经
+// callCheck 调用:宿主函数直接调,用户类型(check 为 boot 记录)经 __bootCall。
 let allMatch = (arr, check) -> {
   let ok = true;
   let i = 0;
   while i < arr.length && ok {
-    let r = check(arr[i]);
+    let r = callCheck(check, arr[i]);
     if r == null || r == false || isError(r) { ok = false; };
     i = i + 1;
   };
@@ -158,7 +189,7 @@ let arrayCheck = (mode) -> (v) -> {
       let ok = true;
       let i = 0;
       while i < mode.tuple.length && ok {
-        let r = mode.tuple[i](v.value[i]);
+        let r = callCheck(mode.tuple[i], v.value[i]);
         if r == null || r == false || isError(r) { ok = false; };
         i = i + 1;
       };
@@ -183,14 +214,18 @@ let Array = (x) -> {
     };
   }
   else if isTypeValue(x) {
-    Type.make(arrayCheck({ length: null, element: x.check, tuple: null }));
+    // Type 成员:元素类型。x 可能是调用产物包装({type:"Object"|"Type", value:
+    // 类型值},如 std.Type.make/std.Type.of/嵌套构造器调用的返回值)——解包后
+    // 取 check(包装的 check 探测是错误值)。
+    Type.make(arrayCheck({ length: null, element: unwrapTypeValue(x).check, tuple: null }));
   }
   else if x != null && !isError(x.type) && x.type == "Array" {
-    // [Type] 成员:逐位类型(构造时验证每个元素都是类型)
+    // [Type] 成员:逐位类型(构造时验证每个元素都是类型;元素同样可能是调用
+    // 产物包装,先解包再判定/取 check)
     let checks = [];
     let i = 0;
     while i < x.value.length {
-      let t = x.value[i];
+      let t = unwrapTypeValue(x.value[i]);
       if !isTypeValue(t) {
         return std.Error.raise("TypeMismatch", "Array: tuple elements must all be type values", null);
       };
@@ -200,17 +235,20 @@ let Array = (x) -> {
     Type.make(arrayCheck({ length: null, element: null, tuple: checks }));
   }
   else if x != null && !isError(x.type) && x.type == "Object" && !isTypeValue(x) {
-    // {length, element} 元数据成员
+    // {length, element} 元数据成员(element 可能是调用产物包装)
     let length = x.value["length"];
     let element = x.value["element"];
     if length == null || length.type != "Number" || length.value < 0 || length.value % 1 != 0 {
       std.Error.raise("TypeMismatch", "Array: metadata must have a non-negative integer 'length'", null);
     }
-    else if element == null || !isTypeValue(element) {
-      std.Error.raise("TypeMismatch", "Array: metadata must have a type 'element'", null);
-    }
     else {
-      Type.make(arrayCheck({ length: length.value, element: element.check, tuple: null }));
+      let et = unwrapTypeValue(element);
+      if et == null || !isTypeValue(et) {
+        std.Error.raise("TypeMismatch", "Array: metadata must have a type 'element'", null);
+      }
+      else {
+        Type.make(arrayCheck({ length: length.value, element: et.check, tuple: null }));
+      };
     };
   }
   else {
@@ -221,7 +259,10 @@ let Array = (x) -> {
 // Object 构造器:union 参数(Type | 形状对象)
 let Object = (x) -> {
   if isTypeValue(x) {
-    // Type 成员:keys 全为 T(Object(String) ≡ AnyObject)
+    // Type 成员:keys 全为 T(Object(String) ≡ AnyObject)。x 可能是调用产物
+    // 包装——解包后取 check,key 检查经 callCheck 调用(用户类型的 check 是
+    // boot 记录,宿主闭包不能直接调用)。
+    let t = unwrapTypeValue(x);
     Type.make((v) -> {
       if v == null || v.type != "Object" || isTypeValue(v) { false; }
       else {
@@ -231,7 +272,7 @@ let Object = (x) -> {
         let ok = true;
         let i = 0;
         while i < keys.length && ok {
-          let r = x.check({ type: "String", value: keys[i] });
+          let r = callCheck(t.check, { type: "String", value: keys[i] });
           if r == null || r == false || isError(r) { ok = false; };
           i = i + 1;
         };
@@ -240,13 +281,18 @@ let Object = (x) -> {
     });
   }
   else if x != null && !isError(x.type) && x.type == "Object" && !isTypeValue(x) {
-    // 形状对象成员:schema(构造时验证值都是类型;缺字段/字段不符 → false)
+    // 形状对象成员:schema(构造时验证值都是类型;缺字段/字段不符 → false)。
+    // 字段值可能是调用产物包装,先解包再校验/使用(归一化后的 schema 供检查
+    // 闭包读取;检查经 callCheck 调用)。
     let entries = std.Object.entries(x);
+    let schema = [];
     let i = 0;
     while i < entries.length {
-      if !isTypeValue(entries[i][1]) {
+      let t = unwrapTypeValue(entries[i][1]);
+      if !isTypeValue(t) {
         return std.Error.raise("TypeMismatch", "Object: schema field '" + entries[i][0] + "' is not a type value", null);
       };
+      schema[schema.length] = [entries[i][0], t];
       i = i + 1;
     };
     Type.make((v) -> {
@@ -254,14 +300,14 @@ let Object = (x) -> {
       else {
         let ok = true;
         let j = 0;
-        while j < entries.length && ok {
-          let key = entries[j][0];
+        while j < schema.length && ok {
+          let key = schema[j][0];
           let fv = v.value[key];
           if fv == null {
             ok = false; // 缺字段
           }
           else {
-            let r = entries[j][1].check(fv);
+            let r = callCheck(schema[j][1].check, fv);
             if r == null || r == false || isError(r) { ok = false; };
           };
           j = j + 1;

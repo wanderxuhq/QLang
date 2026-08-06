@@ -249,6 +249,17 @@ SAFE_CASES = [
     # ---- Task 12 ledger: raw-object member write (T11 observation ③) ----
     # Same fix as t26 but on a plain std module object (not a type constant)
     ("t37", 'std.Math.myHelper = 1; std.Math.myHelper;'),
+    # ---- final review: call-produced type values (wrapper blindness) ----
+    # The boot call path wraps host QLang function results (std.Type.make /
+    # std.Type.of / nested constructors) as {type:"Object", value: <type value>};
+    # constructor dispatch and Type.check must see through that wrapper, and
+    # user-type checks inside composite types must run through the boot's call
+    # path (t38/t40 are host-passing cases that used to error on the boot side).
+    ("t38", 'let Positive = std.Type.make((v) -> v > 0); let x: Array(Positive) = [1, 2]; x;'),
+    ("t39", "let x: Array(Array(Number)) = [[1]]; x;"),
+    ("t40", 'let Positive = std.Type.make((v) -> v > 0); let x: Object({n: Positive}) = {n: 1}; x;'),
+    ("t41", "std.Type.check(std.Type.of(42));"),
+    ("t42", "let x: Array(std.Type.of(42)) = [1]; x;"),
 ]
 
 # Complex cases: multi-feature combinations (recursion / closure mutation / higher-order

@@ -1010,6 +1010,13 @@ let Interpreter = () -> {
     }
   };
 
+  // std.__bootCall:供 stdlib.ql 的类型库闭包(arrayCheck/Object 检查闭包)调用
+  // boot 用户函数记录——记录只能经本调用路径执行(宿主闭包直接调用记录会得到
+  // NotCallable),复合类型检查(Array(Positive)/Object({n: Positive}))的元素/
+  // 字段检查经此桥接。与 std.Object.entries 同模式挂在宿主 std 对象上;每次
+  // Interpreter() 重新注入(最后构造的解释器生效,与运行中的检查一致)。
+  std.__bootCall = (f, v) -> callFunctionInner(f, [v], globalEnv, true);
+
   { runProgram: runProgram, evaluate: evaluate, globalEnv: globalEnv };
 };
 
