@@ -645,9 +645,13 @@ let Interpreter = () -> {
             partialEnv._define(func.params[i].name, args[i]);
             i = i + 1;
           }
+          // Keep the remaining params as full Parameter records: the curried
+          // function's later calls bind via .name, and the records carry the
+          // annotation metadata the host preserves through partial application
+          // (binding needs the name string; the record must not be degraded)
           let remaining = [];
           while i < func.params.length {
-            remaining[remaining.length] = func.params[i].name;
+            remaining[remaining.length] = func.params[i];
             i = i + 1;
           }
           { type: "Function", params: remaining, body: func.body, env: partialEnv };
