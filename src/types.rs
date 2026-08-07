@@ -8,12 +8,12 @@ use crate::environment::EnvRef;
 use crate::token::Span;
 use crate::value::{CallContext, ErrorValue, NativeFunction, ObjectValue, RuntimeError, Value};
 
-/// 内置类型对象上不可覆盖的核心成员。
+/// Core members of built-in type objects that cannot be overwritten.
 pub const PROTECTED_FIELDS: &[&str] = &["check", "raise", "of", "make"];
-/// 内置类型对象的隐藏标记字段名。lexer 永远不会产出 NUL 前缀标识符,用户代码无法书写。
+/// The hidden marker field name of built-in type objects. The lexer never produces NUL-prefixed identifiers, so user code cannot write it.
 pub const TYPE_MARKER: &str = "\u{1}type";
 
-/// `v` 是类型值?内置类型(带标记)或结构判定(对象且有可调用 check 字段)。
+/// Is `v` a type value? Built-in types (with the marker) or structural determination (an object with a callable check field).
 pub fn is_type_value(v: &Value) -> bool {
     match v {
         Value::Object(obj) => {
@@ -27,12 +27,12 @@ pub fn is_type_value(v: &Value) -> bool {
     }
 }
 
-/// `v` 是内置(受保护)类型对象?
+/// Is `v` a built-in (protected) type object?
 pub fn is_protected_object(v: &Value) -> bool {
     matches!(v, Value::Object(o) if o.borrow().fields.contains_key(TYPE_MARKER))
 }
 
-/// 用户类型对象:{check: f}(普通数据对象,不受保护)。
+/// User type object: {check: f} (an ordinary data object, not protected).
 pub fn user_type(check: Value) -> Value {
     let mut fields = HashMap::new();
     fields.insert("check".to_string(), check);
@@ -52,7 +52,7 @@ fn native_predicate(name: &str, pred: fn(&Value) -> bool) -> Value {
     Value::NativeFunction(Rc::new(NativeFunction {
         name: name.to_string(),
         arity: Some(1),
-        accepts_errors: true, // 类型判定是诊断性操作
+        accepts_errors: true, // type predicates are diagnostic operations
         func: Box::new(move |_ctx, args| {
             Ok(Value::Boolean(pred(args.first().unwrap_or(&Value::Void))))
         }),
@@ -75,12 +75,12 @@ fn is_function(v: &Value) -> bool { matches!(v, Value::Function(_) | Value::Nati
 fn is_error(v: &Value) -> bool { matches!(v, Value::Error(_)) }
 fn is_object_not_type(v: &Value) -> bool { matches!(v, Value::Object(_)) && !is_type_value(v) }
 
-/// 类型检查失败的错误值(构造器参数非法等)。
+/// Error value for a failed type check (illegal constructor arguments, etc.).
 fn arg_error(fn_name: &str, msg: &str) -> Value {
     Value::Error(Rc::new(ErrorValue::new("TypeMismatch", format!("{}: {}", fn_name, msg))))
 }
 
-/// 注册内置类型常量(全局)与合并的 std.Type(模块兼类型值)。
+/// Register the built-in type constants (globals) and the merged std.Type (both a module and a type value).
 pub fn register_type_system(global_env: &EnvRef) {
     let number_t   = builtin_type("Number", is_number);
     let string_t   = builtin_type("String", is_string);
@@ -92,13 +92,13 @@ pub fn register_type_system(global_env: &EnvRef) {
     let any_t      = builtin_type("Any", |_| true);
     let never_t    = builtin_type("Never", |_| false);
 
-    // Error 类型对象:{check: isError, raise: <构造器>}(迁移自旧全局 Error 构造器,stdlib/mod.rs:66-90)
+    // Error type object: {check: isError, raise: <constructor>} (migrated from the old global Error constructor, stdlib/mod.rs:66-90)
     let error_t = builtin_type("Error", is_error);
     if let Value::Object(obj) = &error_t {
         obj.borrow_mut().fields.insert("raise".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
             name: "Error.raise".to_string(),
-            arity: None, // 1 或 2 个参数:(msg) / (msg, cause)
-            accepts_errors: true, // cause 参数可能是错误值
+            arity: None, // 1 or 2 arguments: (msg) / (msg, cause)
+            accepts_errors: true, // the cause argument may be an error value
             func: Box::new(|_ctx, args| {
                 let msg = match args.first() {
                     Some(Value::String(s)) => s.clone(),
@@ -120,7 +120,7 @@ pub fn register_type_system(global_env: &EnvRef) {
         })));
     }
 
-    // std.Type:类型的类型 + 模块。成员:check / of / make。Type : Type 自指。
+    // std.Type: the type of types + a module. Members: check / of / make. Type : Type is self-referential.
     let type_t = builtin_type("Type", |v| is_type_value(v));
     let (number_c, string_c, boolean_c, null_c) = (number_t.clone(), string_t.clone(), boolean_t.clone(), null_t.clone());
     let (any_array_c, any_object_c, function_c) = (any_array_t.clone(), any_object_t.clone(), function_t.clone());
@@ -130,7 +130,7 @@ pub fn register_type_system(global_env: &EnvRef) {
         fields.fields.insert("of".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
             name: "Type.of".to_string(),
             arity: Some(1),
-            accepts_errors: true, // 必须能接收错误值(Type.of(err) → Error)
+            accepts_errors: true, // must be able to receive error values (Type.of(err) → Error)
             func: Box::new(move |_ctx, args| {
                 let v = args.first().unwrap_or(&Value::Void);
                 Ok(match v {
@@ -170,16 +170,16 @@ pub fn register_type_system(global_env: &EnvRef) {
     g.define("Function".to_string(), function_t);
     g.define("Any".to_string(), any_t);
     g.define("Never".to_string(), never_t);
-    g.define("Error".to_string(), error_t); // 覆盖旧全局构造器
+    g.define("Error".to_string(), error_t); // overrides the old global constructor
 
-    // std.Type 合并进 std 对象(替换旧的 create_type_module)
+    // std.Type is merged into the std object (replacing the old create_type_module)
     let std_val = g.get("std").expect("std must be registered");
     if let Value::Object(std_obj) = std_val {
         std_obj.borrow_mut().fields.insert("Type".to_string(), type_t);
     }
 }
 
-/// 注册类型构造器 Array/Object 为全局函数。
+/// Register the type constructors Array/Object as global functions.
 pub fn register_constructors(global_env: &EnvRef) {
     global_env.borrow_mut().define("Array".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "Array".to_string(), arity: Some(1), accepts_errors: false,
@@ -191,7 +191,7 @@ pub fn register_constructors(global_env: &EnvRef) {
     })));
 }
 
-/// 取出类型对象的 check 函数值(类型值必有此字段)。
+/// Extract the check function value of a type object (type values always have this field).
 fn type_check_field(t: &Value) -> Option<Value> {
     if let Value::Object(o) = t {
         o.borrow().fields.get("check").cloned()
@@ -200,7 +200,7 @@ fn type_check_field(t: &Value) -> Option<Value> {
     }
 }
 
-/// 检查闭包公共骨架:对每个目标值调用检查,任一失败/出错 → false。
+/// Common skeleton of check closures: call the check on every target value; any failure/error → false.
 fn all_check(ctx: &mut dyn CallContext, targets: Vec<Value>, check: &Value) -> Result<Value, RuntimeError> {
     for t in targets {
         match ctx.call(check.clone(), vec![t], Span::new(0, 0)) {
@@ -243,24 +243,24 @@ fn array_check(mode: ArrayMode) -> Value {
 
 enum ArrayMode {
     FixedLen(usize),
-    Element(Value),      // check 函数
-    Tuple(Vec<Value>),   // 每位的 check 函数
+    Element(Value),      // the check function
+    Tuple(Vec<Value>),   // the check function for each position
 }
 
 fn build_array_type(x: &Value) -> Result<Value, RuntimeError> {
-    // union 成员 1:Number(定长,元素任意)
+    // union member 1: Number (fixed length, arbitrary elements)
     if let Value::Number(n) = x {
         if n.fract() != 0.0 || *n < 0.0 {
             return Ok(arg_error("Array", "length must be a non-negative integer"));
         }
         return Ok(user_type(array_check(ArrayMode::FixedLen(*n as usize))));
     }
-    // union 成员 2:Type(元素类型)
+    // union member 2: Type (element type)
     if is_type_value(x) {
         let check = type_check_field(x).expect("type value has check");
         return Ok(user_type(array_check(ArrayMode::Element(check))));
     }
-    // union 成员 3:[Type](逐位类型)
+    // union member 3: [Type] (per-position types)
     if let Value::Array(elems) = x {
         let mut checks = Vec::with_capacity(elems.borrow().len());
         for e in elems.borrow().iter() {
@@ -271,7 +271,7 @@ fn build_array_type(x: &Value) -> Result<Value, RuntimeError> {
         }
         return Ok(user_type(array_check(ArrayMode::Tuple(checks))));
     }
-    // union 成员 4:{length, element}(元数据组合)
+    // union member 4: {length, element} (metadata combination)
     if let Value::Object(obj) = x {
         if !is_type_value(x) {
             let fields = obj.borrow();
@@ -316,7 +316,7 @@ fn object_check_schema(schema: Vec<(String, Value)>) -> Value {
             for (k, check) in schema.iter() {
                 let fv = match fields.get(k) {
                     Some(fv) => fv.clone(),
-                    None => return Ok(Value::Boolean(false)), // 缺字段
+                    None => return Ok(Value::Boolean(false)), // missing field
                 };
                 match ctx.call(check.clone(), vec![fv], Span::new(0, 0)) {
                     Ok(Value::Error(_)) => return Ok(Value::Boolean(false)),
@@ -331,12 +331,12 @@ fn object_check_schema(schema: Vec<(String, Value)>) -> Value {
 }
 
 fn build_object_type(x: &Value) -> Result<Value, RuntimeError> {
-    // union 成员 1:Type(keys 全为 T;Object(String) ≡ AnyObject)
+    // union member 1: Type (all keys of type T; Object(String) ≡ AnyObject)
     if is_type_value(x) {
         let check = type_check_field(x).expect("type value has check");
         return Ok(user_type(object_check_keys(check)));
     }
-    // union 成员 2:形状对象(schema)
+    // union member 2: shape object (schema)
     if let Value::Object(obj) = x {
         let mut schema = Vec::new();
         for (k, v) in obj.borrow().fields.iter() {

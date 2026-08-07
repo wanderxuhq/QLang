@@ -111,11 +111,11 @@ let Interpreter = () -> {
     isErrorVal(v) && v.propagate == true;
   };
 
-  // ---- Task 11: 标注检查语义 ----
+  // ---- Task 11: annotation-checking semantics ----
   //
-  // 受保护的内置类型对象(裸常量,与宿主 TYPE_MARKER 对象对应);用户类型
-  // (Type.make 产物)不在列,与宿主 user_type 不受保护一致。Array/Object 构造
-  // 器是函数,不参与字段写入。
+  // Protected built-in type objects (bare constants, corresponding to the host's TYPE_MARKER
+  // objects); user types (Type.make products) are not in the list, consistent with the host's
+  // user_type being unprotected. The Array/Object constructors are functions and do not participate in field writes.
   let __protectedTypes = [Number, String, Boolean, Null, AnyArray, AnyObject, Function, Any, Never, Error, Type];
 
   let isProtectedType = (o) -> {
@@ -131,14 +131,14 @@ let Interpreter = () -> {
   let isProtectedField = (f) -> f == "check" || f == "raise" || f == "of" || f == "make";
 
   let protectedWriteError = (field) -> {
-    // 宿主侧为 RuntimeError::Custom(程序中止);boot 无退出原语,经错误通道
-    // 传播(propagate: true → 顶层打印诊断并返回 flow "Error")。消息与宿主一致。
+    // Host side: RuntimeError::Custom (program abort); the boot has no exit primitive, so it propagates
+    // via the error channel (propagate: true → top level prints the diagnostic and returns flow "Error"). The message matches the host.
     { type: "Error", value: std.Error.raise("Custom", "cannot overwrite protected member '" + field + "' of built-in type", null), propagate: true };
   };
 
-  // 标注归一:构造器产物(Array(Number)/Type.make/Object(...))经调用路径被
-  // 包成 {type:"Object", value: {check: f}} 包装——检查路径取内层类型对象;
-  // 其余(裸常量/错误值/普通对象)原样返回。
+  // Annotation normalization: constructor products (Array(Number)/Type.make/Object(...)) are wrapped by the call path into
+  // {type:"Object", value: {check: f}} wrappers — the checking path takes the inner type object;
+  // everything else (bare constants/error values/plain objects) is returned as-is.
   let normalizeAnnotation = (a) -> {
     if a != null && !isError(a.type) && (a.type == "Object" || a.type == "Type") && isTypeValue(a.value) {
       a.value;
@@ -147,15 +147,15 @@ let Interpreter = () -> {
     };
   };
 
-  // TypeCheck 消息(宿主 check_annotation 同款;boot 无源码 span,标注文本用
-  // "?")。注意:错误构造必须内联在宿主层代码(Let/Assign 分支)直接调用
-  // std.Error.raise——cause 是裸错误值,若经 boot 用户函数参数传递会被调用
-  // 路径的错误值参数检查拒收(实测 makeTypeCheckError 产出 TypeMismatch)。
+  // TypeCheck message (same as the host's check_annotation; the boot has no source span, so the
+  // annotation text is "?"). Note: the error construction must be inlined in the host-layer code
+  // (Let/Assign branches) calling std.Error.raise directly — cause is a bare error value; passing
+  // it through a boot user-function argument would be rejected by the call path's error-value-argument check (observed: makeTypeCheckError produces TypeMismatch).
   let typeCheckMsg = (typeName) -> "value of type \"" + typeName + "\" does not match the annotated type \"?\"";
 
-  // 内部检查路径:调用类型值的 check 函数,豁免错误值参数(宿主
-  // call_function_inner 的 exempt_error_args 对应;用户调用不豁免)。
-  // 返回 {type:"Boolean", value: bool},或错误包装(标注非类型值 / check 报错)。
+  // Internal check path: calls the type value's check function, exempting error-value arguments
+  // (corresponds to the host's exempt_error_args in call_function_inner; user calls are not exempt).
+  // Returns {type:"Boolean", value: bool}, or an error wrapper (annotation not a type value / check raised an error).
   let checkValue = (typeVal, v, env) -> {
     if !isTypeValue(typeVal) {
       { type: "Error", value: std.Error.raise("TypeCheck", "type annotation is not a type value", null), propagate: false };
@@ -199,20 +199,23 @@ let Interpreter = () -> {
         return { flow: "Propagate", value: val };
       }
       if stmt.annotation != null {
-        // 宿主顺序:先求值 value,再求值标注,然后检查;通过 → 带标注绑定
+        // Boot evaluates the value first (line 197), then the annotation (line 203), then checks;
+        // on pass → annotated binding. Note: the host order is the reverse — annotation first
+        // (interpreter.rs:235-241); observable only via side effects in annotation expressions,
+        // and the spec does not fix the order — keep this as-is.
         let annVal = normalizeAnnotation(evaluate(stmt.annotation, env));
         if isPropagating(annVal) {
           return { flow: "Propagate", value: annVal };
         }
         let ck = checkValue(annVal, val, env);
         if isErrorVal(ck) {
-          // 检查自身出错(标注非类型值/check 报错):绑定该错误值(宿主同)
+          // The check itself errored (annotation not a type value / check raised an error): bind that error value (same as the host)
           env._defineAnnotated(stmt.name, ck, { ty: annVal, text: "?" });
         } else if isTruthy(ck) {
           env._defineAnnotated(stmt.name, val, { ty: annVal, text: "?" });
         } else {
-          // 检查失败 → TypeCheck 错误值(cause = 原值若为错误),带标注绑定
-          // (错误构造内联在宿主层:cause 是裸错误值,经 boot 函数参数会被拒收)
+          // Check failed → TypeCheck error value (cause = the original value if it is an error), bound with the annotation
+          // (the error construction is inlined at the host layer: cause is a bare error value; a boot function argument would be rejected)
           let typeName = if val != null && !isError(val.type) { val.type; } else { "?"; };
           let cause = if isErrorVal(val) { val.value; } else { null; };
           env._defineAnnotated(stmt.name, { type: "Error", value: std.Error.raise("TypeCheck", typeCheckMsg(typeName), cause), propagate: false }, { ty: annVal, text: "?" });
@@ -228,7 +231,7 @@ let Interpreter = () -> {
       }
       let res = assignValue(stmt.target, val, env);
       if res != null && isErrorVal(res) {
-        // 受保护成员写入:经 boot 错误通道传播(顶层报错,宿主侧为 Custom 异常)
+        // Protected-member write: propagates through the boot error channel (reported at the top level; Custom exception on the host side)
         return { flow: "Propagate", value: res };
       }
       return { flow: "None", value: { type: "Null", value: null } };
@@ -307,11 +310,11 @@ let Interpreter = () -> {
     { flow: "None", value: { type: "Null", value: null } };
   };
 
-  // 返回 null(成功)或错误包装(受保护成员写入 → propagate: true,经 Assign
-  // 分支的错误通道传播到顶层)。
+  // Returns null (success) or an error wrapper (protected-member write → propagate: true,
+  // propagated to the top level through the Assign branch's error channel).
   let assignValue = (target, value, env) -> {
     if target.type == "Identifier" {
-      // Task 11: 重赋值检查——绑定带标注时,赋值前再查(getAnnotation 沿链)
+      // Task 11: reassignment check — when the binding has an annotation, check again before assigning (getAnnotation walks the chain)
       let ann = env._getAnnotation(target.name);
       if ann != null {
         let ck = checkValue(ann.ty, value, env);
@@ -335,9 +338,9 @@ let Interpreter = () -> {
         if isError(t) { t = null; }
         if t == "Object" || t == "Type" {
           // AST field name is target.field (MemberAccessExpr(object, field))
-          // 包装对象写入:内层可能是受保护的内置常量——经调用路径的 typeTag
-          // 包装(如 std.Type.of(42) 产物 {type:"Type", value: Number}),obj.value
-          // 即共享的裸常量,直接写会绕过保护(宿主对常量对象写入中止)。
+          // Wrapped-object write: the inner value may be a protected built-in constant — wrapped by the
+          // call path's typeTag (e.g. std.Type.of(42) produces {type:"Type", value: Number}); obj.value is
+          // the shared bare constant; writing it directly bypasses the protection (the host aborts writes to constant objects).
           if isProtectedType(obj.value) && isProtectedField(target.field) {
             protectedWriteError(target.field);
           } else {
@@ -346,11 +349,11 @@ let Interpreter = () -> {
           };
         } else if t == null {
           if isProtectedType(obj) && isProtectedField(target.field) {
-            // 受保护成员写入:内置类型对象(裸常量)的 check/raise/of/make
+            // Protected-member write: check/raise/of/make of a built-in type object (bare constant)
             protectedWriteError(target.field);
           } else {
-            // 裸宿主对象字段写(std 模块/类型常量):与宿主一致执行写入——旧行为
-            // 静默丢弃(T11 审查观察 ③,difftest t26 依赖此路径)。
+            // Raw host object field write (std modules/type constants): perform the write like the host —
+            // the old behavior silently dropped it (T11 review observation ③, difftest t26 depends on this path).
             obj[target.field] = value;
             null;
           };
@@ -381,9 +384,9 @@ let Interpreter = () -> {
           }
           null;
         } else if t == "Object" || t == "Type" {
-          // JS semantics: obj[key] = value;"Type" 标签并入(包装的内置常量,
-          // 如 std.Type.of(42) 产物)——同 MemberAccess:写入前按内层复查
-          // 受保护成员,避免绕过;宿主对常量对象写入中止,不能静默丢弃。
+          // JS semantics: obj[key] = value; the "Type" tag is included (wrapped built-in constants,
+          // e.g. std.Type.of(42) products) — same as MemberAccess: re-check the inner value for protected
+          // members before writing to avoid bypassing; the host aborts writes to constant objects, so they must not be silently dropped.
           if index != null && index.type == "String" {
             if isProtectedType(arr.value) && isProtectedField(index.value) {
               protectedWriteError(index.value);
@@ -396,10 +399,10 @@ let Interpreter = () -> {
           };
         } else if t == null {
           if arr != null && index != null && index.type == "String" && isProtectedType(arr) && isProtectedField(index.value) {
-            // obj["check"] = x 形式的受保护写入(与字段写法同规则)
+            // Protected write in the form obj["check"] = x (same rule as the field syntax)
             protectedWriteError(index.value);
           } else if arr != null && index != null && index.type == "String" {
-            // 裸宿主对象键写(与 MemberAccess 同规则):obj[key] = value
+            // Raw host object key write (same rule as MemberAccess): obj[key] = value
             arr[index.value] = value;
             null;
           } else {
@@ -448,8 +451,8 @@ let Interpreter = () -> {
       let capturedEnv = env;
       let p = expr.parameters;
       let b = expr.body;
-      // Task 11: 参数标注在定义时求值(宿主同——引用定义处环境,含遮蔽语义),
-      // 记录 paramTypes[i] = { ty, text } 或 null。
+      // Task 11: parameter annotations are evaluated at definition time (same as the host — references
+      // the defining environment, including shadowing semantics), recording paramTypes[i] = { ty, text } or null.
       let paramTypes = [];
       let i = 0;
       while i < expr.parameters.length {
@@ -767,10 +770,10 @@ let Interpreter = () -> {
   };
 
   let evalBinaryOp = (op, left, right) -> {
-    // propagate 短路:? 的错误直接穿行(不运算、不构造新错误)
+    // propagate short-circuit: a `?`-marked error passes straight through (no operation, no new error constructed)
     if isPropagating(left) { return left; }
     if isPropagating(right) { return right; }
-    // 运算即报错:错误操作数 → 委托宿主构造新错误(带 cause),消息与 host 一致
+    // The operation itself errors: error operand → delegate to the host to construct a new error (with cause), message matches the host
     if isErrorVal(left) { return evalDelegated(op, left, right); }
     if isErrorVal(right) { return evalDelegated(op, left, right); }
     // && / ||: matches the host — returns the first falsy / truthy operand itself
@@ -779,7 +782,7 @@ let Interpreter = () -> {
     } else if op == "||" {
       if isTruthy(left) { left; } else { right; };
     } else {
-      // 注意:?? 不在此处理——evaluate 层已拦截(短路求值 right 需要)
+      // Note: ?? is not handled here — the evaluate layer already intercepts it (short-circuit evaluation of the right operand requires this)
       evalDelegated(op, left, right);
     };
   };
@@ -813,9 +816,9 @@ let Interpreter = () -> {
     callFunctionInner(func, args, env, false);
   };
 
-  // 内部检查路径豁免:exemptErrorArgs = true 时跳过错误值参数检查(宿主
-  // call_function_inner 的 exempt_error_args 对应;仅 checkValue 的类型检查
-  // 用,用户调用一律 false——用户函数/原生均不豁免)。
+  // Internal check path exemption: with exemptErrorArgs = true, the error-value-argument check is
+  // skipped (corresponds to the host's exempt_error_args in call_function_inner; used only by
+  // checkValue's type check — user calls always pass false; neither user functions nor natives are exempt).
   let callFunctionInner = (func, args, env, exemptErrorArgs) -> {
     if func != null {
       // Normalize the probe: raw host values (natives, boot functions, std
@@ -827,11 +830,11 @@ let Interpreter = () -> {
         { type: "Error", value: std.Error.raise("NotCallable", "Not callable: Error", null), propagate: false };
       } else if ft == "Function" {
         // ---- user function ----
-        // 统一参数视图:柯里化记录携带 allParams/boundArgs(部分应用时捕获的
-        // 完整参数表与已绑定参数),最终应用时对全部参数做检查——与宿主
-        // curried native 完成应用时带完整参数重走调用路径一致。
-        // 注意:普通记录的 allParams/boundArgs 字段缺失,探测得错误值(不是
-        // null)——必须先 isError 归一,否则错误值参与比较(truthy)会死循环。
+        // Unified parameter view: the curried record carries allParams/boundArgs (the full parameter
+        // list and already-bound arguments captured at partial-application time); the final application
+        // checks all arguments — consistent with the host's curried native re-entering the call path
+        // with the full arguments when the application completes.
+        // Note: plain records lack allParams/boundArgs; probing yields an error value (not null) — must normalize with isError first, or the error value would participate in comparisons (truthy) and loop forever.
         let allParams = func.allParams;
         if isError(allParams) { allParams = null; }
         if allParams == null { allParams = func.params; }
@@ -866,8 +869,8 @@ let Interpreter = () -> {
         }
         if allArgs.length < allParams.length {
           // Partial application: matches the host — insufficient args return
-          // a curried function. 宿主在部分应用时不检查标注(完成应用时全查);
-          // 记录携带 allParams/boundArgs/paramTypes 供最终应用统一检查。
+          // a curried function. The host does not check annotations at partial-application time (all are checked at completion);
+          // the record carries allParams/boundArgs/paramTypes for a unified check at the final application.
           let partialEnv = Environment(func.env);
           let q = 0;
           while q < allArgs.length {
@@ -885,18 +888,18 @@ let Interpreter = () -> {
           }
           { type: "Function", params: remaining, body: func.body, env: partialEnv, allParams: allParams, boundArgs: allArgs, paramTypes: func.paramTypes };
         } else if allArgs.length != allParams.length {
-          // 参数过多:宿主 ArityMismatch 错误值(boot 旧行为静默丢弃多余参数)
+          // Too many arguments: host ArityMismatch error value (the boot's old behavior silently dropped excess arguments)
           { type: "Error", value: std.Error.raise("ArityMismatch", "Arity mismatch: expected " + std.Number.toString(allParams.length) + " arguments, got " + std.Number.toString(allArgs.length), null), propagate: false };
         } else {
-          // 参数标注检查(宿主顺序:柯里化/arity 之后、深度守卫之前):失败 →
-          // TypeCheck 错误值,函数体不执行。
+          // Parameter annotation check (host order: after currying/arity, before the depth guard): on
+          // failure → TypeCheck error value, the function body does not run.
           let p = 0;
           while p < allParams.length {
             let ann = func.paramTypes[p];
             if ann != null {
               let ck = checkValue(ann.ty, allArgs[p], env);
               if isErrorVal(ck) {
-                // check 自身出错 → 该错误值即调用结果(宿主 Err(e) → Ok(e))
+                // check itself errored → that error value is the call result (host Err(e) → Ok(e))
                 return ck;
               }
               if !isTruthy(ck) {
@@ -913,7 +916,7 @@ let Interpreter = () -> {
           let localEnv = Environment(func.env);
           let i = 0;
           while i < allParams.length {
-            // 带标注绑定(宿主 define_annotated):函数体内重赋值参数同样复查
+            // Annotated binding (host define_annotated): parameters reassigned inside the function body are re-checked too
             let ann2 = func.paramTypes[i];
             if ann2 != null {
               localEnv._defineAnnotated(allParams[i].name, allArgs[i], { ty: ann2.ty, text: "?" });
@@ -1010,11 +1013,11 @@ let Interpreter = () -> {
     }
   };
 
-  // std.__bootCall:供 stdlib.ql 的类型库闭包(arrayCheck/Object 检查闭包)调用
-  // boot 用户函数记录——记录只能经本调用路径执行(宿主闭包直接调用记录会得到
-  // NotCallable),复合类型检查(Array(Positive)/Object({n: Positive}))的元素/
-  // 字段检查经此桥接。与 std.Object.entries 同模式挂在宿主 std 对象上;每次
-  // Interpreter() 重新注入(最后构造的解释器生效,与运行中的检查一致)。
+  // std.__bootCall: lets the stdlib.ql type-library closures (arrayCheck/Object check closures) call
+  // boot user-function records — records can only execute through this call path (a host closure
+  // calling a record directly gets NotCallable); the element/field checks of composite type checks
+  // (Array(Positive)/Object({n: Positive})) are bridged here. Mounted on the host std object like
+  // std.Object.entries; re-injected on every Interpreter() call (the last interpreter wins, consistent with the running checks).
   std.__bootCall = (f, v) -> callFunctionInner(f, [v], globalEnv, true);
 
   { runProgram: runProgram, evaluate: evaluate, globalEnv: globalEnv };

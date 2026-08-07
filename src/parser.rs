@@ -186,7 +186,7 @@ impl Parser {
         let name = self.expect_identifier()?;
 
         // Optional type annotation: let x: Number = 10;
-        // 标注是完整表达式,求值得到类型值(运行时断言)
+        // The annotation is a full expression, evaluated to obtain a type value (runtime assertion)
         let type_annotation = if self.match_token(&TokenKind::Colon) {
             Some(self.parse_expression()?)
         } else {
@@ -662,7 +662,7 @@ impl Parser {
                 // Try to parse as a parameter list or an expression
                 let first = self.parse_expression()?;
 
-                // 参数类型标注:`(a: Type, ...) -> ...`(仅标识符参数可带标注)
+                // Parameter type annotation: `(a: Type, ...) -> ...` (only identifier parameters can carry an annotation)
                 let mut annotation: Option<Expression> = None;
                 if matches!(first, Expression::Identifier(_)) && self.check(&TokenKind::Colon) {
                     self.advance();
@@ -670,7 +670,7 @@ impl Parser {
                 }
 
                 // Check whether it is multi-parameter (comma-separated)
-                // 有标注时强制走参数路径(避免 (x: T) 被静默当作分组)
+                // With an annotation, force the parameter path (so (x: T) is not silently treated as a grouping)
                 let is_param_list = self.check(&TokenKind::Comma)
                     || (self.check(&TokenKind::RightParen) && self.peek_next_is_arrow())
                     || annotation.is_some();

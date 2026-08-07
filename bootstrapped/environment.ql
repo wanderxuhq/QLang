@@ -3,21 +3,21 @@
 
 let Environment = (parent) -> {
   let values = {};
-  // Task 11: annotation map (name → { ty: 类型值, text: 标注文本 })。_assign 保留
-  // 标注(anns 按 name 持久,赋值只写 values)——与宿主 Binding.annotation 的
-  // "重赋值保留标注" 语义一致。
+  // Task 11: annotation map (name → { ty: type value, text: annotation text }). _assign keeps the
+  // annotation (anns persists by name; assignment only writes values) — consistent with the host
+  // Binding.annotation's "reassignment keeps the annotation" semantics.
   let anns = {};
 
   // Simple object access without std
   let doDefine = (name, value) -> { values[name] = value; };
-  // Task 11: 带标注绑定(宿主 define_annotated 对应)。ann 形如 { ty, text }。
+  // Task 11: annotated binding (corresponds to the host's define_annotated). ann has the shape { ty, text }.
   let doDefineAnnotated = (name, value, ann) -> {
     values[name] = value;
     anns[name] = ann;
   };
-  // Task 11: 沿父链查标注(宿主 get_annotation 对应);无 → null。
+  // Task 11: look up the annotation along the parent chain (corresponds to the host's get_annotation); none → null.
   let doGetAnnotation = (name) -> {
-    // 缺失键探测是错误值(error-as-value),须 isError 守卫(同 doGet)
+    // Probing a missing key yields an error value (error-as-value); the isError guard is required (same as doGet)
     let a = anns[name];
     if !isError(a) && a != null { a; }
     else if parent != null {

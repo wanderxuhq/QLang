@@ -557,15 +557,15 @@ let Parser = (tokens) -> {
         let potentialParam = firstToken.value;
         advance(); // Skip the identifier
 
-        // 参数类型标注:`(a: Type, ...) -> ...`(仅标识符参数可带标注;
-        // 标注是完整表达式,求值得到类型值——检查是 Task 11)
+        // Parameter type annotations: `(a: Type, ...) -> ...` (only identifier parameters can carry annotations;
+        // the annotation is a full expression, evaluated to a type value — checking is Task 11)
         let annotation = null;
         if check(TokenKind.Colon) {
           advance();
           annotation = parseExpression();
         }
 
-        // 有标注时强制走参数列表路径(避免 (x: T) 被静默当作分组)
+        // With an annotation, force the parameter-list path (avoiding (x: T) being silently treated as grouping)
         if annotation != null || check(TokenKind.Comma) {
           // This is a parameter list: (a, b, ...) / (a: T, b: U, ...)
           let params = [Parameter(potentialParam, annotation)];

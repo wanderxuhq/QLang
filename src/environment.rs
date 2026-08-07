@@ -53,7 +53,7 @@ pub fn child_env(parent: &EnvRef) -> EnvRef {
     Rc::new(RefCell::new(Environment::with_parent(Rc::clone(parent))))
 }
 
-/// 变量绑定:值 + 可选的类型标注((求值后的类型值, 源码文本))。
+/// Variable binding: a value plus an optional type annotation ((evaluated type value, source text)).
 #[derive(Debug)]
 pub struct Binding {
     pub value: Value,
@@ -148,7 +148,7 @@ impl Environment {
         self.values.insert(name, Binding { value, annotation: None });
     }
 
-    /// 带标注的绑定(标注为 Some 时,重赋值会再次检查)。
+    /// Binding with an annotation (when the annotation is Some, reassignment is checked again).
     pub fn define_annotated(&mut self, name: String, value: Value, annotation: Option<(Value, String)>) {
         self.values.insert(name, Binding { value, annotation });
     }
@@ -181,7 +181,7 @@ impl Environment {
         else { None }
     }
 
-    /// 沿作用域链查找变量的标注(仅用于重赋值检查)。
+    /// Looks up a variable's annotation along the scope chain (only used for reassignment checks).
     pub fn get_annotation(&self, name: &str) -> Option<(Value, String)> {
         if let Some(b) = self.values.get(name) { b.annotation.clone() }
         else if let Some(ref parent) = self.parent { parent.borrow().get_annotation(name) }
@@ -211,7 +211,7 @@ impl Environment {
     /// ```
     pub fn assign(&mut self, name: &str, value: Value) -> Result<(), RuntimeError> {
         if let Some(b) = self.values.get_mut(name) {
-            b.value = value; // 保留 annotation
+            b.value = value; // keep the annotation
             Ok(())
         } else if let Some(ref parent) = self.parent {
             parent.borrow_mut().assign(name, value)

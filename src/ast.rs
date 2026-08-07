@@ -120,7 +120,7 @@ pub enum Statement {
 pub struct LetStmt {
     /// The variable name
     pub name: String,
-    /// 类型标注:完整表达式,求值得到类型值(运行时断言)
+    /// Type annotation: a full expression, evaluated to obtain a type value (runtime assertion)
     pub type_annotation: Option<Expression>,
     /// The initial value expression
     pub value: Expression,
@@ -766,7 +766,7 @@ impl FunctionExpr {
 pub struct Parameter {
     /// The parameter name
     pub name: String,
-    /// 类型标注:完整表达式,求值得到类型值(运行时断言)
+    /// Type annotation: a full expression, evaluated to obtain a type value (runtime assertion)
     pub type_annotation: Option<Expression>,
 }
 

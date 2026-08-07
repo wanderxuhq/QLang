@@ -435,7 +435,7 @@ impl Interpreter {
             }
 
             Expression::Function(func) => {
-                // 参数标注在定义时求值(引用定义处环境,含遮蔽语义)
+                // Parameter annotations are evaluated at definition time (referencing the environment at the definition site, including shadowing semantics)
                 let mut param_types = Vec::with_capacity(func.parameters.len());
                 for p in func.parameters.iter() {
                     match &p.type_annotation {
@@ -657,8 +657,8 @@ impl Interpreter {
         self.call_function_inner(callee, args, span, false)
     }
 
-    /// 内部调用路径;exempt_error_args = true 时跳过用户函数的错误值参数检查
-    /// (内部类型检查路径用;原生分支仍按各自 accepts_errors 判断)。
+    /// Internal call path; when exempt_error_args = true, the error-value argument check for user functions is skipped
+    /// (used by the internal type-checking path; the native branch still judges by its own accepts_errors).
     fn call_function_inner(&mut self, callee: Value, args: Vec<Value>, span: Span, exempt_error_args: bool) -> Result<Value, RuntimeError> {
         match callee {
             Value::Function(func) => {
@@ -706,7 +706,7 @@ impl Interpreter {
                     ));
                 }
 
-                // 参数标注检查:失败 → 函数体不执行,返回 TypeCheck 错误值
+                // Parameter annotation check: on failure → the function body does not run, and a TypeCheck error value is returned
                 for (i, (_param, arg)) in func.parameters.iter().zip(args.iter()).enumerate() {
                     if let Some(Some((ty, text))) = func.param_types.get(i) {
                         match self.check_value(arg, ty, Some(span)) {
@@ -798,25 +798,25 @@ impl Interpreter {
         }
     }
 
-    /// `v` 是否属于类型 `t`?t 非类型值或 check 出错 → Err(错误值)。
+    /// Is `v` of type `t`? If `t` is not a type value or the check errors → Err(error value).
     fn check_value(&mut self, v: &Value, t: &Value, span: Option<Span>) -> Result<bool, Value> {
         if !crate::types::is_type_value(t) {
             return Err(self.make_error("TypeCheck", "type annotation is not a type value".to_string(), span, None));
         }
         let check_fn = match self.get_field(t, "check", span) {
             Ok(f) => f,
-            // 防御分支:类型值必为对象,get_field 实际不 Err;RuntimeError 无直接
-            // 到错误值的转换,按 check 失败处理(消息同下)。
+            // Defensive branch: a type value is necessarily an object, so get_field does not actually Err;
+            // RuntimeError has no direct conversion to an error value, so treat it as a check failure (message as below).
             Err(e) => return Err(self.make_error("TypeCheck", format!("type check failed: {}", e), span, None)),
         };
         match self.call_function_inner(check_fn, vec![v.clone()], span.unwrap_or_default(), true) {
-            Ok(Value::Error(e)) => Err(Value::Error(e)), // check 自身出错 → 失败
+            Ok(Value::Error(e)) => Err(Value::Error(e)), // the check itself errors → failure
             Ok(r) => Ok(r.is_truthy()),
             Err(e) => Err(self.make_error("TypeCheck", format!("type check failed: {}", e), span, None)),
         }
     }
 
-    /// 标注检查:通过返回原值;失败返回 TypeCheck 错误值(消息含标注源码文本)。
+    /// Annotation check: on pass, returns the original value; on failure, returns a TypeCheck error value (the message includes the annotation's source text).
     fn check_annotation(&mut self, value: Value, ty: Value, ann_text: &str, span: Option<Span>) -> Result<Value, RuntimeError> {
         match self.check_value(&value, &ty, span) {
             Ok(true) => Ok(value),
@@ -832,7 +832,7 @@ impl Interpreter {
         }
     }
 
-    /// 标注的源码文本(类型无名,消息里的名字来自你写下的代码)。
+    /// The annotation's source text (types have no names; the name in the message comes from the code you wrote).
     fn annotation_text(&self, expr: &Expression) -> String {
         let span = expr.span();
         let src = &self.current_source;
@@ -1062,7 +1062,7 @@ impl Interpreter {
         }
     }
 
-    /// 拒绝向内置(受保护)类型对象的受保护成员写入;普通对象与自由成员不受限。
+    /// Refuse writes to protected members of built-in (protected) type objects; plain objects and free members are unrestricted.
     fn check_protected(&self, object: &Value, field: &str) -> Result<(), RuntimeError> {
         if crate::types::is_protected_object(object) && crate::types::PROTECTED_FIELDS.contains(&field) {
             return Err(RuntimeError::Custom(format!(
