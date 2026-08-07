@@ -705,8 +705,11 @@ value is an ordinary object whose core field is `check` — a predicate deciding
 "does `v` belong to this type?". Types participate in computation like any
 other value (passed, stored, compared); there is no separate compile-time
 phase. `let x: T = v` checks at declaration time, `(a: T) -> ...` checks at
-call entry, and reassigning an annotated binding re-checks. Unannotated code is
-fully dynamic with zero overhead.
+call entry, and reassigning an annotated binding re-checks. A declaration
+without an initializer (`let x;` / `let x: T;`) creates an **uninitialized**
+binding: the first assignment initializes it, and assignment checks fire only
+when an annotation is present. Unannotated code is fully dynamic with zero
+overhead.
 
 ### Type values and `check`
 
@@ -822,6 +825,13 @@ let f = (a: Number) -> ...    // param annotation — evaluated at definition,
                               // checked on every COMPLETED call
 let x: Number = 42
 x = "a"                       // reassignment re-checks the annotated binding
+
+let y;                        // declare without an initializer ("uninitialized")
+y = 42                        // first assignment initializes; no annotation,
+                              //   so no check
+let z: Number;                // annotated uninitialized declaration
+z = 42                        // first assignment initializes and re-checks
+z = "a"                       //   → TypeCheck error value
 ```
 
 - The annotation is a **full expression**, evaluated where it appears:
@@ -829,6 +839,17 @@ x = "a"                       // reassignment re-checks the annotated binding
   `Array(Number)`, `Array(3)`, `Object({name: String})` are all valid.
 - Checking fires only at the three trigger points; a failed check produces a
   `TypeCheck` error value (below), never a crash.
+- A declaration without an initializer is allowed: `let x;` (no annotation) or
+  `let x: T;` (the annotation is evaluated and validated at declaration, but
+  there is no value to check yet). The binding is **uninitialized** until the
+  first assignment — reading it yields an `Uninitialized` error value (see
+  [Error values](#error-values)), never `null`.
+- **`null` is not a value of any type unless that type explicitly allows it.**
+  Among the built-ins only `Null` and `Any` accept `null`
+  (`Number.check(null)` is `false`, so `let x: Number = null` is a `TypeCheck`
+  error). A user type opts in via its `check` — e.g.
+  `std.Type.make((v) -> v == null || v > 0)` — and a `check` without a `null`
+  branch rejects `null` like any other value.
 - Curried calls defer checks to the **completing** call: on
   `(a: Number, b: Number) -> ...`, `f("x")` is a legal partial application
   (returns a curried function, no error), and the final call re-checks all
@@ -977,10 +998,11 @@ An error value carries structured diagnostics:
 ```qlang
 Error {
   type:    "TypeMismatch" | "IndexOutOfBounds" | "UndefinedField"
-           | "UndefinedVariable" | "DivisionByZero" | "StackOverflow"
-           | "Error" (user) | ...   // other kinds: "NotCallable",
-           // "ArityMismatch", "CannotIndex", "NotAnObject"
+           | "UndefinedVariable" | "Uninitialized" | "DivisionByZero"
+           | "StackOverflow" | "Error" (user) | ...   // other kinds:
+           // "NotCallable", "ArityMismatch", "CannotIndex", "NotAnObject"
   message: "human-readable description"
+           // e.g. Uninitialized: 'variable "x" is declared but not initialized'
   line / col:  where the error was produced
   stack:   [{ fn, line, col }, ...]   // user function frames only
   cause:   Error | null               // root-cause chain
@@ -1004,10 +1026,17 @@ keyword — `return Error.raise("...")` is how you raise one (Go-style).
 | `obj.x = v` write to a missing field | creates the field (unchanged, JS-compatible) |
 | `1 / 0`, `0 / 0` | `DivisionByZero` error value (no more silent IEEE inf/NaN) |
 | undefined variable (host) | `UndefinedVariable` error value |
+| read `x` after `let x;` (declared, not yet assigned) | `Uninitialized` error value |
 | recursion depth limit | `StackOverflow` error value — recoverable |
 
 > Only division by an exact zero is an error. IEEE overflow (e.g. `1e300 * 10`
 > → `Infinity`) keeps IEEE semantics, as in Python and Rust.
+
+> A binding has three states: **undefined** (never declared →
+> `UndefinedVariable`), **uninitialized** (`let x;` declared without an
+> initializer → `Uninitialized`), and **initialized** (has a value, which may
+> itself be `null` — explicit `null` is a legitimate value, distinct from the
+> uninitialized state).
 
 **Handling operators.**
 
@@ -1095,8 +1124,11 @@ TypeMismatch: cannot apply addition to Number and Error (at line 5, col 12)
   top-level error in the imported file (bare or `?`-raised) is silently
   discarded — its diagnostic is never printed. The bootstrapped interpreter
   does not support importing user code (a nested `import` raises an explicit
-  `NotImplemented` error value) and reports undefined variables as `null`
-  rather than an `UndefinedVariable` error value.
+  `NotImplemented` error value); undefined variables are reported as
+  `UndefinedVariable` error values, matching the host.
+- Top-level assignment to an undefined variable: the host terminates with an
+  `Undefined variable` error, while the bootstrapped interpreter silently
+  ignores it.
 
 Under error-value semantics the two implementations render errors differently
 — the host prints a multi-line diagnostic with positions; the boot renders its

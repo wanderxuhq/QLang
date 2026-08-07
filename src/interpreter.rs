@@ -11,7 +11,7 @@ use crate::lexer::Lexer;
 use crate::parser::Parser;
 use crate::token::Span;
 use crate::value::{Value, ObjectValue, FunctionValue, NativeFunction, CallContext, RuntimeError, ErrorValue, StackFrame, is_error_value};
-use crate::environment::{EnvRef, new_env, child_env};
+use crate::environment::{EnvRef, Lookup, new_env, child_env};
 use crate::stdlib::register_builtins;
 
 /// Full diagnostic text for an error value, including cause chain and stack frames
@@ -229,20 +229,40 @@ impl Interpreter {
     fn run_statement(&mut self, stmt: &Statement, env: &EnvRef) -> Result<ControlFlow, RuntimeError> {
         match stmt {
             Statement::Let(let_stmt) => {
-                let value = self.eval_expression(&let_stmt.value, env)?;
                 let mut annotation = None;
-                let value = if let Some(ann) = &let_stmt.type_annotation {
+                if let Some(ann) = &let_stmt.type_annotation {
                     let text = self.annotation_text(ann);
                     let ty = self.eval_expression(ann, env)?;
                     annotation = Some((ty.clone(), text.clone()));
-                    self.check_annotation(value, ty, &text, Some(ann.span()))?
-                } else {
-                    value
-                };
-                if let Some(a) = annotation {
-                    env.borrow_mut().define_annotated(let_stmt.name.clone(), value, Some(a));
-                } else {
-                    env.borrow_mut().define(let_stmt.name.clone(), value);
+                    // The annotation check is done below, separately for the with-value and without-value cases
+                }
+                match &let_stmt.value {
+                    Some(v) => {
+                        let value = self.eval_expression(v, env)?;
+                        let value = if let Some((ty, text)) = &annotation {
+                            self.check_annotation(value, ty.clone(), text, Some(v.span()))?
+                        } else { value };
+                        if let Some(a) = annotation {
+                            env.borrow_mut().define_annotated(let_stmt.name.clone(), value, Some(a));
+                        } else {
+                            env.borrow_mut().define(let_stmt.name.clone(), value);
+                        }
+                    }
+                    None => {
+                        if let Some((ty, _text)) = &annotation {
+                            // No value: only check that the annotation is a type; do not check the value (there is none)
+                            if !crate::types::is_type_value(ty) {
+                                let err = self.make_error("TypeCheck",
+                                    "type annotation is not a type value".to_string(),
+                                    let_stmt.type_annotation.as_ref().map(|a| a.span()), None);
+                                env.borrow_mut().define(let_stmt.name.clone(), err);
+                            } else {
+                                env.borrow_mut().define_uninitialized(let_stmt.name.clone(), annotation.clone());
+                            }
+                        } else {
+                            env.borrow_mut().define_uninitialized(let_stmt.name.clone(), None);
+                        }
+                    }
                 }
                 Ok(ControlFlow::None)
             }
@@ -402,9 +422,11 @@ impl Interpreter {
             Expression::Boolean(b) => Ok(Value::Boolean(b.value)),
 
             Expression::Identifier(id) => {
-                match env.borrow().get(&id.name) {
-                    Some(v) => Ok(v),
-                    None => Ok(self.make_error("UndefinedVariable",
+                match env.borrow().lookup(&id.name) {
+                    Lookup::Value(v) => Ok(v),
+                    Lookup::Uninitialized => Ok(self.make_error("Uninitialized",
+                        format!("variable \"{}\" is declared but not initialized", id.name), Some(id.span), None)),
+                    Lookup::Undefined => Ok(self.make_error("UndefinedVariable",
                         format!("Undefined variable: {}", id.name), Some(id.span), None)),
                 }
             }
@@ -423,9 +445,11 @@ impl Interpreter {
                         self.eval_expression(val_expr, env)?
                     } else {
                         // Shorthand: {x} means {x = x}
-                        match env.borrow().get(&field.name) {
-                            Some(v) => v,
-                            None => self.make_error("UndefinedVariable",
+                        match env.borrow().lookup(&field.name) {
+                            Lookup::Value(v) => v,
+                            Lookup::Uninitialized => self.make_error("Uninitialized",
+                                format!("variable \"{}\" is declared but not initialized", field.name), None, None),
+                            Lookup::Undefined => self.make_error("UndefinedVariable",
                                 format!("Undefined variable: {}", field.name), None, None),
                         }
                     };
@@ -562,7 +586,7 @@ impl Interpreter {
     /// Evaluate binary operation
     ///
     /// `&&` / `||` short-circuit: only the needed operand is evaluated, and the operand's actual value is returned
-    /// （README: "`&&` returns the first falsy value, `||` returns the first truthy value"）。
+    /// (README: "`&&` returns the first falsy value, `||` returns the first truthy value")
     fn eval_binary_op(&mut self, bin: &BinaryOpExpr, env: &EnvRef) -> Result<Value, RuntimeError> {
         let left = self.eval_expression(&bin.left, env)?;
 
@@ -853,8 +877,12 @@ impl Interpreter {
             env.borrow_mut().assign(&target.name, value)
         } else {
             // Handle nested assignment (a.b[0].c = value)
-            let mut current = env.borrow().get(&target.name)
-                .ok_or_else(|| RuntimeError::UndefinedVariable(target.name.clone()))?;
+            let mut current = match env.borrow().lookup(&target.name) {
+                Lookup::Value(v) => v,
+                Lookup::Uninitialized => return Err(RuntimeError::Custom(format!(
+                    "variable \"{}\" is declared but not initialized", target.name))),
+                Lookup::Undefined => return Err(RuntimeError::UndefinedVariable(target.name.clone())),
+            };
 
             // Navigate to the parent of the final accessor
             for accessor in target.accessors.iter().take(target.accessors.len() - 1) {

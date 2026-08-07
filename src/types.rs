@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::environment::EnvRef;
+use crate::environment::{EnvRef, Lookup};
 use crate::token::Span;
 use crate::value::{CallContext, ErrorValue, NativeFunction, ObjectValue, RuntimeError, Value};
 
@@ -173,7 +173,10 @@ pub fn register_type_system(global_env: &EnvRef) {
     g.define("Error".to_string(), error_t); // overrides the old global constructor
 
     // std.Type is merged into the std object (replacing the old create_type_module)
-    let std_val = g.get("std").expect("std must be registered");
+    let std_val = match g.lookup("std") {
+        Lookup::Value(v) => v,
+        _ => panic!("std must be registered"),
+    };
     if let Value::Object(std_obj) = std_val {
         std_obj.borrow_mut().fields.insert("Type".to_string(), type_t);
     }

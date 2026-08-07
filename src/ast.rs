@@ -122,8 +122,8 @@ pub struct LetStmt {
     pub name: String,
     /// Type annotation: a full expression, evaluated to obtain a type value (runtime assertion)
     pub type_annotation: Option<Expression>,
-    /// The initial value expression
-    pub value: Expression,
+    /// The initial value expression (None = a declaration without an initializer, `let x;`)
+    pub value: Option<Expression>,
     /// The position of the declaration statement in the source code
     pub span: Span,
 }
@@ -136,7 +136,7 @@ impl LetStmt {
     /// - `name` - the variable name
     /// - `value` - the initial value expression
     /// - `span` - the source position
-    pub fn new(name: String, value: Expression, span: Span) -> Self {
+    pub fn new(name: String, value: Option<Expression>, span: Span) -> Self {
         LetStmt {
             name,
             type_annotation: None,

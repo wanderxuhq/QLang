@@ -260,6 +260,36 @@ SAFE_CASES = [
     ("t40", 'let Positive = std.Type.make((v) -> v > 0); let x: Object({n: Positive}) = {n: 1}; x;'),
     ("t41", "std.Type.check(std.Type.of(42));"),
     ("t42", "let x: Array(std.Type.of(42)) = [1]; x;"),
+    # ---- no bare `Type` global (Task 12 ledger T11 minor #4, migrated from
+    # RISKY): with three-state bindings the boot's Type seeding (interpreter.ql)
+    # is removed, so `Type` is UndefinedVariable on both sides → the annotation
+    # is not a type value → TypeCheck error value → isError(x) → true. "no global
+    # Type alias" guard: if the seeding regressed, the boot would check Number
+    # against Type and succeed, turning this case red.
+    ("r35", "let x: Type = Number; isError(x);"),
+    # ---- uninitialized variables (2026-08-07 design) ----
+    ("u1",  "let x; isError(x);"),                          # uninitialized read → error value
+    ("u2",  "let x; let e = x; e.type;"),                   # kind = Uninitialized (read-zone field is .type)
+    ("u3",  "let x; x = 5; x;"),                            # unannotated assignment is not checked
+    ("u4",  "let x: Number; x = 5; x;"),                    # annotated initialization passes
+    ("u5",  "let x: Number; x = \"str\"; let e = x; e.type;"),  # annotated initialization fails → error binding, kind = TypeCheck
+    ("u6",  "let x: 42; isError(x);"),                      # invalid annotation declaration → error
+    ("u7",  "let x = 1; let y = x; y;"),                    # regression: initialized values behave normally
+    ("u8",  "let x = null; x;"),                            # explicit null is a value
+    ("u9",  "let x = 1; let f = () -> { let x = null; x; }; f();"),   # shadowing: inner null does not leak through (regression)
+    ("u10", "let x = 1; let f = () -> { let x = null; }; f(); x;"),   # shadowing inside a function does not leak
+    ("u11", "let x: Number = null; isError(x);"),           # null is not a Number value
+    ("u12", "let x: Null = null; x;"),                      # the Null type accepts null
+    ("u13", "let x: Any = null; x;"),                       # Any accepts null
+    ("u14", "foo; isError(foo);"),                          # undefined → error value (no longer null)
+    ("u15", "let Nullable = std.Type.make((v) -> v == null || std.Type.of(v) == Number); let n: Nullable = null; n;"),
+    ("u16", "let Nullable = std.Type.make((v) -> v == null || std.Type.of(v) == Number); let n: Nullable = 5; n;"),
+    ("u17", "let x; (x); isError(x);"),                     # reading uninitialized in an expression statement → error value
+    ("u18", "let x; x + 1; isError(x);"),                   # uninitialized in an operation → error value propagates
+    ("u19", "let A = Array(Number); A.check([1, null]);"),  # constructor product: null elements do not pass
+    ("u20", "let O = Object({name: String}); O.check({name: null});"),  # schema: null fields do not pass
+    ("u21", "let x; x ?? \"fb\";"),                            # ?? catches the uninitialized-read error value
+    ("u22", "let f = () -> { let e = x; e ?; }; isError(f());"),  # ? propagates the uninitialized-read error value
 ]
 
 # Complex cases: multi-feature combinations (recursion / closure mutation / higher-order
@@ -377,15 +407,6 @@ RISKY_CASES = [
     # returns the boot's Number constant, wrapped {type:"Type", value: Number}
     # by the call path) must not bypass the protection — host aborts here too.
     ("p2", "let t = std.Type.of(42); t.check = 42;"),
-    # ---- Task 12: no bare `Type` global (ledger T11 minor #4 — the boot's
-    # Type seeding at interpreter.ql:43 is removed) ----
-    # The ledger's literal `Type;` cannot be used: the boot reports undefined
-    # variables as null (documented boundary) while the host errors, so a bare
-    # reference can never match. The annotation form errors on both sides
-    # (TypeCheck: annotation is not a type value) AND catches a regression of
-    # the seeding: with `Type` still defined the boot would check Number
-    # against Type and succeed, turning this case red.
-    ("r35", "let x: Type = Number; isError(x);"),
 ]
 
 # Node.js reference cases: (cid, js_src). js_src is a faithful JavaScript translation

@@ -194,36 +194,55 @@ let Interpreter = () -> {
 
   let runStatement = (stmt, env) -> {
     if stmt.type == "Let" {
-      let val = evaluate(stmt.value, env);
-      if isPropagating(val) {
-        return { flow: "Propagate", value: val };
-      }
-      if stmt.annotation != null {
-        // Boot evaluates the value first (line 197), then the annotation (line 203), then checks;
-        // on pass → annotated binding. Note: the host order is the reverse — annotation first
-        // (interpreter.rs:235-241); observable only via side effects in annotation expressions,
-        // and the spec does not fix the order — keep this as-is.
-        let annVal = normalizeAnnotation(evaluate(stmt.annotation, env));
-        if isPropagating(annVal) {
-          return { flow: "Propagate", value: annVal };
+      if stmt.value != null {
+        let val = evaluate(stmt.value, env);
+        if isPropagating(val) {
+          return { flow: "Propagate", value: val };
         }
-        let ck = checkValue(annVal, val, env);
-        if isErrorVal(ck) {
-          // The check itself errored (annotation not a type value / check raised an error): bind that error value (same as the host)
-          env._defineAnnotated(stmt.name, ck, { ty: annVal, text: "?" });
-        } else if isTruthy(ck) {
-          env._defineAnnotated(stmt.name, val, { ty: annVal, text: "?" });
+        if stmt.annotation != null {
+          // Boot order: evaluate value first (198), then the annotation (204), then check; passing → bind with annotation.
+          // Note: the host order is the reverse — annotation first (interpreter.rs:235-241), then value;
+          // observable only when the annotation expression has side effects; the spec does not fix the order, keep as-is.
+          let annVal = normalizeAnnotation(evaluate(stmt.annotation, env));
+          if isPropagating(annVal) {
+            return { flow: "Propagate", value: annVal };
+          }
+          let ck = checkValue(annVal, val, env);
+          if isErrorVal(ck) {
+            // The check itself errored (annotation not a type value / check raised an error): bind that error value (same as the host)
+            env._defineAnnotated(stmt.name, ck, { ty: annVal, text: "?" });
+          } else if isTruthy(ck) {
+            env._defineAnnotated(stmt.name, val, { ty: annVal, text: "?" });
+          } else {
+            // Check failed → TypeCheck error value (cause = the original value if it is an error), bound with the annotation
+            // (the error construction is inlined at the host layer: cause is a bare error value; a boot function argument would be rejected)
+            let typeName = if val != null && !isError(val.type) { val.type; } else { "?"; };
+            let cause = if isErrorVal(val) { val.value; } else { null; };
+            env._defineAnnotated(stmt.name, { type: "Error", value: std.Error.raise("TypeCheck", typeCheckMsg(typeName), cause), propagate: false }, { ty: annVal, text: "?" });
+          };
         } else {
-          // Check failed → TypeCheck error value (cause = the original value if it is an error), bound with the annotation
-          // (the error construction is inlined at the host layer: cause is a bare error value; a boot function argument would be rejected)
-          let typeName = if val != null && !isError(val.type) { val.type; } else { "?"; };
-          let cause = if isErrorVal(val) { val.value; } else { null; };
-          env._defineAnnotated(stmt.name, { type: "Error", value: std.Error.raise("TypeCheck", typeCheckMsg(typeName), cause), propagate: false }, { ty: annVal, text: "?" });
+          env._define(stmt.name, val);
         };
+        return { flow: "None", value: { type: "Null", value: null } };
       } else {
-        env._define(stmt.name, val);
+        // Declaration without initializer: let x; / let x: T;
+        if stmt.annotation != null {
+          let annVal = normalizeAnnotation(evaluate(stmt.annotation, env));
+          if isPropagating(annVal) {
+            return { flow: "Propagate", value: annVal };
+          }
+          if !isTypeValue(annVal) {
+            // Annotation invalid → bind a TypeCheck error value (consistent with the host's None branch,
+            // interpreter.rs:254-258: define binding, annotation not kept)
+            env._define(stmt.name, { type: "Error", value: std.Error.raise("TypeCheck", "type annotation is not a type value", null), propagate: false });
+          } else {
+            env._defineUninit(stmt.name, { ty: annVal, text: "?" });
+          };
+        } else {
+          env._defineUninit(stmt.name, null);
+        };
+        return { flow: "None", value: { type: "Null", value: null } };
       };
-      return { flow: "None", value: { type: "Null", value: null } };
     } else if stmt.type == "Assign" {
       let val = evaluate(stmt.value, env);
       if isPropagating(val) {

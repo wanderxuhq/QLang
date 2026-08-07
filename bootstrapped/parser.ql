@@ -117,17 +117,31 @@ let Parser = (tokens) -> {
       annotation = parseExpression();
     }
 
-    while !check(TokenKind.Equal) && !check(TokenKind.Semicolon) && !check(TokenKind.Eof) {
-      advance();
-    }
-    if !check(TokenKind.Equal) {
-      return { type: "Error", message: "Expected '='" };
-    } else {
+    if check(TokenKind.Equal) {
       advance(); // Skip '='
       let value = parseExpression();
       if check(TokenKind.Semicolon) { advance(); }
       skipNewlines();
       return LetStmt(name, value, annotation);
+    } else if check(TokenKind.Semicolon) {
+      // Declaration without initializer: let x; / let x: T;
+      advance();
+      skipNewlines();
+      return LetStmt(name, null, annotation);
+    } else {
+      // Fault tolerance: skip unknown tokens until = or ;
+      while !check(TokenKind.Equal) && !check(TokenKind.Semicolon) && !check(TokenKind.Eof) {
+        advance();
+      }
+      if !check(TokenKind.Equal) {
+        return { type: "Error", message: "Expected '=' or ';'" };
+      } else {
+        advance();
+        let value = parseExpression();
+        if check(TokenKind.Semicolon) { advance(); }
+        skipNewlines();
+        return LetStmt(name, value, annotation);
+      };
     };
   };
 

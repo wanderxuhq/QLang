@@ -27,6 +27,14 @@ use crate::value::{Value, RuntimeError};
 /// Function B can access variables defined in function A's and the global environment.
 pub type EnvRef = Rc<RefCell<Environment>>;
 
+/// Variable lookup result: distinguishes the three states undefined / uninitialized / value.
+#[derive(Debug)]
+pub enum Lookup {
+    Undefined,
+    Uninitialized,
+    Value(Value),
+}
+
 /// Create a new root environment
 ///
 /// Used to initialize the interpreter's global environment.
@@ -54,9 +62,11 @@ pub fn child_env(parent: &EnvRef) -> EnvRef {
 }
 
 /// Variable binding: a value plus an optional type annotation ((evaluated type value, source text)).
+///
+/// `value: None` means uninitialized (declared but not assigned).
 #[derive(Debug)]
 pub struct Binding {
-    pub value: Value,
+    pub value: Option<Value>, // None = uninitialized (declared but not assigned)
     pub annotation: Option<(Value, String)>,
 }
 
@@ -145,12 +155,12 @@ impl Environment {
     /// env.define("x".to_string(), Value::Number(10.0));
     /// ```
     pub fn define(&mut self, name: String, value: Value) {
-        self.values.insert(name, Binding { value, annotation: None });
+        self.values.insert(name, Binding { value: Some(value), annotation: None });
     }
 
     /// Binding with an annotation (when the annotation is Some, reassignment is checked again).
     pub fn define_annotated(&mut self, name: String, value: Value, annotation: Option<(Value, String)>) {
-        self.values.insert(name, Binding { value, annotation });
+        self.values.insert(name, Binding { value: Some(value), annotation });
     }
 
     /// Get a variable value
@@ -164,6 +174,13 @@ impl Environment {
     /// 2. If not found, recursively check the parent environment
     /// 3. If not found all the way up to the root environment, return None
     ///
+    /// # Uninitialized bindings
+    ///
+    /// A binding declared without a value (`let x;`, value is None) also returns
+    /// None — `get` cannot distinguish it from an undefined variable. Use
+    /// [`Environment::lookup`](Self::lookup) when the three states
+    /// (undefined / uninitialized / value) must be told apart.
+    ///
     /// # Example
     ///
     /// ```
@@ -176,9 +193,25 @@ impl Environment {
     /// let unknown = env.get("y");  // None
     /// ```
     pub fn get(&self, name: &str) -> Option<Value> {
-        if let Some(b) = self.values.get(name) { Some(b.value.clone()) }
+        if let Some(b) = self.values.get(name) { b.value.clone() }
         else if let Some(ref parent) = self.parent { parent.borrow().get(name) }
         else { None }
+    }
+
+    /// Looks up a variable along the scope chain, distinguishing undefined / uninitialized / value.
+    pub fn lookup(&self, name: &str) -> Lookup {
+        if let Some(b) = self.values.get(name) {
+            match &b.value {
+                Some(v) => Lookup::Value(v.clone()),
+                None => Lookup::Uninitialized,
+            }
+        } else if let Some(ref parent) = self.parent { parent.borrow().lookup(name) }
+        else { Lookup::Undefined }
+    }
+
+    /// Declare an uninitialized binding (declared but not assigned; value is None).
+    pub fn define_uninitialized(&mut self, name: String, annotation: Option<(Value, String)>) {
+        self.values.insert(name, Binding { value: None, annotation });
     }
 
     /// Looks up a variable's annotation along the scope chain (only used for reassignment checks).
@@ -211,7 +244,7 @@ impl Environment {
     /// ```
     pub fn assign(&mut self, name: &str, value: Value) -> Result<(), RuntimeError> {
         if let Some(b) = self.values.get_mut(name) {
-            b.value = value; // keep the annotation
+            b.value = Some(value); // keeps annotation; this is how uninitialized bindings get initialized
             Ok(())
         } else if let Some(ref parent) = self.parent {
             parent.borrow_mut().assign(name, value)
@@ -225,14 +258,6 @@ impl Environment {
     /// Only checks the current scope; does not search up into the parent environment.
     pub fn contains(&self, name: &str) -> bool {
         self.values.contains_key(name)
-    }
-
-    /// Get a mutable reference to a variable in the current scope
-    ///
-    /// Used for nested assignment (e.g. modifying object fields).
-    /// Only checks the current scope.
-    pub fn get_mut(&mut self, name: &str) -> Option<&mut Value> {
-        self.values.get_mut(name).map(|b| &mut b.value)
     }
 
     /// Get a reference to the parent environment

@@ -8,6 +8,15 @@ let Environment = (parent) -> {
   // Binding.annotation's "reassignment keeps the annotation" semantics.
   let anns = {};
 
+  // Task: three-state bindings — values holds bound values (a key's existence means "has a value",
+  // including explicit null); uninit records uninitialized declarations (key exists = uninitialized). Undefined = in neither set and absent from the parent chain.
+  let uninit = {};
+  let doDefine = (name, value) -> { values[name] = value; };
+  let doDefineUninit = (name, ann) -> {
+    uninit[name] = true;
+    if ann != null { anns[name] = ann; };
+  };
+
   // Simple object access without std
   let doDefine = (name, value) -> { values[name] = value; };
   // Task 11: annotated binding (corresponds to the host's define_annotated). ann has the shape { ty, text }.
@@ -31,12 +40,16 @@ let Environment = (parent) -> {
     else { null; }
   };
   let doGet = (name) -> {
-    // Note: probing a missing key on a raw object now yields an UndefinedField
-    // error VALUE (host error-as-value), never null; detect via isError (the
-    // host native — cross-interpreter safe, unlike std.Type.of(x) == "Error"
-    // which compares type values from different interpreter instances).
+    // Key exists (including explicit null) → return that value, do not fall through (fix: the old
+    // v != null condition made `let x = null` fall through to the outer scope).
     let v = values[name];
-    if !isError(v) && v != null { v }
+    if !isError(v) { v; }
+    // Note: probing a missing key yields an error value (error-as-value); must guard with isError before comparing to null
+    // (unguarded, `uninit[name] != null` hands the error value to != → delegates to the host to construct a new error).
+    else if !isError(uninit[name]) && uninit[name] != null {
+      // Declared but not initialized
+      { type: "Error", value: std.Error.raise("Uninitialized", "variable \"" + name + "\" is declared but not initialized", null), propagate: false };
+    }
     else if parent != null {
       // parent can be:
       // 1. A QL Environment object with _get method
@@ -54,11 +67,22 @@ let Environment = (parent) -> {
         };
       };
     }
-    else { null }
+    else {
+      // Undefined: error value (no longer falls back to null — aligned with the host's
+      // UndefinedVariable). Use std.Error.raise (3 args: kind/message/cause); the bare Error.raise
+      // is the type object's 1-2-arg constructor (kind hardcoded to "Error"), which would drop kind/message.
+      { type: "Error", value: std.Error.raise("UndefinedVariable", "Undefined variable: " + name, null), propagate: false };
+    }
   };
   let doAssign = (name, value) -> {
-    if !isError(values[name]) && values[name] != null {
+    let v = values[name];
+    if !isError(v) {
       values[name] = value;
+      true;
+    } else if !isError(uninit[name]) && uninit[name] != null {
+      // First assignment = initialization: set the value and clear the uninitialized marker
+      values[name] = value;
+      uninit[name] = null;
       true;
     } else if parent != null {
       // Assignment to captured variables in closures: walk up the parent chain
@@ -80,12 +104,14 @@ let Environment = (parent) -> {
     }
   };
 
-  { _define: doDefine, _get: doGet, _assign: doAssign, _defineAnnotated: doDefineAnnotated, _getAnnotation: doGetAnnotation, _values: values };
+  { _define: doDefine, _get: doGet, _assign: doAssign, _defineAnnotated: doDefineAnnotated, _getAnnotation: doGetAnnotation, _defineUninit: doDefineUninit, _values: values };
 };
 
 let GlobalEnvironment = (stdObj) -> {
   let parentEnv = {
-    get: (name) -> if name == "std" { stdObj } else { null },
+    // ⑧ boundary fix: unknown name → UndefinedVariable error value (no longer falls back to null);
+    // std is returned as-is.
+    get: (name) -> if name == "std" { stdObj } else { { type: "Error", value: std.Error.raise("UndefinedVariable", "Undefined variable: " + name, null), propagate: false } },
     define: (name, value) -> null,
     assign: (name, value) -> null
   };

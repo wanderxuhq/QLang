@@ -198,12 +198,18 @@ impl Parser {
             // value can be any expression, including a function expression (a, b) -> ...
             let value = self.parse_expression()?;
             let end = value.span().end;
-            let mut stmt = LetStmt::new(name, value, Span::new(start, end));
+            let mut stmt = LetStmt::new(name, Some(value), Span::new(start, end));
+            stmt.type_annotation = type_annotation;
+            Ok(Statement::Let(stmt))
+        } else if self.match_token(&TokenKind::Semicolon) {
+            // Declaration without initializer: let name; / let name: T;
+            let end = self.previous().span.end; // the semicolon's end position (per the existing span API in parser.rs)
+            let mut stmt = LetStmt::new(name, None, Span::new(start, end));
             stmt.type_annotation = type_annotation;
             Ok(Statement::Let(stmt))
         } else {
-            // let must be followed by = or :
-            Err(ParseError::Expected("= or :".to_string(), self.peek().clone()))
+            // let must be followed by = or ;
+            Err(ParseError::Expected("= or ;".to_string(), self.peek().clone()))
         }
     }
 

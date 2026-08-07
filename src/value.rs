@@ -89,7 +89,7 @@ pub struct FunctionValue {
     pub parameters: Rc<Vec<Parameter>>,
     pub body: Rc<Block>,
     pub closure: EnvRef,
-    /// 定义时求值的参数标注:(类型值, 源码文本);None = 该参数无标注。
+    /// Parameter annotation evaluated at definition time: (type value, source text); None = the parameter has no annotation.
     pub param_types: Rc<Vec<Option<(Value, String)>>>,
 }
 
