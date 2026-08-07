@@ -290,6 +290,53 @@ SAFE_CASES = [
     ("u20", "let O = Object({name: String}); O.check({name: null});"),  # schema: null fields do not pass
     ("u21", "let x; x ?? \"fb\";"),                            # ?? catches the uninitialized-read error value
     ("u22", "let f = () -> { let e = x; e ?; }; isError(f());"),  # ? propagates the uninitialized-read error value
+    # ---- post-rewrite sweep: uninitialized × closures / scoping ----
+    ("u23", "let x; let f = () -> x; isError(f());"),            # closure reads the uninitialized binding
+    ("u24", "let x; let f = () -> { x = 42; }; f(); x;"),        # assign through a closure, read outside → 42
+    ("u25", "let x; let f = () -> { x = 42; x; }; f();"),        # assign and read inside the closure
+    ("u26", "let i = 0; let acc = 0; while i < 3 { let tmp; tmp = i; acc = acc + tmp; i = i + 1; }; acc;"),  # declare+assign inside a loop
+    ("u27", "let f = () -> { let u27_inner; }; f(); isError(u27_inner);"),  # inner uninitialized binding does not leak (outer name undefined)
+    # ---- uninitialized × annotations ----
+    ("u28", "let x: Number; let e = x; e.type;"),                # annotated uninitialized read → Uninitialized (not TypeCheck)
+    ("u29", "let f = (a: Number) -> a; let x; let r = f(x); isError(r);"),  # uninitialized value into an annotated param → rejected
+    ("u30", "let x: Number; let y: Number = x; isError(y);"),    # uninitialized value into an annotated binding → rejected
+    ("u31", "let x: Number; x = 5; x + 1;"),                     # annotated uninitialized → valid assignment → 6
+    ("u32", "let x; x = \"s\"; x;"),                             # unannotated string assignment is not checked
+    # ---- error-value sweep: storage, deep propagation, control flow ----
+    ("v01", 'let e = Error.raise("a"); let o = { err: e }; o.err.type;'),        # error value stored in an object field
+    ("v02", 'let e = Error.raise("a"); let a = [e]; a[0].type;'),                # error value stored in an array
+    ("v03", 'let f = () -> Error.raise("a"); let g = () -> f(); let h = () -> g(); h().type;'),  # propagates through 3 call levels
+    ("v04", 'let f = () -> Error.raise("a"); let r = f(); if isError(r) { "caught" } else { "no" };'),  # isError in an if condition
+    ("v05", 'let e = Error.raise("a"); let i = 0; while isError(e) && i < 3 { i = i + 1; }; i;'),  # isError in a while condition
+    ("v06", 'let e = Error.raise("a"); let f = () -> { let r = e ?; }; isError(f());'),  # ? inside a function (top-level ? would abort the shared host suite)
+    ("v07", 'Error.raise("a") ?? 1 ?? 2;'),                      # chained ?? — first catch wins
+    ("v08", 'let e = Error.raise("a"); e ?? "d";'),               # ?? on a stored error value
+    ("v09", 'let e = Error.raise("a", Error.raise("b")); e.cause.type;'),  # cause chain fields
+    ("v10", 'isError(Error.raise("a")) == true;'),                # isError result compared
+    ("v11", "let f = () -> { [1][5]; }; let r = f(); r.type;"),   # runtime error through a call, read .type
+    ("v12", "let x = [1, 2]; let f = () -> x[5]; f().type;"),     # runtime error inside a closure
+    ("v13", 'let f = () -> Error.raise("a"); let r = [f()][0]; isError(r);'),  # error value pulled out of an array
+    ("v14", 'let f = () -> Error.raise("a"); let o = { v: f() }; isError(o.v);'),  # error value pulled out of an object
+    # ---- type-system sweep: composite checks, error values as inputs, Null/Any edges ----
+    ("t43", "let x: Number = 5; let y: Number = x; y;"),          # annotated value passed to an annotated binding
+    ("t44", "let f = (a: Number) -> a * 2; f(f(3));"),            # nested annotated calls → 12
+    ("t45", 'let f = (a: Number) -> a; let r = f(Error.raise("x")); isError(r);'),  # error value into an annotated param → rejected
+    ("t46", "let U = std.Type.make((v) -> v == null || Number.check(v)); let x: U; x = 5; x;"),  # uninitialized + union annotation + valid assignment
+    ("t47", "let U = std.Type.make((v) -> v == null || Number.check(v)); let x: U = null; x;"),  # null passes the union
+    ("t48", 'let x: Array(Array(Number)) = [[1, "a"]]; isError(x);'),  # deep composite failure
+    ("t49", "let x: Object({a: Array(Number)}) = {a: [1, 2]}; x.a[1];"),  # nested schema read → 2
+    ("t50", "let f = (a: Array(Number)) -> a[0]; f([1, 2]);"),    # composite param annotation → 1
+    ("t51", "let x: Number; x = 5; x = \"s\"; let e = x; e.type;"),  # annotated binding: good assign then bad assign → TypeCheck
+    ("t52", "let Bad = std.Type.make((v) -> v > 0); let f = (a: Bad) -> a; let r = f(-1); isError(r);"),  # custom type param rejection
+    ("t53", "Number.check(null);"),                               # null fails Number.check
+    ("t54", "let x: Any = 5; x = null; x;"),                      # Any accepts everything, reassignment too
+    ("t55", "let x: Null = null; x = 5; let e = x; e.type;"),     # Null annotation rejects a Number reassignment
+    # ---- three-state distinctions (undefined ≠ uninitialized ≠ null) ----
+    ("w01", "let x; let y = null; let r = x == y; isError(r);"),  # uninitialized compared to null → error (no false positive)
+    ("w02", "let x; let r = x ?? null; r == null;"),              # ?? catches Uninitialized → null
+    ("w03", 'let x; let e = x; e.type == "Uninitialized";'),      # kind string is "Uninitialized"
+    ("w04", 'let f = () -> { let e = w04_missing; e.type; }; f() == "UndefinedVariable";'),  # outer undefined ≠ uninitialized
+    ("w05", 'let x; isError(x) && x.type == "Uninitialized";'),   # both checks in one expression
 ]
 
 # Complex cases: multi-feature combinations (recursion / closure mutation / higher-order
