@@ -439,7 +439,7 @@ impl Interpreter {
             }
 
             Expression::Object(obj) => {
-                let mut fields = std::collections::HashMap::new();
+                let mut object = ObjectValue::new();
                 for field in &obj.fields {
                     let value = if let Some(ref val_expr) = field.value {
                         self.eval_expression(val_expr, env)?
@@ -453,9 +453,9 @@ impl Interpreter {
                                 format!("Undefined variable: {}", field.name), None, None),
                         }
                     };
-                    fields.insert(field.name.clone(), value);
+                    object.insert(field.name.clone(), value);
                 }
-                Ok(Value::Object(Rc::new(RefCell::new(ObjectValue { fields }))))
+                Ok(Value::Object(Rc::new(RefCell::new(object))))
             }
 
             Expression::Function(func) => {
@@ -926,11 +926,11 @@ impl Interpreter {
         }
 
         // Return the exports as an object
-        let mut fields = std::collections::HashMap::new();
+        let mut object = ObjectValue::new();
         for (name, value) in &import_interpreter.exports {
-            fields.insert(name.clone(), value.clone());
+            object.insert(name.clone(), value.clone());
         }
-        Ok(Value::Object(Rc::new(RefCell::new(ObjectValue { fields }))))
+        Ok(Value::Object(Rc::new(RefCell::new(object))))
     }
 
     // Helper methods for operations
@@ -1104,7 +1104,7 @@ impl Interpreter {
         match object {
             Value::Object(obj) => {
                 self.check_protected(object, field)?;
-                obj.borrow_mut().fields.insert(field.to_string(), value);
+                obj.borrow_mut().insert(field.to_string(), value);
                 Ok(())
             }
             _ => Err(RuntimeError::NotAnObject(object.type_name().to_string())),
@@ -1199,7 +1199,7 @@ impl Interpreter {
             }
             (Value::Object(obj), Value::String(key)) => {
                 self.check_protected(object, key)?;
-                obj.borrow_mut().fields.insert(key.clone(), value);
+                obj.borrow_mut().insert(key.clone(), value);
                 Ok(())
             }
             _ => Err(RuntimeError::CannotIndex(object.type_name().to_string())),

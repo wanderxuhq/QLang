@@ -997,7 +997,28 @@ let Interpreter = () -> {
           if isError(tag) { tag = null; }
           if tag == "Null" {
             rawArgs[rawArgs.length] = null;
+          } else if tag == null {
+            // Raw host value (probe of .type errored — a real wrapper always
+            // yields a tag string): pass it through UNCHANGED. It is already
+            // raw, so a.value would error (no accessible .value on a raw host
+            // value). This happens when a host-native result reaches the args,
+            // e.g. Object.keys({a:1,b:2})[0] (the boot's array indexing returns
+            // the raw host element) fed to std.String.toString.
+            rawArgs[rawArgs.length] = a;
           } else if isNative && tag != "Object" && tag != "Function" && tag != "Type" {
+            rawArgs[rawArgs.length] = a.value;
+          } else if isNative && tag == "Object" {
+            // Host natives expect raw field tables, never the boot's Object
+            // wrapper ({type:"Object", value: fields}). Unwrap regardless of
+            // which native it is: restricting to a name family missed curried
+            // natives (their names carry a "<curried>" suffix, e.g.
+            // "Object.merge<curried>"), so the second application of a curried
+            // merge received the envelope and merged its {type, value} keys.
+            // Boot object literals evaluate to the wrapper view {type:"Object", value: fields}
+            // (interpreter.ql:468); without this unwrap, host Object natives receive the ENVELOPE
+            // (itself a host Value::Object with exactly {type, value}) and return ["type","value"].
+            // Boot QLang functions (stdlib.ql) probe func.name as an error, so isNative is false
+            // for them and they still receive the wrapper (e.g. __objectEntries).
             rawArgs[rawArgs.length] = a.value;
           } else {
             rawArgs[rawArgs.length] = a;
@@ -1021,7 +1042,17 @@ let Interpreter = () -> {
         } else {
           // Wrapper tag is the STRING type name from typeTag (stdlib.ql);
           // std.Type.of now returns type VALUES, which cannot serve as tags
-          { type: typeTag(raw), value: raw };
+          let tag = typeTag(raw);
+          if tag == "Function" {
+            // Host function result (e.g. Object.merge(x) returns a curried
+            // native): return it RAW so a later call re-enters the native
+            // branch. Wrapping it as {type:"Function", value: native} would
+            // mis-dispatch the next call into the user-function record branch
+            // (which probes params/body on the raw native and hangs).
+            raw;
+          } else {
+            { type: tag, value: raw };
+          };
         };
       } else {
         // Other wrapped types are not callable

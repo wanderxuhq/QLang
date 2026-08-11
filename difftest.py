@@ -337,6 +337,16 @@ SAFE_CASES = [
     ("w03", 'let x; let e = x; e.type == "Uninitialized";'),      # kind string is "Uninitialized"
     ("w04", 'let f = () -> { let e = w04_missing; e.type; }; f() == "UndefinedVariable";'),  # outer undefined ≠ uninitialized
     ("w05", 'let x; isError(x) && x.type == "Uninitialized";'),   # both checks in one expression
+    # ---- Object.keys on literals (boot envelope-unwrap regression, interpreter.ql native branch) ----
+    ("y05", 'let ks = std.Object.keys({a: 1, b: 2}); ks.length == 2 && ks[0] == "a" && ks[1] == "b";'),  # real keys, not ["type","value"]
+    # ---- Object.merge curried (boot native-unwrap regression, interpreter.ql) ----
+    # The second application receives the curried native "Object.merge<curried>"; if the boot only
+    # unwrapped a fixed Object-native name family, the second arg stayed the envelope and merged
+    # its {type, value} keys (m0=x m1=y m2=type). Both directions must be clean.
+    ("y07", 'let g = std.Object.merge({x: 1, y: 2}); let h = g({y: 3, z: 4}); let ks = std.Object.keys(h); ks.length == 3 && ks[0] == "x" && ks[1] == "y" && ks[2] == "z" && h.x == 1 && h.y == 3 && h.z == 4;'),
+    ("y08", 'let g = std.Object.merge({x: 1, y: 2}); let h = g({y: 3, z: 4}); !isError(h.x) && !isError(h.z);'),
+    # ---- Object((obj) -> bool) key-predicate member (route B) ----
+    ("y06", 'let kd = Object((o) -> { let hA = !isError(o.a); let hB = !isError(o.b); if hA { hB; } else { true; }; }); let r1 = kd.check({a: 1, b: 2}); let r2 = kd.check({a: 1}); let r3 = kd.check({b: 2}); r1 == true && r2 == false && r3 == true;'),  # key-dependence parity
 ]
 
 # Complex cases: multi-feature combinations (recursion / closure mutation / higher-order

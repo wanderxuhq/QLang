@@ -60,22 +60,62 @@ pub enum Value {
     Error(Rc<ErrorValue>),
 }
 
-/// Object value (hash map of fields)
+/// Object value (hash map of fields + insertion-order record)
+///
+/// `fields` keeps O(1) name lookup; `order` records first-insertion order so that
+/// `Object.keys`/`Object.values`/`Object.entries` iterate deterministically and in a
+/// way users expect from object literals (`{a: 1, b: 2}` -> keys `["a", "b"]`).
+/// Objects built without order tracking (e.g. std-module builders) leave `order`
+/// empty; `key_order()` then falls back to a deterministic sorted iteration.
 #[derive(Debug, Clone)]
 pub struct ObjectValue {
     pub fields: HashMap<String, Value>,
+    /// Field names in first-insertion order.
+    pub order: Vec<String>,
 }
 
 impl ObjectValue {
     pub fn new() -> Self {
         ObjectValue {
             fields: HashMap::new(),
+            order: Vec::new(),
         }
     }
 
     pub fn clone(&self) -> Self {
         ObjectValue {
             fields: self.fields.clone(),
+            order: self.order.clone(),
+        }
+    }
+
+    /// Insert a field, preserving first-insertion order of each key.
+    pub fn insert(&mut self, key: String, value: Value) {
+        if !self.fields.contains_key(&key) {
+            self.order.push(key.clone());
+        }
+        self.fields.insert(key, value);
+    }
+
+    /// Remove a field, maintaining insertion order.
+    pub fn remove(&mut self, key: &str) -> Option<Value> {
+        let removed = self.fields.remove(key);
+        if removed.is_some() {
+            self.order.retain(|k| k != key);
+        }
+        removed
+    }
+
+    /// Field names in iteration order. Falls back to sorted keys when the object was
+    /// built without full order tracking (e.g. std-module builders, or a module that a
+    /// program later extended by assignment — `order` then covers only the new fields).
+    pub fn key_order(&self) -> Vec<String> {
+        if self.order.len() == self.fields.len() {
+            self.order.clone()
+        } else {
+            let mut ks: Vec<String> = self.fields.keys().cloned().collect();
+            ks.sort();
+            ks
         }
     }
 }

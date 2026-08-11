@@ -63,6 +63,101 @@ Expected: `probe3 dyn=2 keys=<some order> hasA=T`
 
 ---
 
+### Task 0.5: `Object((obj) -> bool)` predicate member + boot object-native unwrap
+
+Route B (spec §3, §6.6): the `Object` constructor gains a third union member —
+a key-predicate function. This is a prerequisite for Chapter 1's `KeyDependent`
+combinator and `Partial`'s key-dependence. Two changes, host and boot.
+
+**Files:**
+- Modify: `src/types.rs` (host `build_object_type` — add function member)
+- Modify: `bootstrapped/stdlib.ql` (boot `Object` constructor — add function member)
+- Modify: `bootstrapped/interpreter.ql` (native branch — unwrap `Object`-tagged args for object natives)
+- Test: `difftest.py` regression cases
+
+- [x] **Step 1: Host — predicate member in `build_object_type`** (`src/types.rs:336`)
+
+Add a third branch after the shape member: if `x` is a `Value::Function` /
+`Value::NativeFunction`, return `user_type(object_check_predicate(x))` where
+`object_check_predicate` builds a `<Object.check>` native whose func calls
+`ctx.call(x, vec![Value::Object(fields)] , ...)` on the checked value's field
+map (guarded by `!is_type_value`), returning truthy → true, non-truthy / error →
+false. Do **not** mutate the value; clone fields.
+
+- [x] **Step 2: Boot — predicate member in `Object` constructor** (`bootstrapped/stdlib.ql:260`)
+
+Add a branch between the type and shape members: if `Function.check(x)` (a
+boot function, OR a bound raw host function — raw host values probe `.type` as
+an error value, so `Function.check` not a `.type` probe recognizes both), return
+`Type.make((v) -> v != null && v.type == "Object" && !isTypeValue(v) &&
+callCheck(x, v) == true)` where `callCheck` bridges raw host functions (called
+directly) and boot function records (via `std.__bootCall`). The predicate
+receives the boot **wrapper view** — field reads (`v.a`) and existence
+(`!isError(v.a)`) already work on the wrapper; `Object.keys(v)` works after
+Step 3.
+
+- [x] **Step 3: Boot — unwrap `Object`-tagged args for ALL natives** (`bootstrapped/interpreter.ql:990-1014`)
+
+In the rawArgs loop, when `isNative && tag == "Object"`, unwrap the arg to
+`a.value` (its fields map). **Generalized from the name-family plan**: matching
+a fixed list of `func.name` values missed **curried** natives — their names
+carry a `"<curried>"` suffix (e.g. `Object.merge<curried>`), so the second
+application of `std.Object.merge({x:1,y:2})({y:3,z:4})` passed the wrapper and
+merged the envelope's `{type, value}` keys (`m0=x m1=y m2=type`). Unwrapping
+for every native is safe: boot QLang functions (stdlib.ql) probe `func.name` as
+an error → `isNative` is false → they still receive the wrapper view (e.g.
+`__objectEntries`). Root cause (spec §6.6): boot object literals evaluate to
+the wrapper view (interpreter.ql:468) and the old branch kept `Object`-tagged
+args wrapped (interpreter.ql:1000), so host `Object.keys` received the envelope
+`{type:"Object", value:fields}` and returned `["type","value"]`.
+
+**Bonus fix (same rawArgs loop):** raw host values (probe of `.type` errors →
+`tag == null`) now pass through **unchanged** instead of `a.value` (which
+errors on a raw value). A host-native result reaching the args — e.g.
+`std.Object.keys({a:1,b:2})[0]` (the boot's array indexing returns the raw host
+element) fed to `std.String.toString` — previously broke with "Not an object:
+String"; the objpred.ql `keys=` line exposed it.
+
+- [x] **Step 4: Quick check — predicate parity on host and boot**
+
+Write `/tmp/ql_probe/objpred.ql`:
+```qlang
+let S = std.String.toString;
+let T = (b) -> { if b { "T"; } else { "F"; }; };
+let P = Object((o) -> {
+  if !isError(o.a) {
+    if !isError(o.b) { true; } else { false; };  // a present ⇒ b must be present
+  } else {
+    !isError(o.c);                                 // else c must be present
+  };
+});
+println("p1=" + T(P.check({a:1,b:2})));
+println("p2=" + T(P.check({a:1})));
+println("p3=" + T(P.check({c:9})));
+println("p4=" + T(P.check({})));
+println("keys=" + std.String.toString(std.Object.keys({a:1,b:2})[0]) + "," + std.String.toString(std.Object.keys({a:1,b:2})[1]));
+```
+Run both interpreters; the 5 lines must match byte-for-byte. Note the predicate
+body uses the **block** form (boot limit). Keys order is asserted only via the
+sorted-safe two-key probe above (both `a`,`b` — fine, nondeterministic order is
+still two distinct values; assert `== "a" || == "b"` if needed).
+
+- [x] **Step 5: Regression cases in `difftest.py`**
+
+1. `("y05", ...)` — `Object.keys` on a literal returns real keys (`["a","b"]`, not `["type","value"]`) — captures the boot envelope bug.
+2. `("y06", "Object((o) -> ...) predicate accepts/rejects")` — parity guard for the new union member.
+3. `("y07", ...)` / `("y08", ...)` — **curried `Object.merge`**: `merge({x:1,y:2})({y:3,z:4})` keys are `x,y,z` and `h.x/h.y/h.z` read clean. RED before the Step-3 `<curried>`-suffix generalization, GREEN after.
+All four pass: `python3 difftest.py` → "All identical ✔".
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/types.rs bootstrapped/stdlib.ql bootstrapped/interpreter.ql difftest.py
+git commit -m "feat: Object((obj)->bool) key-predicate member + boot object-native unwrap"
+```
+
+---
+
 ### Task 1: Demo skeleton + harness + Chapter 1 combinators
 
 **Files:**
@@ -70,7 +165,7 @@ Expected: `probe3 dyn=2 keys=<some order> hasA=T`
 
 **Interfaces:**
 - Consumes: Task 0's dynamic-key-access finding.
-- Produces: the harness `cnt`/`assert`/`finishChapter`, and the Chapter 1 combinator library (`Union`, `Intersection`, `Nullable`, `Optional`, `Record`, `Pick`, `Partial`, `NamedArray`, plus `fnType` later). Later chapters call `assert` and add to `cnt`.
+- Produces: the harness `cnt`/`assert`/`finishChapter`, and the Chapter 1 combinator library (`Union`, `Intersection`, `Nullable`, `Optional`, `Record`, `Pick`, `Partial`, `NamedArray`, `KeyDependent`, plus `fnType` later). Later chapters call `assert` and add to `cnt`.
 
 - [ ] **Step 1: Write the file with the harness**
 
@@ -138,7 +233,28 @@ let Partial = (desc) -> {
 let NamedArray = (desc) -> Array({ length: desc.length, element: desc.element });
 ```
 
-**Task 0 dependency:** if `obj[key]` dynamic access failed on either side, `Pick`/`Partial` must use a different mechanism. Record the fix here.
+- [ ] **Step 3b: Add the key-predicate combinator (route B, Task 0.5 prerequisite)**
+
+```qlang
+// ---------- key-dependent type (Object((obj) -> bool), spec §3) ----------
+let has = (o, k) -> !isError(o[k]);
+let KeyDependent = (rule) -> Object(rule);   // rule is (obj) -> bool
+// Example rule: {a present ⇒ b present; else c present}
+let aNeedsBElseC = (o) -> {
+  if has(o, "a") {
+    if has(o, "b") { true; } else { false; };
+  } else {
+    has(o, "c");
+  };
+};
+let AorBC = KeyDependent(aNeedsBElseC);
+```
+
+Uses Task 0's `obj[k]` dynamic key access (plus `Object((obj)->bool)` from
+Task 0.5). Assert `AorBC.check({a:1,b:2})`, `AorBC.check({c:9})` true and
+`AorBC.check({a:1})`, `AorBC.check({})` false.
+
+**Task 0 dependency (RESOLVED 2026-08-11):** dynamic READ `o[k]` and WRITE `o[k]=v` work on BOTH host and boot, including for objects received as function parameters (probe3/3w/3p; outputs byte-identical). `Pick`/`Partial`/`KeyDependent` can use `obj[key]` freely. The only Task-0 divergence is `Object.keys` on a literal in boot (envelope `["type","value"]`) — scheduled for the Task 0.5 Step 3 fix; until it lands, key-dependence checks prefer `!isError(o.<field>)` existence checks.
 
 - [ ] **Step 4: Verify Chapter 1 combinators with a few asserts**
 
@@ -640,8 +756,9 @@ git commit -m "docs: type gymnastics demo pointer (README)"
 ## Self-Review Notes
 
 - **Spec §6.4 example** (`exactType(Number).check(Number)`) is covered in Task 5. `Number.check(42)` vs `exactType(Number).check(Number)` are both asserted.
+- **Spec §3 / §6.6 (route B `Object((obj)->bool)`)** — design verified by probes this session: field reads (`obj.a`) and existence (`!isError(obj.a)`) already agree on host/boot (probe5: identical output); the sole divergence is `Object.keys` on a literal (boot envelope `["type","value"]`). Both the predicate constructor member (host+boot) and the boot object-native unwrap are planned in **Task 0.5**, prerequisite for `KeyDependent` in Task 1. The `KeyDependent` combinator exercises key dependence: "a present ⇒ b present, else c present".
 - **Spec §6.5** (type values as data) covered by the `types` list in Task 5.
 - **Spec §6.1/6.2** (DeepArray, TypeChain) — DeepArray at depth 6 is in Task 5; TypeChain (alternating Record/Array) was cut in the plan for boot performance (each nesting level's `check` walks the full tree; deep alternating chains multiply cost). This is an accepted scope reduction: the *dependent* TypeChain semantics are already exercised by `Matrix` (Array-of-Array) and the finale's `Record(NamedArray(...))` nesting. If the user wants TypeChain specifically, it's a follow-up.
 - **No placeholders:** every code step contains full QLang source.
-- **Type consistency:** `assert(name, cond)`, `chapterStart(n, name)`, `chapterEnd(n)`, `describe(d)`, `Shape(v)`, `validate(T, v)`, `Union/Intersection/Nullable/Optional`, `Record/Pick/Partial/NamedArray`, `Vect/Matrix/TupleOf`, `Fn/Fn2`, `exactType`, `DeepArray/buildDeep` — consistent names across tasks.
+- **Type consistency:** `assert(name, cond)`, `chapterStart(n, name)`, `chapterEnd(n)`, `describe(d)`, `Shape(v)`, `validate(T, v)`, `Union/Intersection/Nullable/Optional`, `Record/Pick/Partial/NamedArray/KeyDependent`, `Vect/Matrix/TupleOf`, `Fn/Fn2`, `exactType`, `DeepArray/buildDeep` — consistent names across tasks.
 - **Determinism:** the only nondeterministic output is `describe(cfgShape)` in Task 3, which is printed but not asserted; the `PASS` counts and all other prints are deterministic.

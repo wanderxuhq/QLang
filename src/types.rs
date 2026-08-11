@@ -1,7 +1,6 @@
 //! Type system: types as data (built-in type objects, std.Type).
 
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::environment::{EnvRef, Lookup};
@@ -34,9 +33,9 @@ pub fn is_protected_object(v: &Value) -> bool {
 
 /// User type object: {check: f} (an ordinary data object, not protected).
 pub fn user_type(check: Value) -> Value {
-    let mut fields = HashMap::new();
-    fields.insert("check".to_string(), check);
-    Value::Object(Rc::new(RefCell::new(ObjectValue { fields })))
+    let mut object = ObjectValue::new();
+    object.insert("check".to_string(), check);
+    Value::Object(Rc::new(RefCell::new(object)))
 }
 
 fn marker_native() -> Value {
@@ -60,10 +59,10 @@ fn native_predicate(name: &str, pred: fn(&Value) -> bool) -> Value {
 }
 
 fn builtin_type(name: &str, pred: fn(&Value) -> bool) -> Value {
-    let mut fields = HashMap::new();
-    fields.insert("check".to_string(), native_predicate(&format!("{}.check", name), pred));
-    fields.insert(TYPE_MARKER.to_string(), marker_native());
-    Value::Object(Rc::new(RefCell::new(ObjectValue { fields })))
+    let mut object = ObjectValue::new();
+    object.insert("check".to_string(), native_predicate(&format!("{}.check", name), pred));
+    object.insert(TYPE_MARKER.to_string(), marker_native());
+    Value::Object(Rc::new(RefCell::new(object)))
 }
 
 fn is_number(v: &Value) -> bool { matches!(v, Value::Number(_)) }
@@ -95,7 +94,7 @@ pub fn register_type_system(global_env: &EnvRef) {
     // Error type object: {check: isError, raise: <constructor>} (migrated from the old global Error constructor, stdlib/mod.rs:66-90)
     let error_t = builtin_type("Error", is_error);
     if let Value::Object(obj) = &error_t {
-        obj.borrow_mut().fields.insert("raise".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
+        obj.borrow_mut().insert("raise".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
             name: "Error.raise".to_string(),
             arity: None, // 1 or 2 arguments: (msg) / (msg, cause)
             accepts_errors: true, // the cause argument may be an error value
@@ -127,7 +126,7 @@ pub fn register_type_system(global_env: &EnvRef) {
     let (error_c, type_c) = (error_t.clone(), type_t.clone());
     if let Value::Object(obj) = &type_t {
         let mut fields = obj.borrow_mut();
-        fields.fields.insert("of".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
+        fields.insert("of".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
             name: "Type.of".to_string(),
             arity: Some(1),
             accepts_errors: true, // must be able to receive error values (Type.of(err) → Error)
@@ -146,7 +145,7 @@ pub fn register_type_system(global_env: &EnvRef) {
                 })
             }),
         })));
-        fields.fields.insert("make".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
+        fields.insert("make".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
             name: "Type.make".to_string(),
             arity: Some(1),
             accepts_errors: false,
@@ -178,7 +177,7 @@ pub fn register_type_system(global_env: &EnvRef) {
         _ => panic!("std must be registered"),
     };
     if let Value::Object(std_obj) = std_val {
-        std_obj.borrow_mut().fields.insert("Type".to_string(), type_t);
+        std_obj.borrow_mut().insert("Type".to_string(), type_t);
     }
 }
 
@@ -333,6 +332,26 @@ fn object_check_schema(schema: Vec<(String, Value)>) -> Value {
     }))
 }
 
+fn object_check_predicate(pred: Value) -> Value {
+    Value::NativeFunction(Rc::new(NativeFunction {
+        name: "<Object.check>".to_string(), arity: Some(1), accepts_errors: false,
+        func: Box::new(move |ctx, args| {
+            let object = match &args[0] {
+                Value::Object(o) if !is_type_value(&args[0]) => o.borrow().clone(),
+                _ => return Ok(Value::Boolean(false)),
+            };
+            // Build a NEW object from the cloned fields (do not hand the predicate the borrowed value).
+            let candidate = Value::Object(Rc::new(RefCell::new(object)));
+            match ctx.call(pred.clone(), vec![candidate], Span::new(0, 0)) {
+                Ok(Value::Error(_)) => return Ok(Value::Boolean(false)),
+                Ok(r) if !r.is_truthy() => return Ok(Value::Boolean(false)),
+                Ok(_) => Ok(Value::Boolean(true)),
+                Err(_) => return Ok(Value::Boolean(false)),
+            }
+        }),
+    }))
+}
+
 fn build_object_type(x: &Value) -> Result<Value, RuntimeError> {
     // union member 1: Type (all keys of type T; Object(String) ≡ AnyObject)
     if is_type_value(x) {
@@ -350,5 +369,9 @@ fn build_object_type(x: &Value) -> Result<Value, RuntimeError> {
         }
         return Ok(user_type(object_check_schema(schema)));
     }
-    Ok(arg_error("Object", "argument must be a type (keys) or a shape object (schema)"))
+    // union member 3: key-predicate function ((obj) -> bool); key-DEPENDENT object types
+    if is_function(x) {
+        return Ok(user_type(object_check_predicate(x.clone())));
+    }
+    Ok(arg_error("Object", "argument must be a type (keys), a shape object (schema), or a predicate function"))
 }

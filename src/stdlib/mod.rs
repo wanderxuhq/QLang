@@ -119,7 +119,7 @@ fn create_std_object() -> Value {
     fields.insert("Error".to_string(), create_error_module());
     fields.insert("fs".to_string(), create_fs_module());
 
-    Value::Object(Rc::new(RefCell::new(ObjectValue { fields })))
+    Value::Object(Rc::new(RefCell::new(ObjectValue { fields, order: Vec::new() })))
 }
 
 /// Create the std.Math module
@@ -322,7 +322,7 @@ fn create_math_module() -> Value {
         }),
     })));
 
-    Value::Object(Rc::new(RefCell::new(ObjectValue { fields })))
+    Value::Object(Rc::new(RefCell::new(ObjectValue { fields, order: Vec::new() })))
 }
 
 /// Create the std.JSON module
@@ -355,7 +355,7 @@ fn create_json_module() -> Value {
         }),
     })));
 
-    Value::Object(Rc::new(RefCell::new(ObjectValue { fields })))
+    Value::Object(Rc::new(RefCell::new(ObjectValue { fields, order: Vec::new() })))
 }
 
 /// Convert a QLang value to a JSON string
@@ -425,10 +425,10 @@ fn json_parse(s: &str) -> Result<Value, RuntimeError> {
 fn json_parse_object(s: &str) -> Result<Value, RuntimeError> {
     let content = &s[1..s.len()-1].trim();
     if content.is_empty() {
-        return Ok(Value::Object(Rc::new(RefCell::new(ObjectValue { fields: HashMap::new() }))));
+        return Ok(Value::Object(Rc::new(RefCell::new(ObjectValue::new()))));
     }
 
-    let mut fields = HashMap::new();
+    let mut object = ObjectValue::new();
     let mut current = String::new();
     let mut in_string = false;
     let mut depth: i32 = 0;
@@ -460,7 +460,7 @@ fn json_parse_object(s: &str) -> Result<Value, RuntimeError> {
             }
             ',' if !in_string && depth == 0 => {
                 if let Some((key, value)) = parse_json_pair(&current) {
-                    fields.insert(key, value);
+                    object.insert(key, value);
                 }
                 current.clear();
             }
@@ -470,11 +470,11 @@ fn json_parse_object(s: &str) -> Result<Value, RuntimeError> {
 
     if !current.is_empty() {
         if let Some((key, value)) = parse_json_pair(&current) {
-            fields.insert(key, value);
+            object.insert(key, value);
         }
     }
 
-    Ok(Value::Object(Rc::new(RefCell::new(ObjectValue { fields }))))
+    Ok(Value::Object(Rc::new(RefCell::new(object))))
 }
 
 fn parse_json_pair(s: &str) -> Option<(String, Value)> {
@@ -956,7 +956,7 @@ fn create_array_module() -> Value {
         }),
     })));
 
-    Value::Object(Rc::new(RefCell::new(ObjectValue { fields })))
+    Value::Object(Rc::new(RefCell::new(ObjectValue { fields, order: Vec::new() })))
 }
 
 /// Create the std.String module
@@ -1281,7 +1281,7 @@ fn create_string_module() -> Value {
         }),
     })));
 
-    Value::Object(Rc::new(RefCell::new(ObjectValue { fields })))
+    Value::Object(Rc::new(RefCell::new(ObjectValue { fields, order: Vec::new() })))
 }
 
 /// Create the std.Number module
@@ -1342,7 +1342,7 @@ fn create_number_module() -> Value {
         }),
     })));
 
-    Value::Object(Rc::new(RefCell::new(ObjectValue { fields })))
+    Value::Object(Rc::new(RefCell::new(ObjectValue { fields, order: Vec::new() })))
 }
 
 /// Create the std.Boolean module
@@ -1363,7 +1363,7 @@ fn create_boolean_module() -> Value {
         }),
     })));
 
-    Value::Object(Rc::new(RefCell::new(ObjectValue { fields })))
+    Value::Object(Rc::new(RefCell::new(ObjectValue { fields, order: Vec::new() })))
 }
 
 /// Create the std.Object module
@@ -1378,9 +1378,10 @@ fn create_object_module() -> Value {
         func: Box::new(|_ctx, args| {
             match args.first() {
                 Some(Value::Object(obj)) => {
-                    let keys: Vec<Value> = obj.borrow().fields.iter()
-                        .filter(|(k, _)| *k != crate::types::TYPE_MARKER)
-                        .map(|(k, _)| Value::String(k.clone()))
+                    let keys: Vec<Value> = obj.borrow().key_order()
+                        .into_iter()
+                        .filter(|k| k != crate::types::TYPE_MARKER)
+                        .map(Value::String)
                         .collect();
                     Ok(Value::Array(Rc::new(RefCell::new(keys))))
                 }
@@ -1397,9 +1398,10 @@ fn create_object_module() -> Value {
         func: Box::new(|_ctx, args| {
             match args.first() {
                 Some(Value::Object(obj)) => {
-                    let values: Vec<Value> = obj.borrow().fields.iter()
-                        .filter(|(k, _)| *k != crate::types::TYPE_MARKER)
-                        .map(|(_, v)| v.clone())
+                    let values: Vec<Value> = obj.borrow().key_order()
+                        .into_iter()
+                        .filter(|k| k != crate::types::TYPE_MARKER)
+                        .filter_map(|k| obj.borrow().fields.get(&k).cloned())
                         .collect();
                     Ok(Value::Array(Rc::new(RefCell::new(values))))
                 }
@@ -1425,10 +1427,12 @@ fn create_object_module() -> Value {
                             match inner_args.first() {
                                 Some(Value::Object(obj2)) => {
                                     let mut merged = obj1_clone.borrow().clone();
-                                    merged.fields.remove(crate::types::TYPE_MARKER);
-                                    for (k, v) in obj2.borrow().fields.iter() {
-                                        if *k != crate::types::TYPE_MARKER {
-                                            merged.fields.insert(k.clone(), v.clone());
+                                    merged.remove(crate::types::TYPE_MARKER);
+                                    for k in obj2.borrow().key_order() {
+                                        if k != crate::types::TYPE_MARKER {
+                                            if let Some(v) = obj2.borrow().fields.get(&k) {
+                                                merged.insert(k, v.clone());
+                                            }
                                         }
                                     }
                                     Ok(Value::Object(Rc::new(RefCell::new(merged))))
@@ -1522,7 +1526,7 @@ fn create_object_module() -> Value {
         }),
     })));
 
-    Value::Object(Rc::new(RefCell::new(ObjectValue { fields })))
+    Value::Object(Rc::new(RefCell::new(ObjectValue { fields, order: Vec::new() })))
 }
 
 /// Create the std.Error module
@@ -1563,6 +1567,7 @@ fn create_error_module() -> Value {
             })));
             fields
         },
+        order: Vec::new(),
     })))
 }
 
@@ -1588,5 +1593,5 @@ fn create_fs_module() -> Value {
         }),
     })));
 
-    Value::Object(Rc::new(RefCell::new(ObjectValue { fields })))
+    Value::Object(Rc::new(RefCell::new(ObjectValue { fields, order: Vec::new() })))
 }

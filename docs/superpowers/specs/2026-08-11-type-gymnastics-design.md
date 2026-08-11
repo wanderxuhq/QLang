@@ -40,7 +40,13 @@ it was built from. Therefore the program operates on two layers:
   `{key: String, value: Number}`. Descriptors are traversable, printable, and
   combinable (this is the source layer of the type world).
 - **Type values** — the "compiled" layer, built from descriptors via
-  `std.Type.make`, `Array(x)`, `Object(x)`, and combinators.
+  `std.Type.make`, `Array(x)`, `Object(x)`, and combinators. The `Object`
+  constructor is a **union**: `Object(Type)` = all keys pass `T.check`;
+  `Object(shapeObject)` = strict schema (every field present and passing);
+  `Object((obj) -> bool)` = **key-predicate** — the function receives the whole
+  object and returns whether it satisfies an arbitrary, possibly key-dependent
+  condition (e.g. "if `a` is present then `b` must be, and `c` must not be").
+  The predicate member is what makes `Partial` and key-dependence expressible.
 
 **Structure-aware combinators** (`Pick`, `Partial`, `Record`, `NamedArray`,
 `Intersection`) operate on descriptors and emit type values. **Predicate
@@ -67,6 +73,11 @@ Definitions + verification:
   `Record` it
 - `Partial(recordDesc)` — make every field nullable: each key maps to
   `Nullable(fieldType)`
+- `KeyDependent(rules)` — built on `Object((obj) -> bool)`: the predicate
+  reads fields directly (`!isError(obj.a)`) and/or `Object.keys(obj)`, and
+  returns a bool. Demonstrates **key dependence** the shape form cannot
+  express: "if `a` present then `b` must be present", "if `a` present then
+  `c` must NOT be", "either `x` or `y` present"
 - `NamedArray(desc)` — `Array({length, element})`; `desc` is
   `{length: n, element: T}` or a plain list of type values (tuple form)
 
@@ -160,6 +171,30 @@ outright crashes. Each is attempted; a failure is logged and fixed.
 5. **Type values as data** — a binding annotated `: std.Type` holds a type
    value; a `Type`-typed list stores multiple type values; a type value is
    passed through and returned from a function.
+6. **`Object((obj) -> bool)` predicate + boot object natives** — the
+   key-predicate constructor member (Section 3). Inside the predicate, three
+   operations must agree on both interpreters: field reads (`obj.a`), field
+   existence (`!isError(obj.a)`), and `Object.keys(obj)`/`Object.values(obj)`.
+   Field reads and existence already agree (boot's MemberAccess reads
+   `obj.value[field]` on the wrapper view). **`Object.keys` does NOT agree**:
+   boot object literals evaluate to the wrapper view
+   `{type:"Object", value:fields}` (interpreter.ql:468), and boot's native
+   branch keeps `Object`-tagged args wrapped (interpreter.ql:1000), so host
+   `Object.keys` receives the wrapper (itself a host `Value::Object` with
+   fields `type`/`value`) and correctly returns `["type","value"]` — the
+   *envelope*, not the user's keys. **Fix: in boot's native branch, unwrap
+   `Object`-tagged args to `a.value` for ALL natives** (`isNative && tag ==
+   "Object"`). The name-family version (matching `func.name` against
+   `Object.keys`/`Object.values`/`Object.merge`/…) was insufficient: **curried**
+   natives carry a `"<curried>"` name suffix, so the second application of
+   `std.Object.merge({x:1,y:2})({y:3,z:4})` slipped past the family check and
+   merged the envelope's `{type, value}` keys. Unwrapping for every native is
+   safe — boot QLang functions (stdlib.ql) probe `func.name` as an error, so
+   `isNative` is false and they keep the wrapper view. This restores the
+   "pass an object, get its keys" contract inside user predicates. A related
+   rawArgs fix passes raw host values (`.type` probe errors) through unchanged
+   instead of `a.value`, so host-native results like
+   `std.Object.keys({a:1,b:2})[0]` work when fed to further natives.
 
 ## 7. In scope / out of scope
 

@@ -280,6 +280,17 @@ let Object = (x) -> {
       };
     });
   }
+  else if Function.check(x) {
+    // Predicate member: x is a function (o) -> bool — key-DEPENDENT object types
+    // ("if a present then b must be present"). The check receives the boot wrapper
+    // view v (field reads v.a and existence !isError(v.a) already work on the
+    // wrapper; Object.keys(v) works after the interpreter's object-native unwrap).
+    // Bound functions are RAW host values — .type probes as an error value (see
+    // Function.check) — so Function.check(x) (not a .type probe) recognizes them;
+    // callCheck bridges both raw host functions (called directly) and boot function
+    // records (via std.__bootCall), mirroring the shape member's field checks.
+    Type.make((v) -> v != null && v.type == "Object" && !isTypeValue(v) && callCheck(x, v) == true);
+  }
   else if x != null && !isError(x.type) && x.type == "Object" && !isTypeValue(x) {
     // Shape object member: schema (at construction, verify all values are types; missing field/mismatched field → false).
     // Field values may be call-product wrappers, so unwrap before validating/using (the normalized schema is read by the check
@@ -323,11 +334,18 @@ let Object = (x) -> {
 
 // std.String.toChars: the host std.String lacks this method, but boot's lexer depends on it
 // (turning source code into a character array). Keeps the old stdlib's augmentation approach (only fills in methods the host lacks).
+// The body runs under HOST semantics, so it expects a RAW host String. The boot's own lexer
+// passes a raw source string (host QLang, direct call) — but USER code calls it through
+// callFunctionInner, which hands host QLang functions the boot WRAPPER {type:"String", value: raw}.
+// Unwrap that wrapper first: raw strings probe as an error value on .type (guard keeps them), while
+// the wrapper probes as "String" and yields its raw value. Without this, s.length on the wrapper is an
+// error value (truthy), so the loop never terminates and the boot hangs.
 let __toChars = (s) -> {
+  let s2 = if s != null && !isError(s.type) && s.type == "String" { s.value; } else { s; };
   let parts = [];
   let i = 0;
-  while i < s.length {
-    parts[parts.length] = s[i];
+  while i < s2.length {
+    parts[parts.length] = s2[i];
     i = i + 1;
   }
   parts;
