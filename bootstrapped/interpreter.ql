@@ -406,21 +406,34 @@ let Interpreter = () -> {
           // JS semantics: obj[key] = value; the "Type" tag is included (wrapped built-in constants,
           // e.g. std.Type.of(42) products) — same as MemberAccess: re-check the inner value for protected
           // members before writing to avoid bypassing; the host aborts writes to constant objects, so they must not be silently dropped.
-          if index != null && index.type == "String" {
-            if isProtectedType(arr.value) && isProtectedField(index.value) {
-              protectedWriteError(index.value);
+          if index != null {
+            if !isError(index.type) && index.type == "String" {
+              if isProtectedType(arr.value) && isProtectedField(index.value) {
+                protectedWriteError(index.value);
+              } else {
+                arr.value[index.value] = value;
+                null;
+              };
+            } else if isError(index.type) && std.Type.of(index) == String {
+              // RAW host string key (e.g. std.Object.keys(obj)[i]): same rule
+              // as the wrapped form — write the raw field table directly.
+              if isProtectedType(arr.value) && isProtectedField(index) {
+                protectedWriteError(index);
+              } else {
+                arr.value[index] = value;
+                null;
+              };
             } else {
-              arr.value[index.value] = value;
               null;
             };
           } else {
             null;
           };
         } else if t == null {
-          if arr != null && index != null && index.type == "String" && isProtectedType(arr) && isProtectedField(index.value) {
+          if arr != null && index != null && !isError(index.type) && index.type == "String" && isProtectedType(arr) && isProtectedField(index.value) {
             // Protected write in the form obj["check"] = x (same rule as the field syntax)
             protectedWriteError(index.value);
-          } else if arr != null && index != null && index.type == "String" {
+          } else if arr != null && index != null && !isError(index.type) && index.type == "String" {
             // Raw host object key write (same rule as MemberAccess): obj[key] = value
             arr[index.value] = value;
             null;
@@ -698,12 +711,26 @@ let Interpreter = () -> {
         } else if t == "Object" || t == "Type" {
           // JS semantics: obj[key] missing → UndefinedField error value (host)
           if index != null {
-            if index.type == "String" {
+            // Guard first: a RAW host string probes .type as an error value,
+            // and error == "X" poisons into a new error (truthy in boot `if`),
+            // so without !isError the wrapped branch would swallow raw keys.
+            if !isError(index.type) && index.type == "String" {
               let v = arr.value[index.value];
               if !isError(v) && v != null {
                 v;
               } else {
                 { type: "Error", value: std.Object.field(arr.value, index.value), propagate: false };
+              };
+            } else if isError(index.type) && std.Type.of(index) == String {
+              // RAW host string key (e.g. std.Object.keys(obj)[i]): the host
+              // native returns unwrapped strings, which probe .type as an error
+              // value. Match host obj[rawKey] semantics by reading the field
+              // directly (arr.value is the raw field table).
+              let v = arr.value[index];
+              if !isError(v) && v != null {
+                v;
+              } else {
+                { type: "Error", value: std.Object.field(arr.value, index), propagate: false };
               };
             }
           }
