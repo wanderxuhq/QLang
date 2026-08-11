@@ -167,6 +167,7 @@ let Parser = (tokens) -> {
         } else {
           advance(); // consume Else
           if check(TokenKind.If) {
+            advance(); // consume If — parseExpression expects the condition next
             // This is an else if
             let elseIfCondition = parseExpression();
             if !check(TokenKind.LeftBrace) {
