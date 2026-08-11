@@ -206,6 +206,29 @@ outright crashes. Each is attempted; a failure is logged and fixed.
   the chosen "独立 demo 程序" path). Fixes it forces (if any) DO get
   regression tests in the normal suites.
 
+## 7b. Known findings from authoring (2026-08-11)
+
+- **Boot `else if` chain bug (fixed).** `bootstrapped/parser.ql`'s
+  `parseIfStatement` consumed `Else` then called `parseExpression()` without
+  first advancing past the `If` token, so an else-if chain's condition was
+  parsed as the identifier `if` and ignored — the second branch was selected
+  unconditionally on boot (host `1 2 3`, boot `2 2 2`). Fixed by advancing
+  past `If` before parsing the condition (`668f034`). Verified: probe prints
+  `1 2 3` on both; `difftest.py` all identical; `cargo test` green;
+  `verify_bootstrap.ql` 33 PASS.
+- **`Shape` of an array-of-objects is an error value (documented, not a
+  divergence).** Recursive `Shape` computes `Array({length, element:
+  Shape(v[0])})`; when `v[0]` is an object, `Shape` returns a plain
+  descriptor object, and `Array` requires a compiled element type on both
+  interpreters ("metadata must have a type 'element'"). Behavior is
+  byte-identical on both, so the demo documents it (`cfgShape.routes is error
+  value: true`) and derives an object-array schema from the first concrete
+  element instead (`Shape(route0)` → `Record` → `Array`).
+- **Intermittent boot stack overflow (not reproduced).** One Ch.3 agent run
+  observed an occasional host Rust stack overflow (exit 134) on a deep
+  recursive `Shape`; 30 sequential stress runs on the current build showed
+  zero failures, so it is not currently reproducible and no fix is recorded.
+
 ## 8. Deliverables
 
 1. `demo/type_gymnastics.ql`
