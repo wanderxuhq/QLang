@@ -8,8 +8,10 @@
 // a recursive key-agnostic JSON type, mutual recursion, fold over a fixpoint,
 // runtime schema evolution, kind introspection, and types as logic: Top/Bottom,
 // subtyping as implication, dependent Sigma pairs, recursive types as language
-// recognizers, distributive conditional types, and Curry-Howard combinators
-// (K, S) as inhabitants of their types. Verified by running this
+// recognizers, distributive conditional types, Curry-Howard combinators
+// (K, S) as inhabitants of their types, and type-level metaprogramming: the
+// checker itself as a value, run-time kind queries, a type describing its own
+// harness, and a demo that checks its own provenance. Verified by running this
 // file through BOTH the host interpreter and the bootstrapped interpreter and
 // diffing the output:
 //
@@ -808,6 +810,12 @@ assert("Array^4 too shallow", !Four(Array)(Number).check(buildDeep(3, 1)));
 assert("Array^8 depth", Eight(Array)(Number).check(buildDeep(8, 1)));
 assert("Array^8 too shallow", !Eight(Array)(Number).check(buildDeep(7, 1)));
 
+// a numeral is itself a type transformer: Type^depth applied to Number
+let TypePow2 = Two(Id)(Number);
+assert("Type^2(Number) is Number", TypePow2 == Number);
+let TypePow3 = Three(Id)(Number);
+assert("Type^3(Number) is Number", TypePow3 == Number);
+
 // ---------- 8.6 distributive conditional types: the check decides ITSELF ----------
 let Cond = (P, T, F) -> std.Type.make((v) -> {
   if P.check(v) { T.check(v); } else { F.check(v); };
@@ -858,6 +866,133 @@ assert("N->N and N->S intersection empty (str)", !Both.check((x) -> "s"));
 assert("N->N and N->S intersection empty (not a fn)", !Both.check(42));
 
 chapterEnd(8);
+
+chapterStart(9, "Type-level metaprogramming & the self-describing demo");
+
+// ---------- 9.1 the type checker as a value ----------
+let checkerOf = (T) -> T.check;
+let NumChecker = checkerOf(Number);
+assert("checkerOf(Number) is a function", std.Type.of(NumChecker) == Function);
+assert("checkerOf(Number)(42)", NumChecker(42));
+assert("checkerOf(Number)('s')", !NumChecker("s"));
+assert("checkerOf's result is same truthiness", checkerOf(Vect(2, Number))([1, 2]));
+
+// std.Type.of(T) itself: a run-time kind query
+let kind = (T) -> std.Type.of(T);
+assert("kind(Number) is Type", kind(Number) == std.Type);
+assert("kind(Number) not Function", kind(Number) != Function);
+assert("kind(Array) is Function", kind(Array) == Function);
+
+// ---------- 9.2 the type system describes its own harness ----------
+let Pass = std.Type.make((v) -> v == true);
+let Config = Object({ quiet: Boolean, cap: Number, levels: Number, sample: Vect(2, Number), tags: Array(String) });
+let cfgGood = { quiet: true, cap: 16, levels: 4, sample: [1, 1], tags: ["a", "b"] };
+let cfgBadCap = { quiet: true, cap: "high", levels: 4, sample: [1, 1], tags: [] };
+assert("config type good", Config.check(cfgGood));
+assert("config type bad cap", !Config.check(cfgBadCap));
+
+// pick out a named field's descriptor and re-apply it
+let CapType = std.Type.make((v) -> v == cfgGood["cap"]);
+assert("cap value matches", CapType.check(16));
+assert("cap value rejects", !CapType.check(15));
+
+// ---------- 9.3 a tiny type language in types ----------
+let EvenNum = std.Type.make((v) -> std.Type.of(v) == Number && v % 2 == 0);
+let SmallEven = Intersection(EvenNum, std.Type.make((v) -> v < 10));
+assert("small even 6", SmallEven.check(6));
+assert("small even 4", SmallEven.check(4));
+assert("small even rejects 3", !SmallEven.check(3));
+assert("small even rejects 12", !SmallEven.check(12));
+
+let PosNum = std.Type.make((v) -> std.Type.of(v) == Number && v > 0);
+let NonNeg = std.Type.make((v) -> std.Type.of(v) == Number && v >= 0);
+let ZeroNum = std.Type.make((v) -> v == 0);
+assert("0 is nonneg but not pos", NonNeg.check(0) && !PosNum.check(0));
+assert("1 is pos", PosNum.check(1));
+assert("pos or zero = nonneg", Union(PosNum, ZeroNum).check(0) && Union(PosNum, ZeroNum).check(5));
+assert("pos and zero = empty", !Intersection(PosNum, ZeroNum).check(0) && !Intersection(PosNum, ZeroNum).check(1));
+
+// ---------- 9.4 generalized type arithmetic on the stack ----------
+let NumStack = Mu((R) -> Union(Null, Object({ head: Number, tail: R })));
+let stack = { head: 1, tail: { head: 2, tail: { head: 3, tail: null } } };
+let stackBad = { head: 1, tail: { head: "s", tail: null } };
+assert("stack push/pop shape good", NumStack.check(stack));
+assert("stack bad elem", !NumStack.check(stackBad));
+assert("stack empty", NumStack.check(null));
+
+let stackSum = (s) -> {
+  if s == null { 0; } else { s.head + stackSum(s.tail); };
+};
+let stackLen = (s) -> {
+  if s == null { 0; } else { 1 + stackLen(s.tail); };
+};
+assert("stackSum = 6", stackSum(stack) == 6);
+assert("stackLen = 3", stackLen(stack) == 3);
+assert("stackSum empty = 0", stackSum(null) == 0);
+
+// ---------- 9.5 type-level branching: Cond drives the check ----------
+let TypeCond = (P, T, F) -> std.Type.make((v) -> {
+  if P.check(v) { T.check(v); } else { F.check(v); };
+});
+let Big = std.Type.make((v) -> std.Type.of(v) == Number && v > 10);
+let Bigness = TypeCond(Big, Number, String);
+assert("cond big routed to Number", Bigness.check(42));
+assert("cond big accepts 20", Bigness.check(20));
+assert("cond small rejected (routed to String)", !Bigness.check(5));
+assert("cond string routed to String", Bigness.check("x"));
+assert("cond bool rejected", !Bigness.check(true));
+
+// ---------- 9.6 the types-as-data list machinery ----------
+let types2 = [Number, String, Boolean];
+let i2 = 0;
+let allTypes = true;
+while i2 < types2.length {
+  if std.Type.of(types2[i2]) != std.Type { allTypes = false; };
+  i2 = i2 + 1;
+};
+assert("all types are Type values", allTypes);
+assert("Type list has 3", types2.length == 3);
+
+// ---------- 9.7 composing dependent types: bounded matrix ----------
+let BoundedMatrix = (rows, cols, T, maxTotal) -> std.Type.make((v) -> {
+  if std.Type.of(v) != AnyArray { false; }
+  else if v.length != rows { false; }
+  else {
+    let ok = true;
+    let total = 0;
+    let r = 0;
+    while r < rows && ok {
+      let rowv = v[r];
+      if std.Type.of(rowv) != AnyArray || rowv.length != cols {
+        ok = false;
+      } else {
+        let c2 = 0;
+        while c2 < cols {
+          let e = rowv[c2];
+          if !T.check(e) { ok = false; } else { total = total + e; };
+          c2 = c2 + 1;
+        };
+      };
+      r = r + 1;
+    };
+    ok && total <= maxTotal;
+  };
+});
+let BM = BoundedMatrix(2, 2, Number, 10);
+assert("bounded matrix good", BM.check([[1, 2], [3, 4]]));
+assert("bounded matrix overflow", !BM.check([[5, 5], [5, 5]]));
+assert("bounded matrix bad shape", !BM.check([[1, 2, 3], [4, 5, 6]]));
+
+// ---------- 9.8 the whole demo's provenance: types describe the files ----------
+let selfType = { name: String, chapters: Number, asserts: Number };
+let SelfCheck = Object(selfType);
+let selfDesc = { name: "type_gymnastics.ql", chapters: 9, asserts: gtotal };
+assert("self-description good", SelfCheck.check(selfDesc));
+assert("self-description not a Number", !SelfCheck.check(123));
+assert("self-description reports 245+", selfDesc["asserts"] >= 245);
+assert("chapters counts up to 9", selfDesc["chapters"] >= 9);
+
+chapterEnd(9);
 
 
 // final summary (cumulative across all chapters)
