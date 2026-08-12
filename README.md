@@ -941,7 +941,6 @@ qlang/
 ├── demo/
 │   └── test.ql           # Demo programs
 ├── verify_bootstrap.ql   # Bootstrapped semantics assertions (33 checks)
-├── test_fix_regression.ql / test_json5_*.ql   # Regression tests
 ├── difftest.py           # Differential test harness (165 cases + 78 V8-referenced)
 ├── fuzzexpr.py           # Random expression fuzzing with a Python oracle (390 cases)
 ├── Cargo.toml
@@ -1183,7 +1182,7 @@ python3 fuzzexpr.py --seed 42  # different random cases
 
 ## Examples
 
-See the `demo/` and `test_*.ql` files for example programs.
+See the `demo/` files for example programs.
 
 ## License
 
