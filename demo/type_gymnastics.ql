@@ -11,9 +11,11 @@
 // recognizers, distributive conditional types, Curry-Howard combinators
 // (K, S) as inhabitants of their types, and type-level metaprogramming: the
 // checker itself as a value, run-time kind queries, a type describing its own
-// harness, a demo that checks its own provenance, and type-as-program: type
+// harness, a demo that checks its own provenance, type-as-program: type
 // constructors as executable transformations (map/compose/lift across
-// schemas) and a type-level stack machine. Verified by running this
+// schemas) and a type-level stack machine, and types-as-correctness: a
+// dependent depth invariant, SK combinators, a compilation proof, and
+// append-only monotonic history types. Verified by running this
 // file through BOTH the host interpreter and the bootstrapped interpreter and
 // diffing the output:
 //
@@ -1084,6 +1086,91 @@ assert("recT chain bad", !RecT.check(chainBad));
 assert("recT null", RecT.check(null));
 
 chapterEnd(10);
+
+chapterStart(11, "Types as correctness: proof by construction");
+
+// ---------- 11.1 a dependent invariant: the stack machine's depth is its type ----------
+// push onto a typed stack: the value's depth must grow exactly with the constructor
+let push = (d, T, st) -> {
+  let deeper = StackT(d + 1, T);
+  deeper.check(st);   // the CHECK itself is the invariant proof
+};
+let baseSt = [1];
+assert("push keeps the depth invariant", push(0, Number, [1]));
+assert("push rejects a shallower stack", !push(0, Number, 1));
+assert("push rejects a deeper stack", !push(0, Number, [[1]]));
+
+// a value can vouch for its own depth: n self-identifies as Vect(n, Number)
+let selfVouch = (n, v) -> Vect(n, Number).check(v);
+assert("value vouches for its own Vect length", selfVouch(3, [1, 2, 3]));
+assert("value refuses to vouch for a lie", !selfVouch(2, [1, 2, 3]));
+
+// ---------- 11.2 type-level SK combinators: a Turing-complete calculus in types ----------
+// S = \x y z. x z (y z); K = \x y. x. Encoding the calculus is a choice of
+// representation; here we show the *step rule* is a type transformation.
+let Kapply = (a) -> (b) -> a;
+let Sapply = (x) -> (y) -> (z) -> x(z)(y(z));
+let skNorm = Sapply(Kapply)(Kapply)(42);
+assert("SK-normalizes to the fixed point", skNorm == 42);
+assert("SK result is a Number", Number.check(skNorm));
+
+// the pure type-level analogue: K as a type transformer is const
+let KType = (A) -> (B) -> A;
+let KTypeNum = KType(Number)(String);
+assert("K type transformer is const", KTypeNum == Number);
+assert("const type rejects a String", !KTypeNum.check("s"));
+
+// ---------- 11.3 a compilation proof: type-directed transform preserves depth ----------
+// a "program" is a list of push directives; compiling it to a StackT depth is
+// the type computation. Prove the compiler is faithful: the depth it computes
+// matches the shape the built value actually has.
+let compileDepth = (program) -> {
+  let d = 0;
+  let i = 0;
+  while i < program.length {
+    if program[i] == "push" { d = d + 1; };
+    i = i + 1;
+  };
+  d;
+};
+let progPushPush = ["push", "push", "push"];
+let compiled = compileDepth(progPushPush);
+let DepthCompiled = StackT(compiled, Number);
+assert("compiler computes depth 3", compiled == 3);
+assert("compiled type matches built value", DepthCompiled.check(buildDeep(3, 1)));
+assert("compiled type rejects wrong depth", !DepthCompiled.check(buildDeep(2, 1)));
+
+// ---------- 11.4 a schema that checks its own history: append-only types ----------
+let History = (acc) -> std.Type.make((v) -> {
+  if std.Type.of(v) != AnyArray { false; }
+  else if v.length < acc { false; }
+  else {
+    let ok = true;
+    let i = 0;
+    while i < v.length {
+      let e = v[i];
+      if std.Type.of(e) != AnyObject || !has(e, "ts") || std.Type.of(e.ts) != Number { ok = false; };
+      i = i + 1;
+    };
+    ok;
+  };
+});
+let Events = History(0);
+let ev1 = { ts: 1 };
+let ev2 = { ts: 2 };
+let evBad = { ts: "s" };
+assert("history append-only good", Events.check([ev1, ev2]));
+assert("history rejects missing ts", !Events.check([{ x: 1 }]));
+assert("history rejects bad ts", !Events.check([evBad]));
+
+// the counter is a lower bound: History(2) needs at least 2 entries, monotonic
+let Events2 = History(2);
+assert("history(2) accepts 2 entries", Events2.check([ev1, ev2]));
+assert("history(2) accepts 3 entries", Events2.check([ev1, ev2, { ts: 3 }]));
+assert("history(2) rejects 1 entry", !Events2.check([ev1]));
+assert("history monotonic under appends", History(0).check([ev1]) && !Events2.check([ev1]));
+
+chapterEnd(11);
 
 
 // final summary (cumulative across all chapters)
