@@ -414,6 +414,16 @@ let Interpreter = () -> {
                 arr.value[index.value] = value;
                 null;
               };
+            } else if !isError(index.type) && index.type == "Number" {
+              // JS semantics: obj[0] = x === obj["0"] = x; numeric key stringified
+              // to match the host's Object+Number index handling (sparse tapes).
+              let k = std.Number.toString(index.value);
+              if isProtectedType(arr.value) && isProtectedField(k) {
+                protectedWriteError(k);
+              } else {
+                arr.value[k] = value;
+                null;
+              };
             } else if isError(index.type) && std.Type.of(index) == String {
               // RAW host string key (e.g. std.Object.keys(obj)[i]): same rule
               // as the wrapped form — write the raw field table directly.
@@ -720,6 +730,16 @@ let Interpreter = () -> {
                 v;
               } else {
                 { type: "Error", value: std.Object.field(arr.value, index.value), propagate: false };
+              };
+            } else if !isError(index.type) && index.type == "Number" {
+              // JS semantics: obj[0] === obj["0"]; numeric key stringified to
+              // match the host's Object+Number index handling (sparse tapes).
+              let k = std.Number.toString(index.value);
+              let v = arr.value[k];
+              if !isError(v) && v != null {
+                v;
+              } else {
+                { type: "Error", value: std.Object.field(arr.value, k), propagate: false };
               };
             } else if isError(index.type) && std.Type.of(index) == String {
               // RAW host string key (e.g. std.Object.keys(obj)[i]): the host

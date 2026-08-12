@@ -33,7 +33,7 @@ Or after building:
 
 ## Demo
 
-[`demo/type_gymnastics.ql`](demo/type_gymnastics.ql) stress-tests the runtime type system ("types as data"): combinators, dependent types, type-level fixpoints, higher-order type constructors, type-level computation, the closed `value -> Shape descriptor -> compiled type -> check` introspection loop, function types nested in schemas, and error-value integration. Its output is verified byte-identical across both interpreters:
+[`demo/type_gymnastics.ql`](demo/type_gymnastics.ql) stress-tests the runtime type system ("types as data") across fifteen chapters: combinators, dependent types, type-level fixpoints, higher-order type constructors, type-level computation, the closed `value -> Shape descriptor -> compiled type -> check` introspection loop, function types nested in schemas, error-value integration, types-as-logic (Curry-Howard, dependent pairs, type arithmetic), type-level metaprogramming (the checker as a value, kind introspection, self-describing types), types-as-correctness (proof-by-construction, SK combinators, monotonic history types), types-as-a-lattice (meet/join with Bottom/Top units), value-to-type run-time inference, a Turing machine whose states are types (a full sparse-tape `a^n b^n` recognizer), and a typed lambda calculus with a type checker written in QLang and checked by QLang. Its output is verified byte-identical across both interpreters:
 
 ```bash
 cargo run -- demo/type_gymnastics.ql > /tmp/tg_host.out

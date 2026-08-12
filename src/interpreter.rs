@@ -1142,6 +1142,20 @@ impl Interpreter {
                         None,
                     )))
             }
+            (Value::Object(obj), Value::Number(n)) => {
+                // JS semantics: obj[0] === obj["0"]; the numeric key is stringified.
+                // The boot interpreter does the same (Number.toString), so sparse
+                // tapes / maps keyed by index behave identically on both.
+                let key = format!("{}", n);
+                Ok(obj.borrow().fields.get(&key)
+                    .cloned()
+                    .unwrap_or_else(|| self.make_error(
+                        "UndefinedField",
+                        format!("Undefined field: {}", key),
+                        span,
+                        None,
+                    )))
+            }
             (_, Value::String(_)) => {
                 // Non-object + string key → CannotIndex error value (null probing is gone)
                 Ok(self.make_error(
@@ -1200,6 +1214,14 @@ impl Interpreter {
             (Value::Object(obj), Value::String(key)) => {
                 self.check_protected(object, key)?;
                 obj.borrow_mut().insert(key.clone(), value);
+                Ok(())
+            }
+            (Value::Object(obj), Value::Number(n)) => {
+                // JS semantics: obj[0] = x === obj["0"] = x; numeric key stringified
+                // (matches the boot interpreter's Number.toString key handling).
+                let key = format!("{}", n);
+                self.check_protected(object, &key)?;
+                obj.borrow_mut().insert(key, value);
                 Ok(())
             }
             _ => Err(RuntimeError::CannotIndex(object.type_name().to_string())),

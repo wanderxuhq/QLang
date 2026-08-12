@@ -14,8 +14,14 @@
 // harness, a demo that checks its own provenance, type-as-program: type
 // constructors as executable transformations (map/compose/lift across
 // schemas) and a type-level stack machine, and types-as-correctness: a
-// dependent depth invariant, SK combinators, a compilation proof, and
-// append-only monotonic history types. Verified by running this
+// dependent depth invariant, SK combinators, a compilation proof,
+// append-only monotonic history types, types-as-a-lattice (meet/join with
+// Bottom/Top units verified by probes), value-to-type run-time inference
+// (classify -> inferType -> dispatch on inferred types), a Turing machine
+// whose states are types (transitions rewrite the state TYPE; Church
+// numerals count steps; a full sparse-tape a^n b^n recognizer), and the
+// whole thing self-hosting: a typed lambda calculus with a type checker
+// written in QLang and checked by QLang. Verified by running this
 // file through BOTH the host interpreter and the bootstrapped interpreter and
 // diffing the output:
 //
@@ -1171,6 +1177,419 @@ assert("history(2) rejects 1 entry", !Events2.check([ev1]));
 assert("history monotonic under appends", History(0).check([ev1]) && !Events2.check([ev1]));
 
 chapterEnd(11);
+
+chapterStart(12, "Types as a lattice");
+
+// join = union (least upper bound), meet = intersection (greatest lower bound)
+let meet = (A, B) -> Intersection(A, B);
+let join = (A, B) -> Union(A, B);
+// the probe set covers every runtime kind; a law is witnessed when both
+// sides of the identity agree on every probe (the type IS the witness)
+let probes = [1, 42, "x", true, null, [1, 2], { a: 1 }, (x) -> x];
+let eqTypes = (A, B) -> {
+  let ok = true;
+  let i = 0;
+  while i < probes.length {
+    if A.check(probes[i]) != B.check(probes[i]) { ok = false; };
+    i = i + 1;
+  };
+  ok;
+};
+let isSubOn = (A, B, vs) -> {
+  let ok = true;
+  let i = 0;
+  while i < vs.length {
+    if A.check(vs[i]) && !B.check(vs[i]) { ok = false; };
+    i = i + 1;
+  };
+  ok;
+};
+
+let A1 = Number;
+let B1 = String;
+let C1 = Boolean;
+assert("meet idempotent", eqTypes(meet(A1, A1), A1));
+assert("join idempotent", eqTypes(join(A1, A1), A1));
+assert("meet commutative", eqTypes(meet(A1, B1), meet(B1, A1)));
+assert("join commutative", eqTypes(join(A1, B1), join(B1, A1)));
+let MAB = meet(A1, B1);
+let MBC = meet(B1, C1);
+assert("meet associative", eqTypes(meet(A1, MBC), meet(MAB, C1)));
+let JAB = join(A1, B1);
+let JBC = join(B1, C1);
+assert("join associative", eqTypes(join(A1, JBC), join(JAB, C1)));
+assert("absorption 1: A v (A ^ B) = A", eqTypes(join(A1, MAB), A1));
+assert("absorption 2: A ^ (A v B) = A", eqTypes(meet(A1, JAB), A1));
+let DistL = meet(A1, join(B1, C1));
+let DistR = join(meet(A1, B1), meet(A1, C1));
+assert("distributive law: A^(BvC) = (A^B)v(A^C)", eqTypes(DistL, DistR));
+assert("unit: A v Bottom = A", eqTypes(join(A1, Bottom), A1));
+assert("unit: A ^ Top = A", eqTypes(meet(A1, Top), A1));
+assert("zero: A ^ Bottom = Bottom", eqTypes(meet(A1, Bottom), Bottom));
+assert("zero: A v Top = Top", eqTypes(join(A1, Top), Top));
+
+// the lattice ordering is witnessed by the same machinery
+let subs = [1, "x", false, null, [1], { a: 1 }];
+assert("meet is a lower bound", isSubOn(MAB, A1, subs) && isSubOn(MAB, B1, subs));
+assert("join is an upper bound", isSubOn(A1, JAB, subs) && isSubOn(B1, JAB, subs));
+
+// monotonicity: if A <: B then Array(A) <: Array(B) (covariance)
+let arrs = [[1, 2], [1], [], [3, 4], ["x"]];
+assert("Array covariant: Array(Number) <: Array(Any)", isSubOn(Array(Number), Array(Any), arrs));
+assert("Array not contravariant: not Array(Any) <: Array(Number)", !isSubOn(Array(Any), Array(Number), arrs));
+
+// the meet of Number and String is the empty type on the probe set
+let None = meet(Number, String);
+assert("Number ^ String has no probe", !None.check(1) && !None.check("x"));
+
+chapterEnd(12);
+
+chapterStart(13, "From value to type: run-time inference");
+
+// a type discriminator: every value reports its runtime kind as a tag
+let classify = (v) -> {
+  let tv = std.Type.of(v);
+  if tv == Number { "Number"; }
+  else if tv == String { "String"; }
+  else if tv == Boolean { "Boolean"; }
+  else if tv == Null { "Null"; }
+  else if tv == std.Type { "Type"; }
+  else if tv == Function { "Function"; }
+  else if tv == AnyArray { "Array(" + std.Number.toString(v.length) + ")"; }
+  else { "Object(" + std.Number.toString(std.Object.keys(v).length) + ")"; };
+};
+assert("classify 42", classify(42) == "Number");
+assert("classify 'hi'", classify("hi") == "String");
+assert("classify true", classify(true) == "Boolean");
+assert("classify null", classify(null) == "Null");
+assert("classify Number (a type)", classify(Number) == "Type");
+assert("classify closure", classify((x) -> x) == "Function");
+assert("classify [1, 2]", classify([1, 2]) == "Array(2)");
+assert("classify {a: 1}", classify({ a: 1 }) == "Object(1)");
+
+// inference: build the most precise type for a concrete value
+let inferType = (v) -> {
+  let tv = std.Type.of(v);
+  if tv == Number { Number; }
+  else if tv == String { String; }
+  else if tv == Boolean { Boolean; }
+  else if tv == Null { Null; }
+  else if tv == std.Type { std.Type; }
+  else if tv == Function { Function; }
+  else if tv == AnyArray {
+    if v.length == 0 { AnyArray; }
+    else {
+      let uni = inferType(v[0]);
+      let i = 1;
+      while i < v.length {
+        uni = Union(uni, inferType(v[i]));
+        i = i + 1;
+      };
+      Array({ length: v.length, element: uni });
+    };
+  }
+  else {
+    let out = {};
+    let ks = std.Object.keys(v);
+    let i = 0;
+    while i < ks.length {
+      out[ks[i]] = inferType(v[ks[i]]);
+      i = i + 1;
+    };
+    Object(out);
+  };
+};
+let T42 = inferType(42);
+assert("infer 42 is Number", T42 == Number);
+let TArr = inferType([1, 2, 3]);
+assert("inferred array accepts itself", TArr.check([1, 2, 3]));
+assert("inferred array rejects a String", !TArr.check([1, 2, "x"]));
+let TMix = inferType([1, "x", 1]);
+assert("mixed array accepts itself", TMix.check([1, "x", 1]));
+assert("mixed array rejects a Boolean", !TMix.check([1, "x", true]));
+assert("inferred array pins its length", !TMix.check([1, "x"]));
+let TObj = inferType({ a: 1, b: "x" });
+assert("inferred object accepts itself", TObj.check({ a: 1, b: "x" }));
+assert("inferred object rejects wrong field type", !TObj.check({ a: 1, b: 2 }));
+assert("inferred object rejects a missing field", !TObj.check({ a: 1 }));
+let TNested = inferType({ a: [1, 2], b: { c: true } });
+assert("nested inference accepts itself", TNested.check({ a: [1, 2], b: { c: true } }));
+assert("nested inference pins depth", !TNested.check({ a: [1], b: { c: true } }));
+
+// inference is idempotent: a type's type is Type
+assert("infer of infer is Type", inferType(inferType(42)) == std.Type);
+assert("infer of std.Type is std.Type", inferType(std.Type) == std.Type);
+assert("std.Type accepts Number", std.Type.check(Number));
+assert("std.Type rejects 42", !std.Type.check(42));
+
+// the inferred type is a data value: use it as a dispatch key
+let handle = (v) -> {
+  let T = inferType(v);
+  if T == Number { "num"; }
+  else if T == String { "str"; }
+  else { "other"; };
+};
+assert("dispatch on inferred type: num", handle(7) == "num");
+assert("dispatch on inferred type: str", handle("z") == "str");
+assert("dispatch on inferred type: other", handle(true) == "other");
+assert("dispatch on inferred type: mixed array", handle([1, "x"]) == "other");
+
+chapterEnd(13);
+
+chapterStart(14, "A Turing machine whose states are types");
+
+// states are single-point types; a transition rewrites the STATE TYPE itself
+let EvenState = Exactly(0);
+let OddState = Exactly(1);
+let parityStep = (sym, state) -> {
+  if sym == 1 {
+    if state.check(1) { EvenState; } else { OddState; };
+  } else {
+    state;
+  };
+};
+let runParity = (input) -> {
+  let st = EvenState;
+  let i = 0;
+  while i < input.length {
+    st = parityStep(input[i], st);
+    i = i + 1;
+  };
+  st;
+};
+let acceptsEven = (input) -> runParity(input).check(0);
+assert("parity machine accepts the empty word", acceptsEven([]));
+assert("parity machine accepts [0]", acceptsEven([0]));
+assert("parity machine accepts [1, 1]", acceptsEven([1, 1]));
+assert("parity machine accepts [1, 0, 1]", acceptsEven([1, 0, 1]));
+assert("parity machine rejects [1]", !acceptsEven([1]));
+assert("parity machine rejects [1, 1, 1]", !acceptsEven([1, 1, 1]));
+
+// the transition is itself a type transformer; Church numerals count steps
+let flipT = (state) -> parityStep(1, state);
+assert("one flip from Even lands in Odd", One(flipT)(EvenState).check(1));
+assert("two flips return to Even", Two(flipT)(EvenState).check(0));
+assert("Three flips is Odd", Three(flipT)(EvenState).check(1));
+assert("Four flips is Even", Four(flipT)(EvenState).check(0));
+
+// the type machine and the value machine agree on the same input
+let valParity = (input) -> {
+  let n = 0;
+  let i = 0;
+  while i < input.length {
+    if input[i] == 1 { n = n + 1; };
+    i = i + 1;
+  };
+  n % 2 == 0;
+};
+let syms = [1, 0, 1, 0, 1, 1, 0];
+assert("type machine and value machine agree", acceptsEven(syms) == valParity(syms));
+let syms2 = [0, 1, 1, 1];
+assert("type machine and value machine agree (odd)", acceptsEven(syms2) == valParity(syms2));
+
+// a full Turing machine over a sparse tape; it needs backtracking, and
+// backtracking needs a tape, not just a stack of types
+let readTape = (tape, head) -> {
+  if has(tape, head) { tape[head]; } else { "_"; };
+};
+// recognizes {a^n b^n}: pair the leftmost a with the rightmost b, repeat
+let abTM = {
+  q0: {
+    a: { w: "X", d: 1, n: "q1" },
+    b: { w: "b", d: 0, n: "reject" },
+    X: { w: "X", d: 1, n: "q0" },
+    Y: { w: "Y", d: 1, n: "q0" },
+    _: { w: "_", d: -1, n: "verify" }
+  },
+  q1: {
+    a: { w: "a", d: 1, n: "q1" },
+    X: { w: "X", d: 1, n: "q1" },
+    Y: { w: "Y", d: 1, n: "q1" },
+    b: { w: "Y", d: -1, n: "q2" },
+    _: { w: "_", d: 0, n: "reject" }
+  },
+  q2: {
+    a: { w: "a", d: -1, n: "q2" },
+    b: { w: "b", d: -1, n: "q2" },
+    Y: { w: "Y", d: -1, n: "q2" },
+    X: { w: "X", d: 1, n: "q0" },
+    _: { w: "_", d: 0, n: "reject" }
+  },
+  verify: {
+    Y: { w: "Y", d: -1, n: "verify" },
+    X: { w: "X", d: -1, n: "checkX" },
+    _: { w: "_", d: 0, n: "accept" },
+    a: { w: "a", d: 0, n: "reject" },
+    b: { w: "b", d: 0, n: "reject" }
+  },
+  checkX: {
+    X: { w: "X", d: -1, n: "checkX" },
+    _: { w: "_", d: 0, n: "accept" },
+    Y: { w: "Y", d: 0, n: "reject" },
+    a: { w: "a", d: 0, n: "reject" },
+    b: { w: "b", d: 0, n: "reject" }
+  }
+};
+let tmConfig = (word) -> {
+  let tape = {};
+  let i = 0;
+  while i < word.length {
+    tape[i] = word[i];
+    i = i + 1;
+  };
+  { tape: tape, head: 0, state: "q0" };
+};
+let tmStep = (cfg) -> {
+  let sym = readTape(cfg.tape, cfg.head);
+  let tr = abTM[cfg.state][sym];
+  cfg.tape[cfg.head] = tr.w;
+  cfg.head = cfg.head + tr.d;
+  cfg.state = tr.n;
+};
+let tmRun = (cfg, maxSteps) -> {
+  let i = 0;
+  while i < maxSteps && cfg.state != "accept" && cfg.state != "reject" {
+    tmStep(cfg);
+    i = i + 1;
+  };
+  cfg.state;
+};
+let tmAccepts = (word) -> tmRun(tmConfig(word), 200) == "accept";
+assert("TM accepts the empty word", tmAccepts(""));
+assert("TM accepts ab", tmAccepts("ab"));
+assert("TM accepts aabb", tmAccepts("aabb"));
+assert("TM accepts aaabbb", tmAccepts("aaabbb"));
+assert("TM rejects a lone a", !tmAccepts("a"));
+assert("TM rejects abb", !tmAccepts("abb"));
+assert("TM rejects aab", !tmAccepts("aab"));
+assert("TM rejects ba", !tmAccepts("ba"));
+assert("TM rejects aaba", !tmAccepts("aaba"));
+
+chapterEnd(14);
+
+chapterStart(15, "A type checker written in QLang, checked by QLang");
+
+// a tiny lambda calculus with numbers; the AST is plain data
+// e ::= n | x | e + e | \x. e | e e | let x = e in e
+let num_ = (n) -> { { k: "num", n: n }; };
+let var_ = (name) -> { { k: "var", name: name }; };
+let add_ = (a, b) -> { { k: "add", a: a, b: b }; };
+let lam_ = (param, body) -> { { k: "lam", param: param, body: body }; };
+let app_ = (fn, arg) -> { { k: "app", fn: fn, arg: arg }; };
+let let_ = (name, val, body) -> { { k: "let", name: name, val: val, body: body }; };
+
+// the environment is a chain {name, ty, parent}; null is the empty env
+let lookupTy = (env, name) -> {
+  if env == null { null; }
+  else if env.name == name { env.ty; }
+  else { lookupTy(env.parent, name); };
+};
+let lookupVal = (env, name) -> {
+  if env == null { null; }
+  else if env.name == name { env.v; }
+  else { lookupVal(env.parent, name); };
+};
+// the arrow type is a decodable object {dom, cod}; base types are Number/String
+let Arrow = (dom, cod) -> { { k: "arrow", dom: dom, cod: cod }; };
+
+// infer: env -> AST -> type, or null on a type error
+let infer = (env, e) -> {
+  if e.k == "num" { Number; }
+  else if e.k == "var" { lookupTy(env, e.name); }
+  else if e.k == "add" {
+    let t1 = infer(env, e.a);
+    let t2 = infer(env, e.b);
+    if t1 == null || t2 == null { null; }
+    else if t1 == Number && t2 == Number { Number; }
+    else { null; };
+  }
+  else if e.k == "lam" {
+    // a parameter is fresh in the environment; for the demo its type is Number
+    Arrow(Number, infer({ name: e.param, ty: Number, parent: env }, e.body));
+  }
+  else if e.k == "app" {
+    let tf = infer(env, e.fn);
+    let ta = infer(env, e.arg);
+    if tf == null || ta == null { null; }
+    else if tf.k != "arrow" { null; }
+    else if ta != tf.dom { null; }
+    else { tf.cod; };
+  }
+  else if e.k == "let" {
+    let tv = infer(env, e.val);
+    if tv == null { null; } else { infer({ name: e.name, ty: tv, parent: env }, e.body); };
+  }
+  else { null; };
+};
+
+// the evaluator mirrors the checker; both are plain QLang functions
+let evalE = (env, e) -> {
+  if e.k == "num" { e.n; }
+  else if e.k == "var" { lookupVal(env, e.name); }
+  else if e.k == "add" { evalE(env, e.a) + evalE(env, e.b); }
+  else if e.k == "lam" { (x) -> evalE({ name: e.param, v: x, parent: env }, e.body); }
+  else if e.k == "app" { evalE(env, e.fn)(evalE(env, e.arg)); }
+  else if e.k == "let" { evalE({ name: e.name, v: evalE(env, e.val), parent: env }, e.body); }
+  else { null; };
+};
+
+let p1 = add_(num_(3), num_(4));
+let t1 = infer(null, p1);
+assert("infer add is Number", t1 == Number);
+assert("checker predicts the runtime value", t1.check(evalE(null, p1)));
+
+let id = lam_("x", var_("x"));
+let tid = infer(null, id);
+assert("infer identity is an arrow", tid.k == "arrow");
+assert("identity dom is Number", tid.dom == Number);
+let idApp = app_(id, num_(42));
+let tidApp = infer(null, idApp);
+assert("infer (id 42) is Number", tidApp == Number);
+assert("(id 42) reduces to 42", evalE(null, idApp) == 42);
+assert("predicted type checks the runtime", tidApp.check(evalE(null, idApp)));
+
+let kcomb = lam_("x", lam_("y", var_("x")));
+let tk = infer(null, kcomb);
+assert("infer K is arrow of arrow", tk.dom == Number && tk.cod.k == "arrow");
+let kApp = app_(app_(kcomb, num_(7)), num_(9));
+assert("infer (K 7 9) is Number", infer(null, kApp) == Number);
+assert("(K 7 9) reduces to 7", evalE(null, kApp) == 7);
+
+let letp = let_("five", num_(5), add_(var_("five"), num_(1)));
+assert("infer let is Number", infer(null, letp) == Number);
+assert("let body evaluates to 6", evalE(null, letp) == 6);
+
+// ill-typed programs are rejected BEFORE running
+let bad1 = add_(num_(1), var_("nope"));
+assert("unbound var is a type error", infer(null, bad1) == null);
+let bad2 = app_(id, var_("nope"));
+assert("unbound arg is a type error", infer(null, bad2) == null);
+let bad3env = { name: "z", ty: String, parent: null };
+let bad3 = add_(num_(1), var_("z"));
+assert("add of a String is a type error", infer(bad3env, bad3) == null);
+let bad4 = app_(num_(1), num_(2));
+assert("applying a number is a type error", infer(null, bad4) == null);
+let bad5 = app_(id, id);
+assert("self-application is a type error", infer(null, bad5) == null);
+
+// a types-first evaluator: run only what type-checks
+let safeEval = (env, e) -> {
+  let t = infer(env, e);
+  if t == null { null; } else { evalE(env, e); };
+};
+assert("safeEval runs typed programs", safeEval(null, p1) == 7);
+assert("safeEval rejects ill-typed programs", safeEval(null, bad1) == null);
+
+// the checker is itself a value with a known kind
+assert("the checker is a Function", std.Type.of(infer) == Function);
+assert("the safe evaluator is a Function", std.Type.of(safeEval) == Function);
+assert("infer is deterministic", infer(null, p1) == infer(null, p1));
+
+// the inferred signature agrees with the real closure's behavior
+let realId = evalE(null, id);
+assert("inferred arrow checks the real closure", Fn(Number, Number).check(realId));
+
+chapterEnd(15);
 
 
 // final summary (cumulative across all chapters)
