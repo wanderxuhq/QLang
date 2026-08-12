@@ -11,7 +11,9 @@
 // recognizers, distributive conditional types, Curry-Howard combinators
 // (K, S) as inhabitants of their types, and type-level metaprogramming: the
 // checker itself as a value, run-time kind queries, a type describing its own
-// harness, and a demo that checks its own provenance. Verified by running this
+// harness, a demo that checks its own provenance, and type-as-program: type
+// constructors as executable transformations (map/compose/lift across
+// schemas) and a type-level stack machine. Verified by running this
 // file through BOTH the host interpreter and the bootstrapped interpreter and
 // diffing the output:
 //
@@ -993,6 +995,95 @@ assert("self-description reports 245+", selfDesc["asserts"] >= 245);
 assert("chapters counts up to 9", selfDesc["chapters"] >= 9);
 
 chapterEnd(9);
+
+chapterStart(10, "Type is program: computing with type constructors");
+
+// ---------- 10.1 a closure encoding: functions over type values ----------
+let When = (cond, T, F) -> {
+  if cond { T; } else { F; };
+};
+assert("when true picks T", When(true, Number, String) == Number);
+assert("when false picks F", When(false, Number, String) == String);
+let C0 = std.Type.make((v) -> v == null);       // C0 is a closed object
+let C1 = std.Type.make((v) -> v == 1);
+let cond = C0.check(null);
+assert("cond value flows into When", When(cond, Number, String) == Number);
+
+// ---------- 10.2 higher-order type-level functions: map & compose over types ----------
+let MapT = (F, xs) -> {
+  let out = [];
+  let i = 0;
+  while i < xs.length { out[out.length] = F(xs[i]); i = i + 1; };
+  out;
+};
+let mapped = MapT(Optional, [Number, String]);
+let MapTup = TupleOf(mapped);
+assert("map Optional over types", MapTup.check([null, "x"]));
+assert("map Optional over types (2)", MapTup.check([1, null]));
+assert("map Optional rejects 2 numbers", !MapTup.check([1, 2]));
+
+let flip = (f) -> (a) -> (b) -> f(b)(a);
+let ComposeFlipped = flip(Compose);              // (F) -> (G) -> (T) -> G(F(T))
+let OptThenArr = ComposeFlipped(Optional);       // (G) -> (T) -> G(Optional(T))
+let ArrOfOpt = OptThenArr(Array);                // (T) -> Array(Optional(T))
+assert("flipped compose array of optional", ArrOfOpt(Number).check([1, null, 2]));
+assert("flipped compose rejects str", !ArrOfOpt(Number).check([1, "x"]));
+
+// lift a type constructor across a schema's fields: the transform is a program
+let MapFields = (desc, F) -> {
+  let out = {};
+  let ks = std.Object.keys(desc);
+  let i = 0;
+  while i < ks.length {
+    let k = ks[i];
+    out[k] = F(desc[k]);
+    i = i + 1;
+  };
+  out;
+};
+let OptFields = Object(MapFields({ a: Number, b: String }, Optional));
+assert("mapFields optional fields", OptFields.check({ a: null, b: "x" }));
+assert("mapFields optional null", OptFields.check({ a: 1, b: null }));
+assert("mapFields rejects bad", !OptFields.check({ a: 1, b: 2 }));
+
+// ---------- 10.3 a type-level stack machine: push/pop/depth by constructor stacking ----------
+let StackT = (depth, T) -> {
+  if depth == 0 { T; } else { Array(StackT(depth - 1, T)); };
+};
+let Depth1 = StackT(1, Number);
+let Depth2 = StackT(2, Number);
+let Depth3 = StackT(3, Number);
+assert("stack depth1", Depth1.check([1]));
+assert("stack depth1 too deep", !Depth1.check([[1]]));
+assert("stack depth2", Depth2.check([[1]]));
+assert("stack depth2 too shallow", !Depth2.check([1]));
+
+// a "program" that stacks then unstacks: build a depth-3 value, check at depth 3
+let prog3 = buildDeep(3, 1);
+assert("program depth3 builds", Depth3.check(prog3));
+assert("program depth3 rejects depth2", !Depth3.check(buildDeep(2, 1)));
+assert("program depth3 rejects depth4", !Depth3.check(buildDeep(4, 1)));
+
+// ---------- 10.4 types that decide: full type-level branching ----------
+let Decide = (P, T, F) -> std.Type.make((v) -> {
+  if P.check(v) { T.check(v); } else { F.check(v); };
+});
+let Big2 = std.Type.make((v) -> std.Type.of(v) == Number && v > 100);
+let BigDecide = Decide(Big2, Number, String);
+assert("decide big -> Number", BigDecide.check(200));
+assert("decide big rejects 50", !BigDecide.check(50));
+assert("decide small string", BigDecide.check("s"));
+assert("decide small bool", !BigDecide.check(true));
+
+// ---------- 10.5 the ultimate recursion: a type that computes a fixpoint of itself ----------
+let RecT = Mu((R) -> Union(Null, Object({ n: Number, rest: R })));
+let chain3 = { n: 1, rest: { n: 2, rest: { n: 3, rest: null } } };
+let chainBad = { n: 1, rest: { n: "s", rest: null } };
+assert("recT chain good", RecT.check(chain3));
+assert("recT chain bad", !RecT.check(chainBad));
+assert("recT null", RecT.check(null));
+
+chapterEnd(10);
 
 
 // final summary (cumulative across all chapters)
