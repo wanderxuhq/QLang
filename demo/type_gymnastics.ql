@@ -1,9 +1,11 @@
 // QLang type gymnastics demo.
 // Exercises the runtime type system ("types as data") as hard as QLang can
-// take it: combinators, dependent types, deep recursive constructors,
-// function signature types, type-of-type, nested schema validation, and
-// error-value integration. Verified by running this file through BOTH the
-// host interpreter and the bootstrapped interpreter and diffing the output:
+// take it: combinators, dependent types, type-level fixpoints, higher-order
+// type constructors, type-level computation, the closed
+// value->Shape->descriptor->type introspection loop, function types nested in
+// schemas, and error-value integration. Verified by running this file through
+// BOTH the host interpreter and the bootstrapped interpreter and diffing the
+// output:
 //
 //   cargo run -- demo/type_gymnastics.ql            > /tmp/tg_host.out
 //   cargo run -- bootstrapped/run_file.ql demo/type_gymnastics.ql > /tmp/tg_boot.out
@@ -268,10 +270,14 @@ assert("shape.matrix rejects [[1],[2]]", !cfgShape["matrix"].check([[1], [2]]));
 assert("shape.middleware accepts str", cfgShape["middleware"].check("auth"));
 assert("shape.middleware rejects num", !cfgShape["middleware"].check(42));
 
-// object arrays: Shape(goodCfg) cannot fold a plain object descriptor into
-// an Array element (Array requires a compiled element type), so cfgShape's
-// routes field is an error value (seen above). Derive the element schema
-// from the first concrete element instead, then build the array type.
+// object arrays: Shape folds the plain object descriptor {path: String,
+// method: String} into the Array element (Array compiles descriptor elements
+// via compileDesc), so cfgShape.routes is itself a compiled type now (seen
+// above) and can be used directly — the introspection loop is closed.
+assert("cfgShape.routes matches routes", cfgShape["routes"].check([{ path: "/api", method: "GET" }]));
+assert("cfgShape.routes rejects bad method", !cfgShape["routes"].check([{ path: "/a", method: 42 }]));
+// Shape fixes the length from the sample (1 route); an unbounded route array
+// is derived by hand from the element schema of the first concrete element.
 let route0 = goodCfg["routes"][0];            // {path:"/api", method:"GET"}
 let routeElemDesc = Shape(route0);            // {path: String, method: String}
 let RouteType = Record(routeElemDesc);
@@ -411,6 +417,162 @@ assert("deepOpt good", DeepOpt.check(buildDeep(4, 1)));
 assert("deepOpt bad", !DeepOpt.check(buildDeep(3, 1)));
 
 chapterEnd(5);
+
+chapterStart(6, "Fixpoints, type-level computation & the closed loop");
+
+// ---------- 6.1 type-level fixpoint: structural recursion through the type ----------
+// List(T) is the fixpoint List(T) = Null | (T x List(T)); the check recurses
+// through the type value via a mutable box (closures capture by reference).
+let List = (T) -> {
+  let box = { ty: null };
+  box.ty = std.Type.make((v) -> {
+    if v == null { true; }
+    else if std.Type.of(v) != AnyObject { false; }
+    else if !has(v, "head") || !has(v, "tail") { false; }
+    else { T.check(v.head) && box.ty.check(v.tail); };
+  });
+  box.ty;
+};
+let ListNum = List(Number);
+let l3 = { head: 1, tail: { head: 2, tail: { head: 3, tail: null } } };
+assert("fixpoint list null", ListNum.check(null));
+assert("fixpoint list len3", ListNum.check(l3));
+assert("fixpoint list bad head", !ListNum.check({ head: 1, tail: { head: "x", tail: null } }));
+assert("fixpoint list not box", !ListNum.check(42));
+
+// Tree(T) = Null | {value: T, left: Tree(T), right: Tree(T)}
+let Tree = (T) -> {
+  let box = { ty: null };
+  box.ty = std.Type.make((v) -> {
+    if v == null { true; }
+    else if std.Type.of(v) != AnyObject { false; }
+    else if !has(v, "value") || !has(v, "left") || !has(v, "right") { false; }
+    else { T.check(v.value) && box.ty.check(v.left) && box.ty.check(v.right); };
+  });
+  box.ty;
+};
+let TreeNum = Tree(Number);
+let goodTree = { value: 1, left: { value: 2, left: null, right: null }, right: { value: 3, left: null, right: null } };
+assert("fixpoint tree good", TreeNum.check(goodTree));
+assert("fixpoint tree bad leaf", !TreeNum.check({ value: 1, left: { value: "x", left: null, right: null }, right: null }));
+
+// deep recursion through the fixpoint (boot recursion guard)
+let deep8 = { head: 1, tail: { head: 2, tail: { head: 3, tail: { head: 4, tail: { head: 5, tail: { head: 6, tail: { head: 7, tail: { head: 8, tail: null } } } } } } } };
+assert("fixpoint deep8 good", ListNum.check(deep8));
+let deep8bad = { head: 1, tail: { head: 2, tail: { head: 3, tail: { head: 4, tail: { head: 5, tail: { head: 6, tail: { head: 7, tail: { head: "z", tail: null } } } } } } } };
+assert("fixpoint deep8 bad", !ListNum.check(deep8bad));
+
+// ---------- 6.2 type-level computation: types computed from runtime values ----------
+let VecLenPlus = (a, b, T) -> Vect(a + b, T);
+let V7 = VecLenPlus(3, 4, Number);
+assert("tlc vec 3+4 good", V7.check([1, 2, 3, 4, 5, 6, 7]));
+assert("tlc vec 3+4 short", !V7.check([1, 2, 3]));
+
+let Exactly = (x) -> std.Type.make((v) -> v == x);
+let Exactly5 = Exactly(5);
+assert("tlc exactly 5", Exactly5.check(5));
+assert("tlc exactly rejects 6", !Exactly5.check(6));
+
+// one-of union computed from a list of allowed values; recursion keeps each
+// level's index in a fresh parameter binding (loop vars are captured by
+// reference, so a fold closure over a mutable loop index sees the final
+// value / an out-of-bounds error)
+let OneOfR = (vals, i) -> {
+  if i >= vals.length - 1 { Exactly(vals[i]); }
+  else { Union(Exactly(vals[i]), OneOfR(vals, i + 1)); };
+};
+let OneOf = (vals) -> OneOfR(vals, 0);
+let Color = OneOf(["red", "green", "blue"]);
+assert("tlc oneof red", Color.check("red"));
+assert("tlc oneof blue", Color.check("blue"));
+assert("tlc oneof rejects", !Color.check("orange"));
+
+// ---------- 6.3 higher-order type constructors: constructors as values ----------
+let MapTypes = (ts, F) -> {
+  let out = [];
+  let i = 0;
+  while i < ts.length { out[out.length] = F(ts[i]); i = i + 1; };
+  out;
+};
+let OptTuple = TupleOf(MapTypes([Number, String], Optional));
+assert("hot maptypes [null,x]", OptTuple.check([null, "x"]));
+assert("hot maptypes [1,null]", OptTuple.check([1, null]));
+assert("hot maptypes [1,2]", !OptTuple.check([1, 2]));
+
+let Compose = (F, G) -> (T) -> F(G(T));
+let OptArrayC = Compose(Optional, Array);
+let OANum = OptArrayC(Number);
+assert("hot compose null", OANum.check(null));
+assert("hot compose [1,2]", OANum.check([1, 2]));
+assert("hot compose bad elem", !OANum.check([1, "s"]));
+
+let Const = (T) -> (x) -> T;
+let Id = (T) -> T;
+assert("hot const check", Const(Number)(String).check(42));
+assert("hot const is Number", Const(Number)(String) == Number);
+assert("hot id", Id(Number).check(1));
+
+// ---------- 6.4 the introspection loop, closed ----------
+// value -> Shape descriptor -> compile (Record/Object/Array) -> type -> check.
+// Array elements and object fields hold plain descriptors; the constructors
+// compile them (Ch.3 showed the same cfgShape.routes folding in from #107).
+let sample = { id: 1, name: "a", tags: ["x", "y"], addr: { city: "s", zip: 123 } };
+let desc = Shape(sample);
+let Rebuilt = Record(desc);
+assert("loop roundtrip original", Rebuilt.check(sample));
+assert("loop roundtrip similar", Rebuilt.check({ id: 2, name: "b", tags: ["z", "w"], addr: { city: "t", zip: 4 } }));
+assert("loop missing name", !Rebuilt.check({ id: 1, tags: ["x", "y"], addr: { city: "s", zip: 1 } }));
+assert("loop nested type", !Rebuilt.check({ id: 1, name: "a", tags: ["x", "y"], addr: { city: "s", zip: "nope" } }));
+assert("loop desc.id is Number", desc.id == Number);
+assert("loop desc.name is type value", std.Type.of(desc.name) == std.Type);
+assert("loop desc.tags compiles array", desc.tags.check(["a", "b"]));
+assert("loop desc.addr compiles", Record(desc.addr).check({ city: "s", zip: 1 }));
+
+// ---------- 6.5 nested function types & type-generating functions ----------
+let Handler = Fn(String, Number);
+let Router = Object({ path: String, handler: Handler, onError: Fn(Number, Boolean) });
+let goodR = { path: "/x", handler: (s) -> s.length, onError: (n) -> n > 0 };
+let badHandler = { path: "/x", handler: (s) -> "str", onError: (n) -> n > 0 };
+let badOnErr = { path: "/x", handler: (s) -> s.length, onError: (n) -> n };
+assert("fn-in-schema good", Router.check(goodR));
+assert("fn-in-schema bad handler", !Router.check(badHandler));
+assert("fn-in-schema bad onError", !Router.check(badOnErr));
+
+let TypeFactory = (k) -> std.Type.make((v) -> v == k);
+let Red = TypeFactory("red");
+assert("factory red", Red.check("red"));
+assert("factory rejects blue", !Red.check("blue"));
+
+let Action = Object({ name: String, run: Fn(Number, Number) });
+assert("action good", Action.check({ name: "inc", run: (x) -> x + 1 }));
+assert("action bad fn", !Action.check({ name: "inc", run: (x) -> "s" }));
+
+// ---------- 6.6 kitchen sink: every trick at once ----------
+let Mega = Object({
+  port: Number,
+  tags: TupleOf(MapTypes([Number, String], Optional)),
+  history: List(Number),
+  tree: Tree(Number),
+  color: Color,
+  exact: Exactly5,
+  handler: Fn(String, Number),
+  meta: Record({ env: String, retries: Exactly(3) }),
+  blob: Object({ name: String, payload: Vect(2, Number) })
+});
+let megaGood = { port: 8080, tags: [null, "x"], history: { head: 1, tail: null }, tree: { value: 1, left: null, right: { value: 2, left: null, right: null } }, color: "green", exact: 5, handler: (s) -> s.length, meta: { env: "prod", retries: 3 }, blob: { name: "b", payload: [1, 2] } };
+assert("mega good", Mega.check(megaGood));
+let bt = megaGood; bt["tags"] = [1, 2];
+assert("mega bad tags", !Mega.check(bt));
+let bh = megaGood; bh["history"] = { head: 1, tail: { head: "x", tail: null } };
+assert("mega bad history", !Mega.check(bh));
+let bc = megaGood; bc["color"] = "orange";
+assert("mega bad color", !Mega.check(bc));
+let be = megaGood; be["meta"] = { env: "prod", retries: 4 };
+assert("mega bad retries", !Mega.check(be));
+let bf = megaGood; bf["handler"] = (s) -> true;
+assert("mega bad handler", !Mega.check(bf));
+
+chapterEnd(6);
 
 
 // final summary (cumulative across all chapters)
