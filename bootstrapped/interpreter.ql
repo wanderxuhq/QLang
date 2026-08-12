@@ -57,28 +57,6 @@ let Interpreter = () -> {
   let maxDepth = 33;
 
   // Helper functions that don't use std
-  let getArrayLength = (arr) -> {
-    let count = 0;
-    let i = 0;
-    while i < arr.length {
-      count = count + 1;
-      i = i + 1;
-    }
-    count;
-  };
-
-  let getArrayElement = (arr, index) -> {
-    let i = 0;
-    let result = null;
-    while i < arr.length {
-      if i == index {
-        result = arr[i];
-      }
-      i = i + 1;
-    }
-    result;
-  };
-
   let pushArray = (arr, element) -> {
     arr[arr.length] = element;
     arr;
@@ -477,7 +455,7 @@ let Interpreter = () -> {
         pushArray(elements, v);
         i = i + 1;
       }
-      { type: "Array", value: elements, length: getArrayLength(elements) };
+      { type: "Array", value: elements, length: elements.length };
     } else if expr.type == "Object" {
       let fields = {};
       let i = 0;
@@ -602,7 +580,7 @@ let Interpreter = () -> {
           };
         } else if t == "Array" {
           if fieldName == "length" {
-            { type: "Number", value: getArrayLength(obj.value) };
+            { type: "Number", value: obj.value.length };
           } else if fieldName == "type" {
             "Array";
           } else if fieldName == "value" {

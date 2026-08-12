@@ -360,6 +360,7 @@ SAFE_CASES = [
     ("d07", 'Array({length: 2, element: {path: String, method: String}}).check([{path: "/a", method: "GET"}, {path: "/b", method: "POST"}]);'),  # object-schema dict as element
     ("d08", 'Object({cfg: {port: Number}, arr: {length: 2, element: String}}).check({cfg: {port: 80}, arr: ["a", "b"]});'),  # both kinds nested
     ("d09", 'Object({cfg: {port: Number}, arr: {length: 2, element: String}}).check({cfg: {port: "x"}, arr: ["a", "b"]});'),  # bad nested field → false
+    ("c40", 'let a = [1, 2]; std.Array.push(a)(3); a.length;'),  # native raw-array mutation stays visible to .length (freshness invariant)
 ]
 
 # Complex cases: multi-feature combinations (recursion / closure mutation / higher-order
