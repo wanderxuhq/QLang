@@ -6,7 +6,10 @@
 // schemas, error-value integration, and the extremes -- a generic Mu fixpoint
 // operator (List/Tree/Expr in one line), Church-numeral type transformers,
 // a recursive key-agnostic JSON type, mutual recursion, fold over a fixpoint,
-// runtime schema evolution, and kind introspection. Verified by running this
+// runtime schema evolution, kind introspection, and types as logic: Top/Bottom,
+// subtyping as implication, dependent Sigma pairs, recursive types as language
+// recognizers, distributive conditional types, and Curry-Howard combinators
+// (K, S) as inhabitants of their types. Verified by running this
 // file through BOTH the host interpreter and the bootstrapped interpreter and
 // diffing the output:
 //
@@ -712,6 +715,149 @@ assert("kind applied Array is Type", std.Type.of(Array(Number)) == std.Type);
 assert("kind Number is Type", std.Type.of(Number) == std.Type);
 
 chapterEnd(7);
+
+chapterStart(8, "Types as logic: Curry-Howard, dependent pairs & type arithmetic");
+
+// ---------- 8.1 the extremes of the type lattice: Top, Bottom, and the type of types ----------
+let Top = std.Type.make((v) -> true);
+let Bottom = std.Type.make((v) -> false);
+assert("top accepts number", Top.check(1));
+assert("top accepts string", Top.check("x"));
+assert("top accepts null", Top.check(null));
+assert("top even accepts a type value", Top.check(Number));
+assert("bottom rejects number", !Bottom.check(1));
+assert("bottom rejects string", !Bottom.check("x"));
+assert("bottom rejects null", !Bottom.check(null));
+
+// kind Type : Type -- the type of type values
+let TypeVal = std.Type.make((v) -> std.Type.of(v) == std.Type);
+assert("typeval accepts Number", TypeVal.check(Number));
+assert("typeval accepts String", TypeVal.check(String));
+assert("typeval rejects 42", !TypeVal.check(42));
+assert("typeval rejects closures", !TypeVal.check((x) -> x));
+
+// ---------- 8.2 subtyping as implication, witnessed by single values ----------
+// Subtype(A, B) accepts v iff "v passes A => v passes B"; a failing witness
+// shows A is NOT a subtype of B.
+let Subtype = (A, B) -> std.Type.make((v) -> {
+  if A.check(v) { B.check(v); } else { true; };
+});
+assert("subtype {5} <: Number", Subtype(Exactly(5), Number).check(5));
+assert("subtype vacuous for 42 (not in {5})", Subtype(Exactly(5), Number).check(42));
+assert("7 witnesses Number not <: {5}", !Subtype(Number, Exactly(5)).check(7));
+
+// ---------- 8.3 dependent pairs (Sigma): the second component's TYPE depends on the first VALUE ----------
+let Sigma = (A, B) -> std.Type.make((v) -> {
+  if std.Type.of(v) != AnyObject { false; }
+  else if !has(v, "fst") { false; }
+  else if !has(v, "snd") { false; }
+  else if !A.check(v.fst) { false; }
+  else { B(v.fst).check(v.snd); };
+});
+let EvenPair = Sigma(Number, (n) -> Exactly(n * 2));
+assert("sigma even pair good", EvenPair.check({ fst: 3, snd: 6 }));
+assert("sigma even pair bad", !EvenPair.check({ fst: 3, snd: 7 }));
+let VecPair = Sigma(Number, (n) -> Vect(n, Number));
+assert("sigma vec self-consistent", VecPair.check({ fst: 3, snd: [1, 2, 3] }));
+assert("sigma vec inconsistent length", !VecPair.check({ fst: 3, snd: [1, 2] }));
+assert("sigma fst must be a Number", !VecPair.check({ fst: "x", snd: [1, 2, 3] }));
+
+// ---------- 8.4 a type IS a recognizer: languages as recursive types ----------
+// Alt = (ab)* over {a, b}: a regular language (the type is the parser)
+let Alt = Mu((R) -> Union(Null, Object({ head: Exactly("a"), tail: Object({ head: Exactly("b"), tail: R }) })));
+let w2 = { head: "a", tail: { head: "b", tail: null } };
+let w4 = { head: "a", tail: { head: "b", tail: { head: "a", tail: { head: "b", tail: null } } } };
+let wBadOdd = { head: "a", tail: { head: "b", tail: { head: "a", tail: null } } };
+assert("alt accepts the empty word", Alt.check(null));
+assert("alt accepts ab", Alt.check(w2));
+assert("alt accepts abab", Alt.check(w4));
+assert("alt rejects aba", !Alt.check(wBadOdd));
+assert("alt rejects a single a", !Alt.check({ head: "a", tail: null }));
+assert("alt rejects leading b", !Alt.check({ head: "b", tail: null }));
+
+// Paren = balanced parentheses as a parse tree: a context-free language
+let Paren = Mu((R) -> Union(Null, Object({ lp: Exactly("("), child: R, rp: Exactly(")"), sib: R })));
+let p1 = { lp: "(", child: null, rp: ")", sib: null };
+let p2 = { lp: "(", child: { lp: "(", child: null, rp: ")", sib: null }, rp: ")", sib: null };
+let p3 = { lp: "(", child: null, rp: ")", sib: { lp: "(", child: null, rp: ")", sib: null } };
+assert("paren ()", Paren.check(p1));
+assert("paren (())", Paren.check(p2));
+assert("paren ()()", Paren.check(p3));
+assert("paren rejects missing rp", !Paren.check({ lp: "(", child: null, sib: null }));
+assert("paren rejects a number as sibling", !Paren.check({ lp: "(", child: null, rp: ")", sib: 42 }));
+
+// ---------- 8.5 type arithmetic: Church numerals as generalized constructors ----------
+let Plus = (m) -> (n) -> (f) -> (x) -> m(f)(n(f)(x));
+let Mult = (m) -> (n) -> (f) -> (x) -> m(n(f))(x);
+let Pow = (m) -> (n) -> n(m);
+let Three = Succ(Succ(Succ(Zero)));
+let Four = Mult(Two)(Two);
+let Eight = Mult(Four)(Two);
+let Sixteen = Pow(Two)(Four);
+let showNum = (n) -> n((x) -> x + 1)(0);
+assert("arith Three = 3", showNum(Three) == 3);
+assert("arith Four = 4", showNum(Four) == 4);
+assert("arith Eight = 8", showNum(Eight) == 8);
+assert("arith Sixteen = 16", showNum(Sixteen) == 16);
+assert("arith 3*3 = 9", showNum(Mult(Three)(Three)) == 9);
+assert("arith 2^3 = 8", showNum(Pow(Two)(Three)) == 8);
+
+// a numeral applied to a type constructor stacks it n times: Array^4, Array^8
+assert("Array^4 depth", Four(Array)(Number).check(buildDeep(4, 1)));
+assert("Array^4 too shallow", !Four(Array)(Number).check(buildDeep(3, 1)));
+assert("Array^8 depth", Eight(Array)(Number).check(buildDeep(8, 1)));
+assert("Array^8 too shallow", !Eight(Array)(Number).check(buildDeep(7, 1)));
+
+// ---------- 8.6 distributive conditional types: the check decides ITSELF ----------
+let Cond = (P, T, F) -> std.Type.make((v) -> {
+  if P.check(v) { T.check(v); } else { F.check(v); };
+});
+let ShortStr = std.Type.make((v) -> {
+  if std.Type.of(v) != String { false; } else { v.length < 3; };
+});
+let SmartString = Cond(ShortStr, String, Null);
+let NumberElse = Cond(ShortStr, String, Number);
+assert("cond short string stays a string", SmartString.check("ab"));
+assert("cond long string rejected", !SmartString.check("abcd"));
+assert("cond non-string rejected", !SmartString.check(42));
+assert("cond non-string becomes a Number", NumberElse.check(42));
+assert("cond long string is not a Number", !NumberElse.check("abcd"));
+
+// ---------- 8.7 Curry-Howard: a type is a proposition, a value is a proof ----------
+// Implication A -> B is the type of functions mapping A-probes to B-values.
+// (check-based, so the result type may itself be a function type)
+let Impl = (A, B) -> std.Type.make((f) -> {
+  if std.Type.of(f) != Function { false; }
+  else {
+    let r = f(fnProbe(A));
+    if isError(r) { false; } else { B.check(r); };
+  };
+});
+let identity = (x) -> x;
+assert("impl N->N: identity is a proof", Impl(Number, Number).check(identity));
+assert("impl N->N: not by lying", !Impl(Number, Number).check((x) -> "s"));
+assert("impl N->String inhabited", Impl(Number, String).check((x) -> "hello"));
+
+// K = \a b. a has the type A -> B -> A: one proof inhabits every A -> B -> A
+let K = (a) -> (b) -> a;
+assert("K inhabits A->B->A", Impl(Number, Fn(String, Number)).check(K));
+assert("K is not a constant 7", !Impl(Number, Fn(String, Number)).check((a) -> 7));
+
+// S = \x y z. x z (y z) has type (A->B->C) -> (A->B) -> A -> C; run it:
+let S = (x) -> (y) -> (z) -> x(z)(y(z));
+let addC = (a) -> (b) -> a + b;
+let dblC = (a) -> a * 2;
+let sval = S(addC)(dblC)(3);
+assert("S normalizes to 9", sval == 9);
+assert("S's normal form is still a Number", Number.check(sval));
+
+// no value inhabits both N->N and N->String: the intersection type is empty
+let Both = Intersection(Impl(Number, Number), Impl(Number, String));
+assert("N->N and N->S intersection empty (id)", !Both.check(identity));
+assert("N->N and N->S intersection empty (str)", !Both.check((x) -> "s"));
+assert("N->N and N->S intersection empty (not a fn)", !Both.check(42));
+
+chapterEnd(8);
 
 
 // final summary (cumulative across all chapters)
