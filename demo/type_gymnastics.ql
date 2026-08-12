@@ -3,9 +3,12 @@
 // take it: combinators, dependent types, type-level fixpoints, higher-order
 // type constructors, type-level computation, the closed
 // value->Shape->descriptor->type introspection loop, function types nested in
-// schemas, and error-value integration. Verified by running this file through
-// BOTH the host interpreter and the bootstrapped interpreter and diffing the
-// output:
+// schemas, error-value integration, and the extremes -- a generic Mu fixpoint
+// operator (List/Tree/Expr in one line), Church-numeral type transformers,
+// a recursive key-agnostic JSON type, mutual recursion, fold over a fixpoint,
+// runtime schema evolution, and kind introspection. Verified by running this
+// file through BOTH the host interpreter and the bootstrapped interpreter and
+// diffing the output:
 //
 //   cargo run -- demo/type_gymnastics.ql            > /tmp/tg_host.out
 //   cargo run -- bootstrapped/run_file.ql demo/type_gymnastics.ql > /tmp/tg_boot.out
@@ -573,6 +576,142 @@ let bf = megaGood; bf["handler"] = (s) -> true;
 assert("mega bad handler", !Mega.check(bf));
 
 chapterEnd(6);
+
+chapterStart(7, "The extremes: Mu, Church numerals & kind introspection");
+
+// ---------- 7.1 a generic least-fixpoint operator ----------
+// Mu(Step) is the fixpoint of a one-step functor: List and Tree fall out in a
+// single line, with the recursion placeholder being the built type itself.
+let Mu = (Step) -> {
+  let box = { ty: null };
+  box.ty = std.Type.make((v) -> Step(box.ty).check(v));
+  box.ty;
+};
+let MuList = (T) -> Mu((R) -> Union(Null, Object({ head: T, tail: R })));
+let MuTree = (T) -> Mu((R) -> Union(Null, Object({ value: T, left: R, right: R })));
+let MuListNum = MuList(Number);
+let MuTreeNum = MuTree(Number);
+assert("mu list null", MuListNum.check(null));
+assert("mu list len3", MuListNum.check(l3));
+assert("mu list bad head", !MuListNum.check({ head: 1, tail: { head: "x", tail: null } }));
+assert("mu tree good", MuTreeNum.check({ value: 1, left: { value: 2, left: null, right: null }, right: null }));
+assert("mu tree bad", !MuTreeNum.check({ value: 1, left: { value: "x", left: null, right: null }, right: null }));
+
+// Expr = Mu(R -> Number | {op: String, args: Array(R)}): the fixpoint goes
+// THROUGH an array type, so the recursion nests inside {op, args}.
+let Expr = Mu((R) -> Union(Number, Object({ op: String, args: Array(R) })));
+let e2 = { op: "+", args: [{ op: "*", args: [2, 3] }, 4] };
+assert("mu expr number", Expr.check(42));
+assert("mu expr nested", Expr.check(e2));
+assert("mu expr bad leaf", !Expr.check({ op: "+", args: [{ op: "*", args: [2, "x"] }, 4] }));
+assert("mu expr bad shape", !Expr.check({ op: "+" }));
+
+// evaluate the AST the type admits, then re-check the result: the type and
+// the algorithm form one closed loop
+let evalExpr = (e) -> {
+  if std.Type.of(e) == Number { e; } else {
+    let op = e.op;
+    let a0 = evalExpr(e.args[0]);
+    let a1 = evalExpr(e.args[1]);
+    if op == "+" { a0 + a1; } else { if op == "*" { a0 * a1; } else { 0; }; };
+  };
+};
+let ev = evalExpr(e2);
+assert("eval 2*3+4 = 10", ev == 10);
+assert("eval result is Number", std.Type.of(ev) == Number);
+assert("eval result passes Expr", Expr.check(ev));
+
+// ---------- 7.2 Church numerals: apply a type constructor N times ----------
+let Zero = (f) -> (x) -> x;
+let Succ = (n) -> (f) -> (x) -> f(n(f)(x));
+let One = Succ(Zero);
+let Two = Succ(Succ(Zero));
+let inc = (x) -> x + 1;
+assert("church Two(inc)(0) = 2", Two(inc)(0) == 2);
+assert("church One(inc)(0) = 1", One(inc)(0) == 1);
+assert("church Zero(inc)(0) = 0", Zero(inc)(0) == 0);
+
+// a Church numeral is a higher-order type transformer: n(F)(T) applies F to T
+// n times, so Two(Array)(Number) is Array(Array(Number)).
+let D2 = Two(Array)(Number);
+let Opt2 = Two(Optional)(Number);
+let OneArr = One(Array)(Number);
+assert("church D2 good", D2.check([[1, 2], [3, 4]]));
+assert("church D2 empty ok", D2.check([]));
+assert("church D2 bad elem", !D2.check([[1, "x"]]));
+assert("church Opt2 null", Opt2.check(null));
+assert("church Opt2 num", Opt2.check(5));
+assert("church Opt2 rejects str", !Opt2.check("x"));
+assert("church OneArr", OneArr.check([1, 2]));
+assert("church OneArr rejects scalar", !OneArr.check(1));
+
+// ---------- 7.3 Json: recursive, key-agnostic, object arm via predicate ----------
+// Any value is JSON except error values; the object arm checks every field
+// recursively with the fixpoint itself.
+let Json = Mu((R) -> Union(Union(Union(Null, Number), Union(String, Boolean)), Union(Array(R), Object((o) -> {
+  let ks = std.Object.keys(o);
+  let ok = true;
+  let i = 0;
+  while i < ks.length && ok {
+    let v = o[ks[i]];
+    if isError(v) { ok = false; } else { if !R.check(v) { ok = false; }; };
+    i = i + 1;
+  };
+  ok;
+}))));
+let jDeep = { a: 1, b: [{ c: true }, null], d: { e: "x", f: [1, [2, [3, null]]] } };
+let jBad = { a: 1, b: [{ c: true }, { d: { e: { f: 42, g: undefined } } }] };
+assert("json null", Json.check(null));
+assert("json deep", Json.check(jDeep));
+assert("json number", Json.check(3.14));
+assert("json bool", Json.check(false));
+assert("json arr", Json.check([1, ["a", [true, [null]]]]));
+assert("json empty obj", Json.check({}));
+assert("json rejects undef", !Json.check(jBad));
+
+// ---------- 7.4 mutual recursion: Even / Odd ----------
+let EBox = { ty: null };
+let OBox = { ty: null };
+EBox.ty = std.Type.make((v) -> v == null || (std.Type.of(v) == AnyObject && has(v, "next") && OBox.ty.check(v.next)));
+OBox.ty = std.Type.make((v) -> std.Type.of(v) == AnyObject && has(v, "next") && EBox.ty.check(v.next));
+let EvenT = EBox.ty;
+let even4 = { next: { next: { next: { next: null } } } };
+let odd3 = { next: { next: { next: null } } };
+assert("mutual even4", EvenT.check(even4));
+assert("mutual rejects odd3", !EvenT.check(odd3));
+assert("mutual null is even", EvenT.check(null));
+
+// ---------- 7.5 fold over the fixpoint: structure shares the type's shape ----------
+let foldList = (f, z, l) -> {
+  if l == null { z; } else { f(l.head, foldList(f, z, l.tail)); };
+};
+assert("fold sum", foldList((h, acc) -> h + acc, 0, l3) == 6);
+assert("fold len", foldList((h, acc) -> acc + 1, 0, l3) == 3);
+assert("fold empty", foldList((h, acc) -> h + acc, 0, null) == 0);
+
+// ---------- 7.6 nested fixpoint: List(List(Number)) as a matrix ----------
+let LL = MuList(MuList(Number));
+let matrix = { head: { head: 1, tail: null }, tail: { head: { head: 2, tail: null }, tail: null } };
+assert("nested fixpoint matrix good", LL.check(matrix));
+assert("nested fixpoint rejects", !LL.check({ head: { head: 1, tail: null }, tail: { head: { head: "x", tail: null }, tail: null } }));
+
+// ---------- 7.7 runtime schema evolution: types are data, hot-swappable ----------
+let evolve = (spec) -> Object({ max: std.Type.make((v) -> v == spec.max), retries: std.Type.make((v) -> v == spec.retries) });
+let T1 = evolve({ max: 3, retries: 2 });
+let T2 = evolve({ max: 5, retries: 2 });
+assert("evolve T1 ok", T1.check({ max: 3, retries: 2 }));
+assert("evolve T1 rejects new max", !T1.check({ max: 5, retries: 2 }));
+assert("evolve T2 ok", T2.check({ max: 5, retries: 2 }));
+assert("evolve T2 rejects old max", !T2.check({ max: 3, retries: 2 }));
+
+// ---------- 7.8 kind introspection: constructors are functions, applications are types ----------
+assert("kind Array is Function", std.Type.of(Array) == Function);
+assert("kind Object is Function", std.Type.of(Object) == Function);
+assert("kind Union is Function", std.Type.of(Union) == Function);
+assert("kind applied Array is Type", std.Type.of(Array(Number)) == std.Type);
+assert("kind Number is Type", std.Type.of(Number) == std.Type);
+
+chapterEnd(7);
 
 
 // final summary (cumulative across all chapters)
