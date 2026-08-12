@@ -600,7 +600,10 @@ def write_boot_suite(path, cases):
     lines = [BOOT_IMPORT, "", boot_disp(), ""]
     lines.append("let cases = [")
     for _, src in cases:
-        lines.append("  " + json.dumps(src) + ",")
+        # ensure_ascii=False: keep real UTF-8 bytes. json.dumps' default 😀
+        # surrogate escapes make the host lexer reject the suite file (InvalidString),
+        # so non-BMP test sources (e.g. emoji in toChars cases) would kill the batch.
+        lines.append("  " + json.dumps(src, ensure_ascii=False) + ",")
     lines.append("];")
     lines.append("let names = [")
     for cid, _ in cases:
@@ -628,7 +631,7 @@ def write_host_one(path, cid, src):
 
 def write_boot_one(path, cid, src):
     lines = [BOOT_IMPORT, "", boot_disp(), ""]
-    lines.append('let r = runSource(%s, "one");' % json.dumps(src))
+    lines.append('let r = runSource(%s, "one");' % json.dumps(src, ensure_ascii=False))
     lines.append("let w = r.value;")
     lines.append('println("%s=" + disp(w));' % cid)
     with open(path, "w") as f:

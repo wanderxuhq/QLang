@@ -399,13 +399,21 @@ let Object = (x) -> {
 // error value (truthy), so the loop never terminates and the boot hangs.
 let __toChars = (s) -> {
   let s2 = if s != null && !isError(s.type) && s.type == "String" { s.value; } else { s; };
-  let parts = [];
+  // Char extraction via the host's native String.split (O(n) single pass): an empty
+  // separator splits on every character boundary, yielding ["", c1, ..., cn, ""]. The
+  // boot-side per-char s2[i] walk was O(n^2) under the host (each index re-collects
+  // the char Vec), so compose the native split with a pure-QLang empty-string filter
+  // instead — O(n) total, and the result stays a plain QLang array of single-char strings.
+  let splitParts = std.String.split(s2)("");
+  let result = [];
   let i = 0;
-  while i < s2.length {
-    parts[parts.length] = s2[i];
+  while i < splitParts.length {
+    if splitParts[i] != "" {
+      result[result.length] = splitParts[i];
+    }
     i = i + 1;
   }
-  parts;
+  result;
 };
 std.String.toChars = __toChars;
 

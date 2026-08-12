@@ -147,4 +147,11 @@ check("object accumulator", r26.value.value, 27);
 let r27 = runSource("let f = (n) -> { if n == 0 { return 0; }; f(n - 1) + n; }; f(32);", "t27");
 check("deep recursion", r27.value.value, 528);
 
+// 27. std.String.toChars char-boundary shape (2026-08-12 split("")+filter
+// rewrite): "hi😀, ok!" → 8 chars, emoji is ONE char (index 2), punctuation and
+// spaces preserved, no empty-string artifacts. Encoded as a scalar so the
+// existing check() can assert it (boot's if is statement-only, no if-expressions).
+let r28 = runSource("let c = std.String.toChars(\"hi😀, ok!\"); let n = c.length; let h = 0; if c[0] == \"h\" { h = 100; }; let e = 0; if c[2] == \"😀\" { e = 10; }; let p = 0; if c[3] == \",\" { p = 1; }; n * 1000 + h + e + p;", "t28");
+check("toChars char-boundary shape", r28.value.value, 8111);
+
 println("verify_bootstrap done");
