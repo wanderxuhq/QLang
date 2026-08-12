@@ -31,6 +31,16 @@ Or after building:
 ./target/release/qlang example.ql
 ```
 
+## Demo
+
+[`demo/type_gymnastics.ql`](demo/type_gymnastics.ql) stress-tests the runtime type system ("types as data"): combinators, dependent types, type-level fixpoints, higher-order type constructors, type-level computation, the closed `value -> Shape descriptor -> compiled type -> check` introspection loop, function types nested in schemas, and error-value integration. Its output is verified byte-identical across both interpreters:
+
+```bash
+cargo run -- demo/type_gymnastics.ql > /tmp/tg_host.out
+cargo run -- bootstrapped/run_file.ql demo/type_gymnastics.ql | awk '/^Interpreting\.\.\.$/ {found=1; next} found && !/^Execution complete\.$/ {print}' > /tmp/tg_boot.out
+diff /tmp/tg_host.out /tmp/tg_boot.out   # must be empty
+```
+
 ## Language Syntax
 
 ### Comments
