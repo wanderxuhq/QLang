@@ -200,6 +200,39 @@ let arrayCheck = (mode) -> (v) -> {
   else { true; };
 };
 
+// Compile a schema member into a type value: a type value (as-is), an array-metadata
+// descriptor ({length, element}, recursively nested), or a plain object-schema descriptor
+// dict (recursively). Closes the Shape loop: object-array elements and nested object fields
+// that Shape produces as plain dicts become checkable types instead of error values.
+// Non-type, non-descriptor values raise a TypeMismatch error value.
+let compileDesc = (v) -> {
+  if isTypeValue(v) { unwrapTypeValue(v); }
+  else if v != null && !isError(v.type) && v.type == "Object" && !isTypeValue(v) {
+    let f = v.value;
+    // array metadata iff BOTH 'length' (a Number field) and 'element' are present. A missing field
+    // reads as an error value, and in host-layer semantics `err != null` is a truthy ERROR (so a
+    // plain schema dict would wrongly enter this branch) — test existence with isError FIRST and
+    // only then probe len.type (also guarded: a field named 'length' holding the Number TYPE value
+    // probes as an error, correctly falling through to the Object-schema branch).
+    let len = f["length"];
+    let hasLen = !isError(len);
+    let hasElem = !isError(f["element"]);
+    if hasLen && hasElem && !isError(len.type) && len.type == "Number" {
+      // Pass the descriptor WRAPPER (v, with its {type:"Object", value:...} envelope) to Array — not a
+      // re-built {length, element} dict. Array's dispatch requires x.type == "Object" to enter the metadata
+      // branch and reads the fields via x.value[...]; a bare dict's .type probes as an error value and would
+      // fall through to the else (raise), exactly the boot-wrapping the user-level Array(meta) path gets for free.
+      unwrapTypeValue(Array(v));
+    }
+    else {
+      unwrapTypeValue(Object(v));
+    };
+  }
+  else {
+    std.Error.raise("TypeMismatch", "Array: member is not a type or descriptor", null);
+  };
+};
+
 let Array = (x) -> {
   // Note: .type probes on bare values (e.g. type constants) are error values, and error == "X" is also an error value
   // (truthy) — !isError(x.type) must come first, then compare the tag, otherwise bare constants wrongly enter the fixed-length branch.
@@ -244,7 +277,19 @@ let Array = (x) -> {
     else {
       let et = unwrapTypeValue(element);
       if et == null || !isTypeValue(et) {
-        std.Error.raise("TypeMismatch", "Array: metadata must have a type 'element'", null);
+        // plain descriptor dict element (object schema or nested {length, element}) — compile it
+        if et != null && !isError(et.type) && et.type == "Object" && !isTypeValue(et) {
+          let et2 = compileDesc(et);
+          if isTypeValue(et2) {
+            Type.make(arrayCheck({ length: length.value, element: et2.check, tuple: null }));
+          }
+          else {
+            std.Error.raise("TypeMismatch", "Array: metadata must have a type 'element'", null);
+          };
+        }
+        else {
+          std.Error.raise("TypeMismatch", "Array: metadata must have a type 'element'", null);
+        };
       }
       else {
         Type.make(arrayCheck({ length: length.value, element: et.check, tuple: null }));
@@ -301,9 +346,21 @@ let Object = (x) -> {
     while i < entries.length {
       let t = unwrapTypeValue(entries[i][1]);
       if !isTypeValue(t) {
-        return std.Error.raise("TypeMismatch", "Object: schema field '" + entries[i][0] + "' is not a type value", null);
+        // plain descriptor dict field (object schema or {length, element}) — compile it
+        if t != null && !isError(t.type) && t.type == "Object" && !isTypeValue(t) {
+          let t2 = compileDesc(t);
+          if !isTypeValue(t2) {
+            return std.Error.raise("TypeMismatch", "Object: schema field '" + entries[i][0] + "' is not a type value", null);
+          };
+          schema[schema.length] = [entries[i][0], t2];
+        }
+        else {
+          return std.Error.raise("TypeMismatch", "Object: schema field '" + entries[i][0] + "' is not a type value", null);
+        };
+      }
+      else {
+        schema[schema.length] = [entries[i][0], t];
       };
-      schema[schema.length] = [entries[i][0], t];
       i = i + 1;
     };
     Type.make((v) -> {

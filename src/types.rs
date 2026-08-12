@@ -249,6 +249,27 @@ enum ArrayMode {
     Tuple(Vec<Value>),   // the check function for each position
 }
 
+/// Compile a schema member (a type value, an array-metadata object, or a plain descriptor
+/// object) into a type value. Runtime-derived descriptors (e.g. `Shape` output) arrive with
+/// object-array elements and nested object fields as plain descriptor dicts rather than compiled
+/// type values; compiling them here closes the loop so arbitrary nested runtime values can become
+/// checkable types. A non-type, non-descriptor member yields an error value (message: `fallback`).
+fn compile_schema_type(v: &Value, fallback: &str) -> Value {
+    if is_type_value(v) {
+        return v.clone();
+    }
+    if let Value::Object(obj) = v {
+        let fields = obj.borrow();
+        // {length, element} array metadata → recursive array type
+        if matches!(fields.fields.get("length"), Some(Value::Number(_))) && fields.fields.contains_key("element") {
+            return build_array_type(v).unwrap_or_else(|_| arg_error("Array", "invalid array metadata"));
+        }
+        // plain descriptor object → recursive schema type
+        return build_object_type(v).unwrap_or_else(|_| arg_error("Object", "invalid descriptor"));
+    }
+    arg_error("Array", fallback)
+}
+
 fn build_array_type(x: &Value) -> Result<Value, RuntimeError> {
     // union member 1: Number (fixed length, arbitrary elements)
     if let Value::Number(n) = x {
@@ -282,8 +303,14 @@ fn build_array_type(x: &Value) -> Result<Value, RuntimeError> {
                 _ => return Ok(arg_error("Array", "metadata must have a non-negative integer 'length'")),
             };
             let element = match fields.fields.get("element") {
-                Some(e) if is_type_value(e) => type_check_field(e).expect("type value has check"),
-                _ => return Ok(arg_error("Array", "metadata must have a type 'element'")),
+                Some(e) => {
+                    let t = compile_schema_type(e, "metadata must have a type 'element'");
+                    match type_check_field(&t) {
+                        Some(c) => c,
+                        None => return Ok(t), // error value (e.g. bad descriptor) propagated
+                    }
+                }
+                None => return Ok(arg_error("Array", "metadata must have a type 'element'")),
             };
             return Ok(user_type(array_check(ArrayMode::Tuple(
                 std::iter::repeat(element).take(length).collect()
@@ -362,10 +389,12 @@ fn build_object_type(x: &Value) -> Result<Value, RuntimeError> {
     if let Value::Object(obj) = x {
         let mut schema = Vec::new();
         for (k, v) in obj.borrow().fields.iter() {
-            if !is_type_value(v) {
-                return Ok(arg_error("Object", &format!("schema field '{}' is not a type value", k)));
-            }
-            schema.push((k.clone(), type_check_field(v).expect("type value has check")));
+            let t = compile_schema_type(v, &format!("schema field '{}' is not a type value", k));
+            let check = match type_check_field(&t) {
+                Some(c) => c,
+                None => return Ok(t), // error value (e.g. bad descriptor) propagated
+            };
+            schema.push((k.clone(), check));
         }
         return Ok(user_type(object_check_schema(schema)));
     }

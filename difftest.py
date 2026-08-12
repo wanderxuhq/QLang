@@ -347,6 +347,19 @@ SAFE_CASES = [
     ("y08", 'let g = std.Object.merge({x: 1, y: 2}); let h = g({y: 3, z: 4}); !isError(h.x) && !isError(h.z);'),
     # ---- Object((obj) -> bool) key-predicate member (route B) ----
     ("y06", 'let kd = Object((o) -> { let hA = !isError(o.a); let hB = !isError(o.b); if hA { hB; } else { true; }; }); let r1 = kd.check({a: 1, b: 2}); let r2 = kd.check({a: 1}); let r3 = kd.check({b: 2}); r1 == true && r2 == false && r3 == true;'),  # key-dependence parity
+    # ---- constructors accept plain descriptor dicts (runtime-introspection closure, #107) ----
+    # Array/Object accept {length, element} array-metadata and plain object-schema dicts, not
+    # just pre-compiled type values. A schema FIELD that is itself a descriptor dict (d05/d06,
+    # d08/d09) must be compiled via compileDesc on the boot side — the isError-first guard fix.
+    ("d01", 'Array({length: 2, element: String}).check(["a", "b"]);'),   # array-metadata dict as the whole arg
+    ("d02", 'Array({length: 2, element: String}).check([1, 2]);'),       # wrong element type
+    ("d03", 'Object({cfg: {port: Number}}).check({cfg: {port: 80}});'),  # plain object-schema dict field
+    ("d04", 'Object({cfg: {port: Number}}).check({cfg: {port: "x"}});'),  # wrong nested type
+    ("d05", 'Object({arr: {length: 2, element: String}}).check({arr: ["a", "b"]});'),  # array-metadata dict as a schema FIELD (was boot=false)
+    ("d06", 'Object({arr: {length: 2, element: String}}).check({arr: [1, 2]});'),
+    ("d07", 'Array({length: 2, element: {path: String, method: String}}).check([{path: "/a", method: "GET"}, {path: "/b", method: "POST"}]);'),  # object-schema dict as element
+    ("d08", 'Object({cfg: {port: Number}, arr: {length: 2, element: String}}).check({cfg: {port: 80}, arr: ["a", "b"]});'),  # both kinds nested
+    ("d09", 'Object({cfg: {port: Number}, arr: {length: 2, element: String}}).check({cfg: {port: "x"}, arr: ["a", "b"]});'),  # bad nested field → false
 ]
 
 # Complex cases: multi-feature combinations (recursion / closure mutation / higher-order
