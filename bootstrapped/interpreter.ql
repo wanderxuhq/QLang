@@ -522,7 +522,7 @@ let Interpreter = () -> {
         // True short-circuit (matches the host): when the left operand decides
         // the result, the right operand is NOT evaluated (so a `?` inside it
         // cannot escape the short-circuit position).
-        if isErrorVal(left) {
+        if left != null && !isError(left.type) && left.type == "Error" {
           // Error left operand: the host's operation zone poisons BEFORE the
           // short-circuit, without evaluating the right operand. Delegate with
           // a dummy right value — the host never touches it (message:
@@ -823,8 +823,9 @@ let Interpreter = () -> {
     if isPropagating(left) { return left; }
     if isPropagating(right) { return right; }
     // The operation itself errors: error operand → delegate to the host to construct a new error (with cause), message matches the host
-    if isErrorVal(left) { return evalDelegated(op, left, right); }
-    if isErrorVal(right) { return evalDelegated(op, left, right); }
+    // Step B: isErrorVal inlined (isWrapped body inlined too) — same probes, -2 dispatches per check
+    if left != null && !isError(left.type) && left.type == "Error" { return evalDelegated(op, left, right); }
+    if right != null && !isError(right.type) && right.type == "Error" { return evalDelegated(op, left, right); }
     // && / ||: matches the host — returns the first falsy / truthy operand itself
     if op == "&&" {
       if isTruthy(left) { right; } else { left; };
