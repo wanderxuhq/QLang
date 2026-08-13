@@ -86,7 +86,12 @@ let Interpreter = () -> {
   };
 
   let isPropagating = (v) -> {
-    isErrorVal(v) && v.propagate == true;
+    // Step B: inlined isErrorVal(isWrapped(v)) && propagate — one boot-closure
+    // dispatch instead of three (isPropagating → isErrorVal → isWrapped). Pure
+    // textual expansion: same probe sequence (v.type ×2, v.propagate ×1), same
+    // left-to-right short-circuit, predicates capture nothing — truth-table
+    // identical for every input, only host dispatches drop (2/call × 54,107).
+    v != null && !isError(v.type) && v.type == "Error" && v.propagate == true;
   };
 
   // ---- Task 11: annotation-checking semantics ----
