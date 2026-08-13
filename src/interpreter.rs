@@ -244,7 +244,7 @@ impl Interpreter {
                             self.check_annotation(value, ty.clone(), text, Some(v.span()))?
                         } else { value };
                         if let Some(a) = annotation {
-                            env.borrow_mut().define_annotated(let_stmt.name.clone(), value, Some(a));
+                            env.borrow_mut().define_annotated(Rc::from(let_stmt.name.clone()), value, Some(a));
                         } else {
                             env.borrow_mut().define(let_stmt.name.clone(), value);
                         }
@@ -477,6 +477,7 @@ impl Interpreter {
                     body: Rc::clone(&func.body),
                     closure: Rc::clone(env),
                     param_types: Rc::new(param_types),
+                    param_keys: Rc::new(func.parameters.iter().map(|p| Rc::from(p.name.as_str())).collect()),
                 })))
             }
 
@@ -759,8 +760,11 @@ impl Interpreter {
                 self.recursion_depth += 1;
 
                 let call_env = child_env(&func.closure);
-                for (i, (param, arg)) in func.parameters.iter().zip(args).enumerate() {
-                    call_env.borrow_mut().define_annotated(param.name.clone(), arg, func.param_types[i].clone());
+                {
+                    let mut env = call_env.borrow_mut();
+                    for (i, (arg, key)) in args.into_iter().zip(func.param_keys.iter()).enumerate() {
+                        env.define_annotated(Rc::clone(key), arg, func.param_types[i].clone());
+                    }
                 }
 
                 self.call_stack.push(CallFrame {

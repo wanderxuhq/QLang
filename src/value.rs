@@ -131,6 +131,9 @@ pub struct FunctionValue {
     pub closure: EnvRef,
     /// Parameter annotation evaluated at definition time: (type value, source text); None = the parameter has no annotation.
     pub param_types: Rc<Vec<Option<(Value, String)>>>,
+    /// Pre-built Rc<str> parameter-name keys: per-call param binding clones the Rc
+    /// (refcount bump) instead of allocating a fresh String per parameter per call.
+    pub param_keys: Rc<Vec<Rc<str>>>,
 }
 
 /// Call-back interface natives use to invoke user functions (e.g. type-check closures).

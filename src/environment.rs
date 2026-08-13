@@ -109,7 +109,7 @@ pub struct Binding {
 #[derive(Debug)]
 pub struct Environment {
     /// Variable bindings of the current scope
-    values: HashMap<String, Binding>,
+    values: HashMap<Rc<str>, Binding>,
     /// Parent environment, used for scope chain lookups
     parent: Option<EnvRef>,
 }
@@ -155,11 +155,11 @@ impl Environment {
     /// env.define("x".to_string(), Value::Number(10.0));
     /// ```
     pub fn define(&mut self, name: String, value: Value) {
-        self.values.insert(name, Binding { value: Some(value), annotation: None });
+        self.values.insert(Rc::from(name), Binding { value: Some(value), annotation: None });
     }
 
     /// Binding with an annotation (when the annotation is Some, reassignment is checked again).
-    pub fn define_annotated(&mut self, name: String, value: Value, annotation: Option<(Value, String)>) {
+    pub fn define_annotated(&mut self, name: Rc<str>, value: Value, annotation: Option<(Value, String)>) {
         self.values.insert(name, Binding { value: Some(value), annotation });
     }
 
@@ -211,7 +211,7 @@ impl Environment {
 
     /// Declare an uninitialized binding (declared but not assigned; value is None).
     pub fn define_uninitialized(&mut self, name: String, annotation: Option<(Value, String)>) {
-        self.values.insert(name, Binding { value: None, annotation });
+        self.values.insert(Rc::from(name), Binding { value: None, annotation });
     }
 
     /// Looks up a variable's annotation along the scope chain (only used for reassignment checks).
@@ -266,12 +266,12 @@ impl Environment {
     }
 
     /// Get all bindings of the current scope (for debugging)
-    pub fn bindings(&self) -> &HashMap<String, Binding> {
+    pub fn bindings(&self) -> &HashMap<Rc<str>, Binding> {
         &self.values
     }
 
     /// Get an iterator over all bindings
-    pub fn iter_bindings(&self) -> impl Iterator<Item = (&String, &Binding)> {
+    pub fn iter_bindings(&self) -> impl Iterator<Item = (&Rc<str>, &Binding)> {
         self.values.iter()
     }
 }
