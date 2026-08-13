@@ -470,15 +470,15 @@ RISKY_CASES = [
     ("r34", '(Error.raise("boom") ?) ?? 42;'),
     # ---- Step B: isPropagating / isErrorVal 真值表锁定(2026-08-13 Step B) ----
     # 共同基底: `let e = 1 / 0;` 把非传播错误值(propagate:false)绑进变量。
-    #   r35 锁 isPropagating-在错误值上为 FALSE(热路径,506 行)+ ?? 回退分支的 isErrorVal(509 行)→ 42。
-    #   r36/r37 锁 &&/|| 错误左操作数分支(520 行)→ evalBinaryOp(525 行)委托构造错误 → 两端都是错误值。
-    #   r38 锁 UnaryOp ? 分支(552 行)构造 propagate:true 并上传 → 顶层错误。
-    #   r39 锁错误值经变量进入函数实参 → 参数拒绝(与 r32 同构但错误来自 let 绑定)。
-    ("r35", "let e = 1 / 0; e ?? 42;"),
-    ("r36", "let e = 1 / 0; e && true;"),
-    ("r37", "let e = 1 / 0; e || true;"),
-    ("r38", "1 / 0 ?;"),
-    ("r39", "let f = (x) -> x; let e = 1 / 0; f(e);"),
+    #   r40 锁 isPropagating-在错误值上为 FALSE(热路径,506 行)+ ?? 回退分支的 isErrorVal(509 行)→ 42。
+    #   r41/r42 锁 &&/|| 错误左操作数分支(520 行)→ evalBinaryOp(525 行)委托构造错误 → 两端都是错误值。
+    #   r43 锁 UnaryOp ? 分支(552 行)构造 propagate:true 并上传 → 顶层错误。
+    #   r44 锁错误值经变量进入函数实参 → 参数拒绝(与 r32 同构但错误来自 let 绑定)。
+    ("r40", "let e = 1 / 0; e ?? 42;"),
+    ("r41", "let e = 1 / 0; e && true;"),
+    ("r42", "let e = 1 / 0; e || true;"),
+    ("r43", "1 / 0 ?;"),
+    ("r44", "let f = (x) -> x; let e = 1 / 0; f(e);"),
     # ---- protected members (Task 11): writing check/raise/of/make on a built-in
     # type object aborts the program on both sides (host: RuntimeError::Custom
     # → exit 1 + "Error: ..." stderr without positions; boot: propagate-marked
