@@ -5,6 +5,7 @@ use std::fs;
 use std::rc::Rc;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::borrow::Cow;
 
 use crate::ast::*;
 use crate::lexer::Lexer;
@@ -82,7 +83,7 @@ pub struct Interpreter {
 
 #[derive(Debug, Clone)]
 struct CallFrame {
-    path: String,
+    path: Cow<'static, str>,
     position: usize,
 }
 
@@ -141,7 +142,7 @@ impl Interpreter {
 
     /// Run a program
     pub fn run_program(&mut self, program: &Program, path: String) -> Result<Value, RuntimeError> {
-        self.call_stack.push(CallFrame { path, position: 0 });
+        self.call_stack.push(CallFrame { path: Cow::Owned(path), position: 0 });
         let result = self.run_statements(&program.statements, &self.global_env.clone());
         self.call_stack.pop();
         match result {
@@ -763,7 +764,7 @@ impl Interpreter {
                 }
 
                 self.call_stack.push(CallFrame {
-                    path: "unknown".to_string(),
+                    path: Cow::Borrowed("unknown"),
                     position: span.start,
                 });
 
@@ -911,9 +912,9 @@ impl Interpreter {
         // Resolve path relative to current file
         let current_path = self.call_stack.last()
             .map(|f| f.path.clone())
-            .unwrap_or_else(|| ".".to_string());
+            .unwrap_or_else(|| Cow::Borrowed("."));
 
-        let base_path = Path::new(&current_path).parent()
+        let base_path = Path::new(current_path.as_ref()).parent()
             .unwrap_or(Path::new("."));
         let import_path = base_path.join(path);
 
