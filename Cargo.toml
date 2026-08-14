@@ -8,6 +8,7 @@ authors = ["QLang Team"]
 [dependencies]
 thiserror = "1.0"
 rand = "0.8"
+libc = "0.2"
 
 [[bin]]
 name = "qlang"

@@ -4,7 +4,7 @@ use std::env;
 use std::path::Path;
 use qlang::Interpreter;
 use qlang::interpreter::error_diag;
-use qlang::value::Value;
+use qlang::value::{RuntimeError, Value};
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -19,6 +19,58 @@ fn main() {
     // Check for common options
     if file_path == "--help" || file_path == "-h" {
         print_usage(&args[0]);
+        return;
+    }
+
+    // AOT compile: qlang --compile <src.ql> -o <out>
+    if file_path == "--compile" {
+        // Guard `args.len() < 5` (not 4): with `-o` as the last arg the brief's
+        // `args[4]` below would index out of bounds.
+        if args.len() < 5 || args[3] != "-o" {
+            eprintln!("Usage: {} --compile <src.ql> -o <out>", args[0]);
+            std::process::exit(1);
+        }
+        let src_path = &args[2];
+        let out_path = &args[4];
+        let src = std::fs::read_to_string(src_path).unwrap_or_else(|e| {
+            eprintln!("Error reading {}: {}", src_path, e);
+            std::process::exit(1);
+        });
+        // The stdout redirect must wrap run_file (the pipe is drained only after
+        // stdout is restored), so capture_stdout takes a closure that runs qlangc
+        // on a fresh interpreter with args[0] = source text, args[1] = source path.
+        let mut run_error: Option<RuntimeError> = None;
+        let src_text = src;
+        let src_path_str = src_path.to_string();
+        let ir = capture_stdout(|interp| {
+            interp.set_args(&[src_text, src_path_str]);
+            if let Err(e) = interp.run_file(Path::new("aot/qlangc.ql")) {
+                run_error = Some(e);
+            }
+        });
+        if let Some(e) = run_error {
+            eprintln!("Error running qlangc: {}", e);
+            std::process::exit(1);
+        }
+        let tmp_ll = std::env::temp_dir().join(format!("qlangc_{}.ll", std::process::id()));
+        std::fs::write(&tmp_ll, &ir).unwrap();
+        let st = std::process::Command::new("clang")
+            .args(["-fuse-ld=lld", tmp_ll.to_str().unwrap(), "aot/runtime.c", "-o", out_path])
+            .status();
+        std::fs::remove_file(&tmp_ll).ok();
+        match st {
+            Ok(s) if s.success() => {
+                println!("compiled: {}", out_path);
+            }
+            Ok(s) => {
+                eprintln!("clang failed with {}", s);
+                std::process::exit(1);
+            }
+            Err(e) => {
+                eprintln!("clang spawn error: {}", e);
+                std::process::exit(1);
+            }
+        }
         return;
     }
 
@@ -61,9 +113,49 @@ fn print_usage(program: &str) {
     println!();
     println!("Options:");
     println!("  <file.ql>    QLang source file to execute");
+    println!("  --compile <src.ql> -o <out>   AOT compile to a native ELF via clang/lld");
     println!("  --help, -h   Show this help message");
     println!();
     println!("Examples:");
     println!("  {} hello.ql", program);
     println!("  {} demo/fib.ql", program);
+}
+
+/// Run `f` while capturing all writes to stdout (dup2 to a pipe), then restore stdout
+/// and return the captured bytes. qlangc's IR text is captured through this pipe; the
+/// redirect MUST wrap `f` (i.e. the `interp.run_file(...)` call), otherwise stdout is
+/// already restored and the pipe is empty on read-back.
+fn capture_stdout<F>(f: F) -> Vec<u8>
+where
+    F: FnOnce(&mut Interpreter),
+{
+    let saved = unsafe { libc::dup(1) };
+    let mut fds = [0 as libc::c_int; 2];
+    unsafe {
+        libc::pipe(fds.as_mut_ptr());
+        libc::dup2(fds[1], 1);
+        libc::close(fds[1]);
+    }
+    let mut interp = Interpreter::new();
+    f(&mut interp);
+    // Restore stdout before draining the pipe: after dup2(saved, 1) the pipe's write
+    // end has no remaining references, so read() below sees EOF once buffered data
+    // is drained.
+    unsafe {
+        libc::dup2(saved, 1);
+        libc::close(saved);
+    }
+    let mut buf = Vec::new();
+    unsafe {
+        let mut tmp = [0u8; 4096];
+        loop {
+            let n = libc::read(fds[0], tmp.as_mut_ptr() as *mut libc::c_void, 4096);
+            if n <= 0 {
+                break;
+            }
+            buf.extend_from_slice(&tmp[..n as usize]);
+        }
+        libc::close(fds[0]);
+    }
+    buf
 }
