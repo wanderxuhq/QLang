@@ -123,10 +123,90 @@ let emitUnaryOp = (node) -> {
   };
 };
 
-// 表达式位置的标识符:Task 5 才支持变量;回退 NULL 盒保证 IR 有效。
+// ---- 编译期作用域模型(Task 5)----
+// 运行期环境 = 链式帧 {parent: ptr, slots: [ptr]}(spec「let 绑定当前帧新槽」),编译期用 QLang
+// 对象链镜像:scope = { slots: {name → slotIndex}, parent: scope|null }。帧/槽一律 ptr 型(R9)。
+let globalScope = { slots: {}, parent: null };
+let curScope = globalScope;
+// scopePush:进入新函数时挂到当前作用域下(Task 6+ 函数 emit 用;v1 顶层只有 globalScope)。
+let scopePush = (parent) -> { curScope = { slots: {}, parent: parent }; };
+// defineSlot:slots 现有键数即新 slot 索引(std.Object.keys 在 bootstrapped/stdlib.ql 可用,已实测)。
+let defineSlot = (name) -> {
+  let n = std.Object.keys(curScope.slots).length;
+  curScope.slots[name] = n;
+  n;
+};
+// lookupSlot:返回 {depth, slot} 或 null。R8 累加器形态 —— QLang 的 while 是语句,body 值不回流,
+// brief 草图(while 内 if 表达式直接产 {depth, slot})命中后 s 不再更新,会无限循环。
+let lookupSlot = (name) -> {
+  let d = 0;
+  let s = curScope;
+  let hit = null;
+  while s != null && hit == null {
+    let v = s.slots[name];
+    if !isError(v) && v != null { hit = { depth: d, slot: v }; }
+    else { s = s.parent; d = d + 1; };
+  };
+  hit;
+};
+// R9/R1:当前函数入口 env 寄存器名(main = 全局帧寄存器);不硬编码 "env0" 字面量。
+let curEnv = "";
+
+// 表达式位置的标识符:沿当前帧 parent 链走 depth 步,读目标帧 slot(帧/槽全 ptr 型)。
 let emitIdentifier = (node) -> {
-  line("; unhandled Identifier in expr (Task 5): " + node.name);
-  emitNull();
+  let hit = lookupSlot(node.name);
+  if hit == null {
+    // 未绑定名字:报错注释 + 合法 NULL 盒,保证 IR 有效(任务裁定的 fallback)。
+    line("; error: undefined " + node.name);
+    emitNull();
+  } else {
+    let cur = curEnv;
+    let d = 0;
+    while d < hit.depth {
+      let p = temp();
+      line("  " + p + " = load ptr, ptr " + cur);
+      cur = p;
+      d = d + 1;
+    };
+    let off = temp(); let v = temp();
+    line("  " + off + " = getelementptr i8, ptr " + cur + ", i64 " + std.String.toString(16 + 8 * hit.slot));
+    line("  " + v + " = load ptr, ptr " + off);
+    v;
+  };
+};
+
+// 顶层 let:绑定到当前帧新槽(R9 Design 2 —— 不造新帧)。返回 slot 编号(编译期用,不产 IR 值)。
+let emitLetStmt = (node) -> {
+  if !isError(node.annotation) && node.annotation != null {
+    line("; annotation ignored (v1)");
+  };
+  let V = emitExpr(node.value);
+  let slot = defineSlot(node.name);
+  let off = temp();
+  line("  " + off + " = getelementptr i8, ptr " + curEnv + ", i64 " + std.String.toString(16 + 8 * slot));
+  line("  store ptr " + V + ", ptr " + off);
+  slot;
+};
+
+// assign:沿链找目标帧 slot 写(R9 帧/槽全 ptr 型)。未命中 → 注释 + 不求值 value。
+let emitAssignStmt = (node) -> {
+  let hit = lookupSlot(node.target.name);
+  if hit == null {
+    line("; error: assign to undefined " + node.target.name);
+  } else {
+    let V = emitExpr(node.value);
+    let cur = curEnv;
+    let d = 0;
+    while d < hit.depth {
+      let p = temp();
+      line("  " + p + " = load ptr, ptr " + cur);
+      cur = p;
+      d = d + 1;
+    };
+    let off = temp();
+    line("  " + off + " = getelementptr i8, ptr " + cur + ", i64 " + std.String.toString(16 + 8 * hit.slot));
+    line("  store ptr " + V + ", ptr " + off);
+  };
 };
 
 // 表达式位置的 Call:Task 4 只特例顶层 print/println;回退 NULL 盒保证 IR 有效。
@@ -305,12 +385,13 @@ let emitPrelude = () -> {
   line("}");
 };
 
-// 顶层语句:Let 报"Task 5 支持";print/println 特例;其余一律按表达式语句求值丢弃
+// 顶层语句:Let/Assign 真实 emit;print/println 特例;其余一律按表达式语句求值丢弃
 // (boot parser 无 ExprStmt 包装 —— 裸表达式节点直接出现在 program.statements)。
 let emitTopLevelStmt = (node) -> {
   if node.type == "Let" {
-    // Task 5 实现;Task 4 先报"不支持"
-    line("; unsupported top-level Let (Task 5)");
+    emitLetStmt(node);
+  } else if node.type == "Assign" {
+    emitAssignStmt(node);
   } else if node.type == "Call" && node.callee.type == "Identifier" && (node.callee.name == "print" || node.callee.name == "println") {
     // print/println 特例:v1 只处理单参数数字/布尔盒
     // 注意:host 解析器不允许行首续行二元运算符,条件必须写在同一行。
@@ -334,6 +415,20 @@ let main = (args) -> {
   emitPrelude();
   line("define i32 @main() {");
   line("entry:");
+  // R9 Design 2:main 建全局帧 —— pre-scan 顶层 Let 总数 K 作帧槽数。
+  let K = 0;
+  let s0 = 0;
+  while s0 < program.statements.length {
+    if program.statements[s0].type == "Let" { K = K + 1; };
+    s0 = s0 + 1;
+  };
+  let envReg = temp();
+  line("  " + envReg + " = call ptr @ql_alloc(i64 " + std.String.toString(16 + 8 * K) + ")");
+  line("  store ptr null, ptr " + envReg);                              // parent = null
+  let noff = temp();
+  line("  " + noff + " = getelementptr i8, ptr " + envReg + ", i64 8");
+  line("  store i64 " + std.String.toString(K) + ", ptr " + noff);       // n_slots = K
+  curEnv = envReg;
   let i = 0;
   while i < program.statements.length {
     emitTopLevelStmt(program.statements[i]);
