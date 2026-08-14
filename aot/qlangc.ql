@@ -10,10 +10,19 @@ import ../bootstrapped/parser.ql;
 let out = [];
 let tmpN = 0;
 let lblN = 0;
-let line = (s) -> { out[out.length] = s; };
+// R10-c:每函数单独 sink。函数体 emit 期 line() 经 curSink 落到当前函数块(fnBlocks 元素),
+// 函数定义收尾后恢复调用方 sink(闭包盒指令回调用方当前块);main 整体先 flush out、再按序
+// flush 各 fnBlocks。QLang 数组是引用类型,curSink 保存数组对象即完成重定向。
+let fnBlocks = [];
+let curSink = out;
+let line = (s) -> { curSink[curSink.length] = s; };
 let temp = () -> { tmpN = tmpN + 1; "%t" + std.String.toString(tmpN); };
 let lbl = () -> { lblN = lblN + 1; "bb" + std.String.toString(lblN); };
 let f64lit = (x) -> { if x % 1 == 0 { std.String.toString(x) + ".0"; } else { std.String.toString(x); }; };
+// 编译期对象字段名 → 槽号映射(R10-d:runtime.ql 的 {buf,len} 等所有对象共享此映射,v1 形状一致)。
+let objFieldSlots = {};
+// R10-c:函数计数,生成 ql_fn<N> 名字。
+let funcCounter = 0;
 
 // 分配一个只写了 header tag 的盒(16 字节);payload 由调用方后续 store。
 let allocBox = (tag) -> {
@@ -169,10 +178,19 @@ let curScope = globalScope;
 // scopePush:进入新函数时挂到当前作用域下(Task 6+ 函数 emit 用;v1 顶层只有 globalScope)。
 let scopePush = (parent) -> { curScope = { slots: {}, parent: parent }; };
 // defineSlot:slots 现有键数即新 slot 索引(std.Object.keys 在 bootstrapped/stdlib.ql 可用,已实测)。
+// R10-i/幂等:若名字已在本作用域定义则返回既有 slot(不重定义)—— 这修复 Task 5 Minor-5b
+// (同作用域重复 let 的孤儿槽),也是「函数预扫(defineSlot)后函数体 emit 中再对同一名字按
+// 已绑定处理(emitStoreByName)」能拿到同一槽号的前提。Task 7 顶层函数递归:`let F=<Function>`
+// 必须 defineSlot(F) 先于 emitExpr(Function),否则函数体里的 F 按未绑定处理。
 let defineSlot = (name) -> {
-  let n = std.Object.keys(curScope.slots).length;
-  curScope.slots[name] = n;
-  n;
+  let existing = curScope.slots[name];
+  if !isError(existing) && existing != null {
+    existing;
+  } else {
+    let n = std.Object.keys(curScope.slots).length;
+    curScope.slots[name] = n;
+    n;
+  };
 };
 // lookupSlot:返回 {depth, slot} 或 null。R8 累加器形态 —— QLang 的 while 是语句,body 值不回流,
 // brief 草图(while 内 if 表达式直接产 {depth, slot})命中后 s 不再更新,会无限循环。
@@ -221,8 +239,17 @@ let emitLetStmt = (node) -> {
   if !isError(node.annotation) && node.annotation != null {
     line("; annotation ignored (v1)");
   };
+  // R10-i:`let F = <Function>` 必须 defineSlot(F) 先于 emitExpr —— 函数体 emit 期间 F
+  // 已在当前作用域(顶层 → globalScope),函数体内沿 parent 链 depth 1 命中,递归成立
+  // (host 语义证明:共享 env 捕获,fact(5)→120)。非函数值保持旧序(先求值后定义)。
+  let slot = null;
+  if node.value.type == "Function" {
+    slot = defineSlot(node.name);
+  };
   let V = emitExpr(node.value);
-  let slot = defineSlot(node.name);
+  if slot == null {
+    slot = defineSlot(node.name);
+  };
   let off = temp();
   line("  " + off + " = getelementptr i8, ptr " + curEnv + ", i64 " + std.String.toString(16 + 8 * slot));
   line("  store ptr " + V + ", ptr " + off);
@@ -256,33 +283,115 @@ let emitAssignStmt = (node) -> {
   emitStoreByName(node.target.name, node.value);
 };
 
-// ---- 控制流语句 emit(Task 6)----
-// 语句分派(Let 之外的所有语句类型):顶层与分支块共用。分支内的 print/println 必须走同一
-// 顶层特例(否则 Call 回退 emitCall 的 NULL 盒);If/While 递归。
-let emitStmtDispatch = (node) -> {
+// ---- 函数/闭包 emit(Task 7,R10-a/b/c/i) ----
+// 函数 = 闭包盒(tag 7 @0、code fnptr @8、env ptr @16)+ 独立 LLVM 函数 ql_fn<N>。
+// ABI(R10-b):define ptr @ql_fn<N>(ptr %env, ptr %args, i64 %argc)。%env = 定义时刻环境帧
+// (闭包捕获);%args = ptr 元素数组;返回盒值(恒有值,默认 NULL 盒)。
+// 函数帧(Design 2):call ptr @ql_alloc(i64 16+8*n) → parent@0,n_slots@8,slots@16+8*a。
+// R10-c:函数体写独立 fnBlocks 元素;闭包盒指令写回调用方当前块。R10-i:调用方必须先
+// defineSlot(name)(emitLetStmt 的 Function 分支负责),函数体里同名标识符沿 parent 链
+// depth 1 命中全局帧 → 递归成立。
+let emitFunction = (node, name) -> {
+  let fname = "ql_fn" + std.String.toString(funcCounter);
+  funcCounter = funcCounter + 1;
+  let savedScope = curScope;
+  let savedEnv = curEnv;
+  let savedLbl = curLbl;
+  let savedSink = curSink;
+  // 函数体作用域 = 新空作用域,parent = 定义处作用域(闭包环境链的编译期镜像)。
+  curScope = { slots: {}, parent: savedScope };
+  // 预扫:参数槽 0..k-1,函数体顶层 let 槽 k..n-1(幂等 defineSlot → 函数体 emit 对同一
+  // 名字按已绑定走 emitStoreByName,槽号一致)。
+  let k = node.parameters.length;
+  let p = 0;
+  while p < k {
+    defineSlot(node.parameters[p].name);
+    p = p + 1;
+  };
+  let st = 0;
+  while st < node.body.statements.length {
+    let s = node.body.statements[st];
+    if s.type == "Let" { defineSlot(s.name); };
+    st = st + 1;
+  };
+  let n = std.Object.keys(curScope.slots).length;
+  let blk = [];
+  curSink = blk;
+  line("define ptr @" + fname + "(ptr %env, ptr %args, i64 %argc) {");
+  line("entry:");
+  curLbl = "entry";
+  let f = temp();
+  line("  " + f + " = call ptr @ql_alloc(i64 " + std.String.toString(16 + 8 * n) + ")");
+  line("  store ptr %env, ptr " + f);                          // parent = 闭包捕获 env
+  let no = temp();
+  line("  " + no + " = getelementptr i8, ptr " + f + ", i64 8");
+  line("  store i64 " + std.String.toString(n) + ", ptr " + no);   // n_slots
+  curEnv = f;
+  let a = 0;
+  while a < k {
+    let ro = temp(); let rv = temp();
+    line("  " + ro + " = getelementptr ptr, ptr %args, i64 " + std.String.toString(a));
+    line("  " + rv + " = load ptr, ptr " + ro);
+    let off = temp();
+    line("  " + off + " = getelementptr i8, ptr " + f + ", i64 " + std.String.toString(16 + 8 * a));
+    line("  store ptr " + rv + ", ptr " + off);
+    a = a + 1;
+  };
+  // 函数体:R10-a 语句级 last-value 语义 —— emitBlockStmts 返回最后值寄存器;函数结果 =
+  // 函数体最后值(恒有值,默认 NULL 盒)。
+  let bodyLast = emitBlockStmts(node.body.statements);
+  let retv = bodyLast;
+  if retv == null {
+    retv = emitNull();
+  };
+  line("  ret ptr " + retv);
+  line("}");
+  fnBlocks[fnBlocks.length] = blk;
+  // 恢复调用方上下文;闭包盒指令写回调用方当前块/当前 sink。
+  curSink = savedSink;
+  curScope = savedScope;
+  curEnv = savedEnv;
+  curLbl = savedLbl;
+  // 闭包盒:tag 7 @0、code @8、env @16(定义时刻环境帧)。
+  let c = temp();
+  line("  " + c + " = call ptr @ql_alloc(i64 24)");
+  line("  store i64 7, ptr " + c);
+  let cp = temp();
+  line("  " + cp + " = getelementptr i8, ptr " + c + ", i64 8");
+  line("  store ptr @" + fname + ", ptr " + cp);
+  let ep = temp();
+  line("  " + ep + " = getelementptr i8, ptr " + c + ", i64 16");
+  line("  store ptr " + savedEnv + ", ptr " + ep);
+  c;
+};
+
+// ---- 控制流语句 emit(Task 6 + Task 7 语句级 last-value)----
+// 语句分派(Let 之外的所有语句类型):顶层与分支块共用;返回该语句产生的「最后值」寄存器
+// (R10-a):Assign/While → null(不改 last);If → 所走分支体最后值的 phi(见 emitIfStmt);
+// 裸表达式语句/Call → emitExpr 结果。prevLast = 本块此前语句的最后值寄存器(或 null),
+// 传给 emitIfStmt 用于「无 else 且条件假 → 不改 last」的 phi 路径。
+// R10-e:print/println 特例已删 —— 走 emitCall 通用用户函数调用(runtime.ql 顶层函数)。
+let emitStmtDispatch = (node, prevLast) -> {
   if node.type == "Assign" {
     emitAssignStmt(node);
+    null;
   } else if node.type == "If" {
-    emitIfStmt(node);
+    emitIfStmt(node, prevLast);
   } else if node.type == "While" {
     emitWhileStmt(node);
-  } else if node.type == "Call" && node.callee.type == "Identifier" && (node.callee.name == "print" || node.callee.name == "println") {
-    // print/println 特例:v1 只处理单参数数字/布尔盒
-    let V = emitExpr(node.arguments[0]);
-    let V2 = temp();
-    let nl = if node.callee.name == "println" { "true" } else { "false" };
-    line("  " + V2 + " = ptrtoint ptr " + V + " to i64");
-    line("  call void @ql_print_uint(i64 " + V2 + ", i1 " + nl + ")");
+    null;
   } else {
-    // 表达式语句:求值并丢弃返回值
+    // 表达式语句(Call/BinaryOp/Identifier 等):求值,返回值作为本块 last。
     emitExpr(node);
   };
 };
 
 // 分支块语句遍历:复用 emitStmtDispatch;仅 Let 特判 —— 新名字报不支持(不求值 value),
-// 已在当前函数帧( lookupSlot 命中)按 assign 处理。绝不对分支内 let 调 defineSlot/emitLetStmt:
-// main 帧已按顶层 K 预分配,defineSlot 会得越界 slot → 写到帧外(UB)。
+// 已在当前函数帧( lookupSlot 命中)按 assign 处理(emitStoreByName)。绝不对分支内 let 调
+// defineSlot/emitLetStmt:main 帧已按顶层 K 预分配,defineSlot 会得越界 slot → 写到帧外(UB)。
+// 返回:块内最后值寄存器(R10-a:Let/Assign/While 不改 last;裸表达式/If 更新),无则 null。
 let emitBlockStmts = (stmts) -> {
+  let last = null;
   let i = 0;
   while i < stmts.length {
     let s = stmts[i];
@@ -294,15 +403,22 @@ let emitBlockStmts = (stmts) -> {
         emitStoreByName(s.name, s.value);
       };
     } else {
-      emitStmtDispatch(s);
+      let v = emitStmtDispatch(s, last);
+      if v != null { last = v; };
     };
     i = i + 1;
   };
+  last;
 };
 
 // If:实测形状 {type:"If", branches:[IfBranch], elseBody};IfBranch = {condition, body:Block}。
 // v1 只处理 branches[0](无 else-if);elseBody 可能为 null。@ql_truthy 前必 ptrtoint 桥。
-let emitIfStmt = (node) -> {
+// R10-a:返回「所走分支体最后值」的 phi 寄存器 —— 空/全 let 分支 → 沿用 prevLast(不改 last),
+// prevLast 也无 → NULL 盒(空块 last = Void/NULL);无 else + 条件假 → phi 取 prevLast(= 不改)。
+// phi 前驱用 curLbl(emit 分支体后 br label %lEnd 的实际发出块)而非硬编码 lThen/lElse:
+// 分支体内嵌套 if/while 会再产块,硬编码前驱将得 "PHI node entries do not match predecessors!"
+// (Task 6 Fix Round 1 同类问题的推广)。
+let emitIfStmt = (node, prevLast) -> {
   if node.branches.length > 1 {
     line("; v1: else-if branches ignored (only branches[0] handled)");
   };
@@ -315,16 +431,32 @@ let emitIfStmt = (node) -> {
   line("  br i1 " + tr + ", label %" + lThen + ", label %" + lElse);
   line(lThen + ":");
   curLbl = lThen;
-  emitBlockStmts(br.body.statements);
+  let tv = emitBlockStmts(br.body.statements);
+  let thenIn = tv;
+  if thenIn == null {
+    if prevLast != null { thenIn = prevLast; }
+    else { thenIn = emitNull(); };
+  };
+  let thenLbl = curLbl;
   line("  br label %" + lEnd);
   line(lElse + ":");
   curLbl = lElse;
+  let ev = null;
   if node.elseBody != null {
-    emitBlockStmts(node.elseBody.statements);
+    ev = emitBlockStmts(node.elseBody.statements);
   };
+  let elseIn = ev;
+  if elseIn == null {
+    if prevLast != null { elseIn = prevLast; }
+    else { elseIn = emitNull(); };
+  };
+  let elseLbl = curLbl;
   line("  br label %" + lEnd);
   line(lEnd + ":");
   curLbl = lEnd;
+  let res = temp();
+  line("  " + res + " = phi ptr [ " + thenIn + ", %" + thenLbl + " ], [ " + elseIn + ", %" + elseLbl + " ]");
+  res;
 };
 
 // While:实测形状 {type:"While", condition, body:Block}。
@@ -346,10 +478,140 @@ let emitWhileStmt = (node) -> {
   curLbl = lExit;
 };
 
-// 表达式位置的 Call:Task 4 只特例顶层 print/println;回退 NULL 盒保证 IR 有效。
+// 盒值 → iN 整数(解盒 f64 → fptosi i64 → 可选 trunc)。叶子参数的位置型强转(R10-g):
+// runtime.ql 纪律 —— 数字位(size/off/len/byte)传盒值,指针位(p/buf)传 raw ptr,故按位置强制。
+let boxToInt = (reg, w) -> {
+  let pa = temp(); let fv = temp(); let iv = temp();
+  line("  " + pa + " = getelementptr i8, ptr " + reg + ", i64 8");
+  line("  " + fv + " = load double, ptr " + pa);
+  line("  " + iv + " = fptosi double " + fv + " to i64");
+  if w == "i32" {
+    let t = temp();
+    line("  " + t + " = trunc i64 " + iv + " to i32");
+    t;
+  } else if w == "i8" {
+    let t = temp();
+    line("  " + t + " = trunc i64 " + iv + " to i8");
+    t;
+  } else {
+    iv;
+  };
+};
+
+// 表达式位置的 Call(R10-g):
+// 1) 叶子表 {ql_alloc, ql_write, ql_mem_get, ql_mem_store} → 直接 call,位置型强转:
+//    ql_alloc(i64 size)→raw ptr;ql_write(i32 fd, ptr buf, i64 len)→void;ql_mem_get(ptr, i64)→i8
+//    再打包 NUMBER 盒;ql_mem_store(ptr, i64, i8)→void。raw ptr(ql_alloc 返回值/对象 buf 字段)与
+//    盒值统一以 ptr 寄存器流动,强转只发生在叶子边界。
+// 2) 其余 Identifier/MemberAccess → 通用用户函数调用 ABI(R10-b):FN=emitExpr(callee);
+//    参数数组 = call ptr @ql_alloc(i64 8*n) + GEP+store 每参数(盒或 raw ptr 一律 ptr 型);
+//    load 闭包盒 code(+8)/env(+16);call ptr %code(ptr %env, ptr %arr, i64 n)。返回 = call 结果盒。
+// 3) 未解析(callee 非 Identifier/MemberAccess)→ 注释 + NULL 盒。
 let emitCall = (node) -> {
-  line("; unhandled Call in expr (Task 4): " + node.callee.type);
-  emitNull();
+  let calleeIsId = node.callee.type == "Identifier";
+  let cname = if calleeIsId { node.callee.name } else { "" };
+  let isLeaf = calleeIsId && (cname == "ql_alloc" || cname == "ql_write" || cname == "ql_mem_get" || cname == "ql_mem_store");
+  if isLeaf {
+    if cname == "ql_alloc" {
+      let size = boxToInt(emitExpr(node.arguments[0]), "i64");
+      let r = temp();
+      line("  " + r + " = call ptr @ql_alloc(i64 " + size + ")");
+      r;
+    } else if cname == "ql_write" {
+      let fd = boxToInt(emitExpr(node.arguments[0]), "i32");
+      let buf = emitExpr(node.arguments[1]);      // raw ptr,直接传
+      let len = boxToInt(emitExpr(node.arguments[2]), "i64");
+      line("  call void @ql_write(i32 " + fd + ", ptr " + buf + ", i64 " + len + ")");
+      emitNull();
+    } else if cname == "ql_mem_get" {
+      let p = emitExpr(node.arguments[0]);        // raw ptr,直接传
+      let off = boxToInt(emitExpr(node.arguments[1]), "i64");
+      let b = temp();
+      line("  " + b + " = call i8 @ql_mem_get(ptr " + p + ", i64 " + off + ")");
+      // i8 → NUMBER 盒(f64)
+      let box = allocBox("1");
+      let bv = temp();
+      line("  " + bv + " = uitofp i8 " + b + " to double");
+      let pay = temp();
+      line("  " + pay + " = getelementptr i8, ptr " + box + ", i64 8");
+      line("  store double " + bv + ", ptr " + pay);
+      box;
+    } else {  // ql_mem_store
+      let p = emitExpr(node.arguments[0]);        // raw ptr,直接传
+      let off = boxToInt(emitExpr(node.arguments[1]), "i64");
+      let v = boxToInt(emitExpr(node.arguments[2]), "i8");
+      line("  call void @ql_mem_store(ptr " + p + ", i64 " + off + ", i8 " + v + ")");
+      emitNull();
+    };
+  } else if calleeIsId || node.callee.type == "MemberAccess" {
+    let FN = emitExpr(node.callee);
+    let narg = node.arguments.length;
+    let arr = temp();
+    line("  " + arr + " = call ptr @ql_alloc(i64 " + std.String.toString(8 * narg) + ")");
+    let i = 0;
+    while i < narg {
+      let v = emitExpr(node.arguments[i]);
+      let aoff = temp();
+      line("  " + aoff + " = getelementptr ptr, ptr " + arr + ", i64 " + std.String.toString(i));
+      line("  store ptr " + v + ", ptr " + aoff);
+      i = i + 1;
+    };
+    let codep = temp(); let codev = temp();
+    line("  " + codep + " = getelementptr i8, ptr " + FN + ", i64 8");
+    line("  " + codev + " = load ptr, ptr " + codep);
+    let envp = temp(); let envv = temp();
+    line("  " + envp + " = getelementptr i8, ptr " + FN + ", i64 16");
+    line("  " + envv + " = load ptr, ptr " + envp);
+    let r = temp();
+    line("  " + r + " = call ptr " + codev + "(ptr " + envv + ", ptr " + arr + ", i64 " + std.String.toString(narg) + ")");
+    r;
+  } else {
+    line("; unhandled Call callee: " + node.callee.type);
+    emitNull();
+  };
+};
+
+// 对象字面量(tag 6 盒,R10-d):字段名 → 槽号编译期映射 objFieldSlots(name→slot,首次遇该字段
+// 分配下一槽);每字段 store 到 [%obj + 16+8*slot]。v1 约束:所有对象共享该映射(runtime.ql 的
+// {buf,len} 全同形 → slot 0/1 稳定,size = 16+8*fields.length 不越界)。
+// 注意:不能用 allocBox(tag)(只分 16 字节头)—— 对象字段从 +16 起存,须按本对象字段数分配
+// 16+8*fields.length(否则 store 到对象外 → 运行期越界写,segfault)。
+let emitObjectExpr = (node) -> {
+  let b = temp();
+  line("  " + b + " = call ptr @ql_alloc(i64 " + std.String.toString(16 + 8 * node.fields.length) + ")");
+  line("  store i64 6, ptr " + b);
+  let box = b;
+  let i = 0;
+  while i < node.fields.length {
+    let f = node.fields[i];
+    let slot = objFieldSlots[f.name];
+    if isError(slot) || slot == null {
+      slot = std.Object.keys(objFieldSlots).length;
+      objFieldSlots[f.name] = slot;
+    };
+    let V = emitExpr(f.value);
+    let off = temp();
+    line("  " + off + " = getelementptr i8, ptr " + box + ", i64 " + std.String.toString(16 + 8 * slot));
+    line("  store ptr " + V + ", ptr " + off);
+    i = i + 1;
+  };
+  box;
+};
+
+// 字段访问:编译期已知字段(在 objFieldSlots)→ GEP + load ptr;未知字段 → 注释 + NULL 盒。
+let emitMemberAccess = (node) -> {
+  let slot = objFieldSlots[node.field];
+  if isError(slot) || slot == null {
+    line("; unknown field access: " + node.field);
+    emitNull();
+  } else {
+    let O = emitExpr(node.object);
+    let off = temp();
+    line("  " + off + " = getelementptr i8, ptr " + O + ", i64 " + std.String.toString(16 + 8 * slot));
+    let v = temp();
+    line("  " + v + " = load ptr, ptr " + off);
+    v;
+  };
 };
 
 // emitExpr(node) → 承载盒值的寄存器名
@@ -369,6 +631,14 @@ let emitExpr = (node) -> {
     emitCall(node);
   } else if t == "Identifier" {
     emitIdentifier(node);
+  } else if t == "Object" {
+    emitObjectExpr(node);
+  } else if t == "MemberAccess" {
+    emitMemberAccess(node);
+  } else if t == "Function" {
+    // R10-c/i:函数值 → 闭包盒 emit。name 参数仅作未来诊断用(v1 emitFunction 按 funcCounter
+    // 生成 ql_fn<N>,不依赖 name)。调用方(emitLetStmt)已先 defineSlot(name),递归成立。
+    emitFunction(node, "");
   } else {
     line("; unhandled expr: " + t);
     emitNull();
@@ -380,10 +650,8 @@ let emitPrelude = () -> {
   line("; qlangc v1 prelude");
   line("declare ptr  @ql_alloc(i64)");
   line("declare void @ql_write(i32, ptr, i64)");
-  line("@ql_str_true = private unnamed_addr constant [4 x i8] c\"true\"");
-  line("@ql_str_false = private unnamed_addr constant [5 x i8] c\"false\"");
-  // `\\0A` 在 QLang 字符串里是「字面反斜杠 + 0A」,落到 .ll 文件即为 LLVM hex 转义 `\0A`。
-  line("@ql_str_nl = private unnamed_addr constant [1 x i8] c\"\\0A\"");
+  line("declare i8   @ql_mem_get(ptr, i64)");
+  line("declare void @ql_mem_store(ptr, i64, i8)");
 
   // --- @ql_truthy(i64 %box) → i1:switch tag —— NUMBER !=0(NaN 真)、BOOL 值、其余假(v1) ---
   // %box 参数按 plan 定为 i64(地址值);内部先 inttoptr 还原为指针再解盒。
@@ -416,119 +684,17 @@ let emitPrelude = () -> {
   line("  ret i1 false");
   line("}");
 
-  // --- @ql_print_uint(i64 %box, i1 %nl):按 tag 分派解盒输出;%nl 真时追加 '\n' ---
-  // 数字路径:解盒 f64 → fptosi i64 → 十进制 write(复刻 m0_factorial.ll 的 div/rev 结构,
-  // 补 n==0 写 '0';另加负数符号 '-' 处理 —— t4 测试含 println(-3))。
-  // 注意:QLang 无前向引用,所有寄存器/标签名必须先声明后使用 —— 因此下面先一次性分配
-  // @ql_print_uint 所需的全部 temp()/lbl() 名,再逐行输出 IR 文本。
-  line("define internal void @ql_print_uint(i64 %box, i1 %nl) {");
-  let pe = lbl();
-  let pboxp = temp();
-  let pbuf = temp(); let pbp = temp();
-  let ptag = temp(); let pisnum = temp(); let pisbool = temp();
-  let plnum = lbl(); let plchk = lbl();
-  let plbool = lbl(); let plnl = lbl();
-  let ppa = temp(); let pfv = temp(); let pn = temp();
-  let pisz = temp(); let pisneg = temp(); let pnegd = temp();
-  let plzero = lbl(); let plsign = lbl();
-  let plsneg = lbl(); let plloop = lbl();
-  let pi = temp(); let px = temp(); let pd = temp(); let pch = temp();
-  let pc = temp(); let poff = temp(); let pq = temp(); let pinext = temp(); let pnz = temp();
-  let plrev = lbl(); let plrevloop = lbl(); let plout = lbl();
-  let plen = temp(); let pj = temp(); let phalf = temp(); let pdone = temp();
-  let pjo = temp(); let pa = temp(); let plast = temp(); let pr2 = temp();
-  let pjro = temp(); let pb = temp(); let pjnext = temp();
-  let plbtrue = lbl(); let plbfalse = lbl();
-  let ppb = temp(); let pbv = temp(); let pistrue = temp();
-  let plwritenl = lbl(); let pldone = lbl();
-  line(pe + ":");
-  line("  " + pboxp + " = inttoptr i64 %box to ptr");
-  line("  " + pbuf + " = alloca [24 x i8], align 1");
-  line("  " + pbp + " = getelementptr inbounds [24 x i8], ptr " + pbuf + ", i64 0, i64 0");
-  line("  " + ptag + " = load i64, ptr " + pboxp);
-  line("  " + pisnum + " = icmp eq i64 " + ptag + ", 1");
-  line("  " + pisbool + " = icmp eq i64 " + ptag + ", 3");
-  line("  br i1 " + pisnum + ", label %" + plnum + ", label %" + plchk);
-  line(plchk + ":");
-  line("  br i1 " + pisbool + ", label %" + plbool + ", label %" + plnl);
-  line(plnum + ":");
-  line("  " + ppa + " = getelementptr i8, ptr " + pboxp + ", i64 8");
-  line("  " + pfv + " = load double, ptr " + ppa);
-  line("  " + pn + " = fptosi double " + pfv + " to i64");
-  line("  " + pisz + " = icmp eq i64 " + pn + ", 0");
-  line("  br i1 " + pisz + ", label %" + plzero + ", label %" + plsign);
-  line(plzero + ":");
-  line("  store i8 48, ptr " + pbp);
-  line("  call void @ql_write(i32 1, ptr " + pbp + ", i64 1)");
-  line("  br label %" + plnl);
-  line(plsign + ":");
-  line("  " + pisneg + " = icmp slt i64 " + pn + ", 0");
-  line("  " + pnegd + " = sub i64 0, " + pn);
-  line("  br i1 " + pisneg + ", label %" + plsneg + ", label %" + plloop);
-  line(plsneg + ":");
-  line("  store i8 45, ptr " + pbp);
-  line("  call void @ql_write(i32 1, ptr " + pbp + ", i64 1)");
-  line("  br label %" + plloop);
-  line(plloop + ":");
-  line("  " + pi + " = phi i64 [ 0, %" + plsign + " ], [ 0, %" + plsneg + " ], [ " + pinext + ", %" + plloop + " ]");
-  line("  " + px + " = phi i64 [ " + pn + ", %" + plsign + " ], [ " + pnegd + ", %" + plsneg + " ], [ " + pq + ", %" + plloop + " ]");
-  line("  " + pd + " = urem i64 " + px + ", 10");
-  line("  " + pch + " = add i64 48, " + pd);
-  line("  " + pc + " = trunc i64 " + pch + " to i8");
-  line("  " + poff + " = getelementptr i8, ptr " + pbp + ", i64 " + pi);
-  line("  store i8 " + pc + ", ptr " + poff);
-  line("  " + pq + " = udiv i64 " + px + ", 10");
-  line("  " + pinext + " = add i64 " + pi + ", 1");
-  line("  " + pnz + " = icmp ne i64 " + pq + ", 0");
-  line("  br i1 " + pnz + ", label %" + plloop + ", label %" + plrev);
-  line(plrev + ":");
-  line("  " + plen + " = phi i64 [ " + pinext + ", %" + plloop + " ], [ " + plen + ", %" + plrevloop + " ]");
-  line("  " + pj + " = phi i64 [ 0, %" + plloop + " ], [ " + pjnext + ", %" + plrevloop + " ]");
-  line("  " + phalf + " = udiv i64 " + plen + ", 2");
-  line("  " + pdone + " = icmp uge i64 " + pj + ", " + phalf);
-  line("  br i1 " + pdone + ", label %" + plout + ", label %" + plrevloop);
-  line(plrevloop + ":");
-  line("  " + pjo + " = getelementptr i8, ptr " + pbp + ", i64 " + pj);
-  line("  " + pa + " = load i8, ptr " + pjo);
-  line("  " + plast + " = sub i64 " + plen + ", 1");
-  line("  " + pr2 + " = sub i64 " + plast + ", " + pj);
-  line("  " + pjro + " = getelementptr i8, ptr " + pbp + ", i64 " + pr2);
-  line("  " + pb + " = load i8, ptr " + pjro);
-  line("  store i8 " + pb + ", ptr " + pjo);
-  line("  store i8 " + pa + ", ptr " + pjro);
-  line("  " + pjnext + " = add i64 " + pj + ", 1");
-  line("  br label %" + plrev);
-  line(plout + ":");
-  line("  call void @ql_write(i32 1, ptr " + pbp + ", i64 " + plen + ")");
-  line("  br label %" + plnl);
-  line(plbool + ":");
-  line("  " + ppb + " = getelementptr i8, ptr " + pboxp + ", i64 8");
-  line("  " + pbv + " = load i64, ptr " + ppb);
-  line("  " + pistrue + " = icmp ne i64 " + pbv + ", 0");
-  line("  br i1 " + pistrue + ", label %" + plbtrue + ", label %" + plbfalse);
-  line(plbtrue + ":");
-  line("  call void @ql_write(i32 1, ptr @ql_str_true, i64 4)");
-  line("  br label %" + plnl);
-  line(plbfalse + ":");
-  line("  call void @ql_write(i32 1, ptr @ql_str_false, i64 5)");
-  line("  br label %" + plnl);
-  line(plnl + ":");
-  line("  br i1 %nl, label %" + plwritenl + ", label %" + pldone);
-  line(plwritenl + ":");
-  line("  call void @ql_write(i32 1, ptr @ql_str_nl, i64 1)");
-  line("  br label %" + pldone);
-  line(pldone + ":");
-  line("  ret void");
-  line("}");
+  // R10-e:@ql_print_uint(424-522)与 print/println 特例(269-275)已删除 —— 值→字符串
+  // 语义整体移入 runtime.ql(__str/__itoa/__boolstr),编译进产物;@ql_truthy 保留。
 };
 
-// 顶层语句:Let 真实 emit;其余(Assign/If/While/print-println 特例/表达式语句)走 emitStmtDispatch
+// 顶层语句:Let 真实 emit;其余(Assign/If/While/表达式语句)走 emitStmtDispatch(node, null)
 // (boot parser 无 ExprStmt 包装 —— 裸表达式节点直接出现在 program.statements)。
 let emitTopLevelStmt = (node) -> {
   if node.type == "Let" {
     emitLetStmt(node);
   } else {
-    emitStmtDispatch(node);
+    emitStmtDispatch(node, null);
   };
 };
 
@@ -563,10 +729,22 @@ let main = (args) -> {
   };
   line("  ret i32 0");
   line("}");
+  // R10-c:先 flush main(out),再按定义序 flush 各函数 fnBlocks(LLVM 允许前向引用:
+  // main 经闭包盒 `store ptr @ql_fn<N>` 引用后定义的函数)。
   let i2 = 0;
   while i2 < out.length {
     println(out[i2]);
     i2 = i2 + 1;
+  };
+  let b = 0;
+  while b < fnBlocks.length {
+    let blk = fnBlocks[b];
+    let j = 0;
+    while j < blk.length {
+      println(blk[j]);
+      j = j + 1;
+    };
+    b = b + 1;
   };
 };
 

@@ -44,7 +44,8 @@ let allocBox = (tag, size) -> {
 // 非整数/|n|>=1e15 回退到整数截断 —— M2 补完整 f64 Display;v1 测试集全整数
 let __itoa = (n) -> {
   let neg = n < 0;
-  let x = if neg { -n } else { n };
+  let x = n;
+  if neg { x = -n; };
   let k = 0;
   let t = x;
   while t >= 1 {
@@ -52,14 +53,16 @@ let __itoa = (n) -> {
     t = (t - t % 10) / 10;
   };
   if k == 0 { k = 1; };                       // "0"
-  let start = if neg { 1 } else { 0 };
+  let start = 0;
+  if neg { start = 1; };
   let total = start + k;
   let buf = ql_alloc(total);
   if neg { ql_mem_store(buf, 0, 45); };       // '-'
   let v = x;
+  let d = 0;                                  // d 必须函数顶层声明(分支内 let 不受支持)
   let i = 0;
   while i < k {
-    let d = v % 10;
+    d = v % 10;
     ql_mem_store(buf, start + k - 1 - i, 48 + d);
     v = (v - d) / 10;
     i = i + 1;
@@ -67,12 +70,44 @@ let __itoa = (n) -> {
   { buf: buf, len: total };
 };
 
+// BOOL 盒 → "true"/"false" 字节缓冲
+let __boolstr = (b) -> {
+  let val = readU64(b, 8);
+  let buf = ql_alloc(5);
+  let len = 4;
+  if val == 1 {
+    ql_mem_store(buf, 0, 116);
+    ql_mem_store(buf, 1, 114);
+    ql_mem_store(buf, 2, 117);
+    ql_mem_store(buf, 3, 101);
+  } else {
+    len = 5;
+    ql_mem_store(buf, 0, 102);
+    ql_mem_store(buf, 1, 97);
+    ql_mem_store(buf, 2, 108);
+    ql_mem_store(buf, 3, 115);
+    ql_mem_store(buf, 4, 101);
+  };
+  { buf: buf, len: len };
+};
+
+// 值 → 字符串对象:按盒 tag 分派(NUMBER→__itoa,BOOL→__boolstr)。
+// 只用嵌套 if/else(boot parser 把 else-if 拍平成 branches[],emitIfStmt 只处理 branches[0])。
+let __str = (v) -> {
+  let tag = readU64(v, 0);
+  if tag == 1 {
+    __itoa(v);
+  } else {
+    __boolstr(v);
+  };
+};
+
 let __print = (s) -> { ql_write(1, s.buf, s.len); };
 
-let print = (v) -> { __print(__itoa(v)); null; };
+let print = (v) -> { __print(__str(v)); null; };
 
 let println = (v) -> {
-  __print(__itoa(v));
+  __print(__str(v));
   let nl = ql_alloc(1);
   ql_mem_store(nl, 0, 10);
   __print({ buf: nl, len: 1 });
