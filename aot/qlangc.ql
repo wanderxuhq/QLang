@@ -47,48 +47,82 @@ let emitNull = () -> {
   allocBox("4");
 };
 
-// 二元运算:先求值左右操作数,再解盒;算术造新 NUMBER 盒,比较造 BOOL 盒。
-let emitBinaryOp = (node) -> {
-  let L = emitExpr(node.left);
-  let R = emitExpr(node.right);
+// && / || 短路 emit(controller 裁定语义 = host interpreter.rs eval_binary_op):
+//   && :A 假 → 结果 = A 盒(不 eval B);A 真 → 结果 = B 盒
+//   || :A 真 → 结果 = A 盒(不 eval B);A 假 → 结果 = B 盒
+// 返回原值盒,不造 false 盒;done 块 phi = [ A, A 所在块 ] + [ B, evalB ]。
+// 每次 @ql_truthy 调用前必须 ptrtoint 桥(Task 4 Deviation #6):@ql_truthy 参数是 i64 地址值。
+let emitShortCircuit = (node) -> {
   let op = node.operator;
-  let a1 = temp(); let f1 = temp(); let a2 = temp(); let f2 = temp();
-  line("  " + a1 + " = getelementptr i8, ptr " + L + ", i64 8");
-  line("  " + f1 + " = load double, ptr " + a1);
-  line("  " + a2 + " = getelementptr i8, ptr " + R + ", i64 8");
-  line("  " + f2 + " = load double, ptr " + a2);
-  if op == "+" || op == "-" || op == "*" || op == "/" || op == "%" {
-    let rr = temp();
-    if op == "%" {
-      // `frem` 在 AArch64 后端被降级为 libm fmod 调用,而产物无 libc 依赖(runtime.c 纯 syscall,
-      // 且 src/main.rs 不在本 task 提交范围)→ 用 a - b*trunc(a/b) 内联实现浮点余数(语义同 frem:
-      // 结果带被除数符号;v1 测试商值均落在 i64 内,fptosi 安全)。
-      let q = temp(); let qi = temp(); let qf = temp(); let m = temp();
-      line("  " + q + " = fdiv double " + f1 + ", " + f2);
-      line("  " + qi + " = fptosi double " + q + " to i64");
-      line("  " + qf + " = sitofp i64 " + qi + " to double");
-      line("  " + m + " = fmul double " + f2 + ", " + qf);
-      line("  " + rr + " = fsub double " + f1 + ", " + m);
-    } else {
-      let fop = if op == "+" { "fadd" } else if op == "-" { "fsub" } else if op == "*" { "fmul" } else { "fdiv" };
-      line("  " + rr + " = " + fop + " double " + f1 + ", " + f2);
-    }
-    let b = allocBox("1");
-    let bpay = temp();
-    line("  " + bpay + " = getelementptr i8, ptr " + b + ", i64 8");
-    line("  store double " + rr + ", ptr " + bpay);
-    b;
+  let A = emitExpr(node.left);
+  let A2 = temp(); let trA = temp();
+  line("  " + A2 + " = ptrtoint ptr " + A + " to i64");
+  line("  " + trA + " = call i1 @ql_truthy(i64 " + A2 + ")");
+  let predA = curLbl;                       // emit A + truthy 所在块 = br 的前驱
+  let lEvalB = lbl(); let lDone = lbl();
+  if op == "&&" {
+    line("  br i1 " + trA + ", label %" + lEvalB + ", label %" + lDone);
   } else {
-    // 比较:== oeq,!= une,< olt,<= ole,> ogt,>= oge
-    let cmp = if op == "==" { "oeq" } else if op == "!=" { "une" } else if op == "<" { "olt" } else if op == "<=" { "ole" } else if op == ">" { "ogt" } else { "oge" };
-    let c = temp(); let c2 = temp();
-    line("  " + c + " = fcmp " + cmp + " double " + f1 + ", " + f2);
-    line("  " + c2 + " = zext i1 " + c + " to i64");
-    let b = allocBox("3");
-    let bpay = temp();
-    line("  " + bpay + " = getelementptr i8, ptr " + b + ", i64 8");
-    line("  store i64 " + c2 + ", ptr " + bpay);
-    b;
+    line("  br i1 " + trA + ", label %" + lDone + ", label %" + lEvalB);
+  };
+  line(lEvalB + ":");
+  curLbl = lEvalB;
+  let B = emitExpr(node.right);
+  line("  br label %" + lDone);
+  line(lDone + ":");
+  curLbl = lDone;
+  let res = temp();
+  line("  " + res + " = phi ptr [ " + A + ", %" + predA + " ], [ " + B + ", %" + lEvalB + " ]");
+  res;
+};
+
+// 二元运算:先求值左右操作数,再解盒;算术造新 NUMBER 盒,比较造 BOOL 盒。
+// && / || 不走这里 —— 先在顶部截获走 emitShortCircuit(短路,避免无条件先求值右操作数)。
+let emitBinaryOp = (node) -> {
+  if node.operator == "&&" || node.operator == "||" {
+    emitShortCircuit(node);
+  } else {
+    let L = emitExpr(node.left);
+    let R = emitExpr(node.right);
+    let op = node.operator;
+    let a1 = temp(); let f1 = temp(); let a2 = temp(); let f2 = temp();
+    line("  " + a1 + " = getelementptr i8, ptr " + L + ", i64 8");
+    line("  " + f1 + " = load double, ptr " + a1);
+    line("  " + a2 + " = getelementptr i8, ptr " + R + ", i64 8");
+    line("  " + f2 + " = load double, ptr " + a2);
+    if op == "+" || op == "-" || op == "*" || op == "/" || op == "%" {
+      let rr = temp();
+      if op == "%" {
+        // `frem` 在 AArch64 后端被降级为 libm fmod 调用,而产物无 libc 依赖(runtime.c 纯 syscall,
+        // 且 src/main.rs 不在本 task 提交范围)→ 用 a - b*trunc(a/b) 内联实现浮点余数(语义同 frem:
+        // 结果带被除数符号;v1 测试商值均落在 i64 内,fptosi 安全)。
+        let q = temp(); let qi = temp(); let qf = temp(); let m = temp();
+        line("  " + q + " = fdiv double " + f1 + ", " + f2);
+        line("  " + qi + " = fptosi double " + q + " to i64");
+        line("  " + qf + " = sitofp i64 " + qi + " to double");
+        line("  " + m + " = fmul double " + f2 + ", " + qf);
+        line("  " + rr + " = fsub double " + f1 + ", " + m);
+      } else {
+        let fop = if op == "+" { "fadd" } else if op == "-" { "fsub" } else if op == "*" { "fmul" } else { "fdiv" };
+        line("  " + rr + " = " + fop + " double " + f1 + ", " + f2);
+      }
+      let b = allocBox("1");
+      let bpay = temp();
+      line("  " + bpay + " = getelementptr i8, ptr " + b + ", i64 8");
+      line("  store double " + rr + ", ptr " + bpay);
+      b;
+    } else {
+      // 比较:== oeq,!= une,< olt,<= ole,> ogt,>= oge
+      let cmp = if op == "==" { "oeq" } else if op == "!=" { "une" } else if op == "<" { "olt" } else if op == "<=" { "ole" } else if op == ">" { "ogt" } else { "oge" };
+      let c = temp(); let c2 = temp();
+      line("  " + c + " = fcmp " + cmp + " double " + f1 + ", " + f2);
+      line("  " + c2 + " = zext i1 " + c + " to i64");
+      let b = allocBox("3");
+      let bpay = temp();
+      line("  " + bpay + " = getelementptr i8, ptr " + b + ", i64 8");
+      line("  store i64 " + c2 + ", ptr " + bpay);
+      b;
+    };
   };
 };
 
@@ -151,6 +185,9 @@ let lookupSlot = (name) -> {
 };
 // R9/R1:当前函数入口 env 寄存器名(main = 全局帧寄存器);不硬编码 "env0" 字面量。
 let curEnv = "";
+// 当前正在 emit 的基本块标签(短路 phi 需记录「emit A + truthy 所在块」作前驱;main 入口、
+// if/while 各块、短路各块处都要更新 —— 否则短路出现在非 entry 块时 phi 前驱写错)。
+let curLbl = "";
 
 // 表达式位置的标识符:沿当前帧 parent 链走 depth 步,读目标帧 slot(帧/槽全 ptr 型)。
 let emitIdentifier = (node) -> {
@@ -188,13 +225,14 @@ let emitLetStmt = (node) -> {
   slot;
 };
 
-// assign:沿链找目标帧 slot 写(R9 帧/槽全 ptr 型)。未命中 → 注释 + 不求值 value。
-let emitAssignStmt = (node) -> {
-  let hit = lookupSlot(node.target.name);
+// 按名字求值 value 并写入目标槽(assign 与「分支内已绑定 let 按 assign 处理」共用)。
+// 未命中 → 注释 + 不求值 value。
+let emitStoreByName = (name, value) -> {
+  let hit = lookupSlot(name);
   if hit == null {
-    line("; error: assign to undefined " + node.target.name);
+    line("; error: assign to undefined " + name);
   } else {
-    let V = emitExpr(node.value);
+    let V = emitExpr(value);
     let cur = curEnv;
     let d = 0;
     while d < hit.depth {
@@ -207,6 +245,101 @@ let emitAssignStmt = (node) -> {
     line("  " + off + " = getelementptr i8, ptr " + cur + ", i64 " + std.String.toString(16 + 8 * hit.slot));
     line("  store ptr " + V + ", ptr " + off);
   };
+};
+
+// assign:沿链找目标帧 slot 写(R9 帧/槽全 ptr 型)。
+let emitAssignStmt = (node) -> {
+  emitStoreByName(node.target.name, node.value);
+};
+
+// ---- 控制流语句 emit(Task 6)----
+// 语句分派(Let 之外的所有语句类型):顶层与分支块共用。分支内的 print/println 必须走同一
+// 顶层特例(否则 Call 回退 emitCall 的 NULL 盒);If/While 递归。
+let emitStmtDispatch = (node) -> {
+  if node.type == "Assign" {
+    emitAssignStmt(node);
+  } else if node.type == "If" {
+    emitIfStmt(node);
+  } else if node.type == "While" {
+    emitWhileStmt(node);
+  } else if node.type == "Call" && node.callee.type == "Identifier" && (node.callee.name == "print" || node.callee.name == "println") {
+    // print/println 特例:v1 只处理单参数数字/布尔盒
+    let V = emitExpr(node.arguments[0]);
+    let V2 = temp();
+    let nl = if node.callee.name == "println" { "true" } else { "false" };
+    line("  " + V2 + " = ptrtoint ptr " + V + " to i64");
+    line("  call void @ql_print_uint(i64 " + V2 + ", i1 " + nl + ")");
+  } else {
+    // 表达式语句:求值并丢弃返回值
+    emitExpr(node);
+  };
+};
+
+// 分支块语句遍历:复用 emitStmtDispatch;仅 Let 特判 —— 新名字报不支持(不求值 value),
+// 已在当前函数帧( lookupSlot 命中)按 assign 处理。绝不对分支内 let 调 defineSlot/emitLetStmt:
+// main 帧已按顶层 K 预分配,defineSlot 会得越界 slot → 写到帧外(UB)。
+let emitBlockStmts = (stmts) -> {
+  let i = 0;
+  while i < stmts.length {
+    let s = stmts[i];
+    if s.type == "Let" {
+      let hit = lookupSlot(s.name);
+      if hit == null {
+        line("; v1: branch-level let unsupported: " + s.name);
+      } else {
+        emitStoreByName(s.name, s.value);
+      };
+    } else {
+      emitStmtDispatch(s);
+    };
+    i = i + 1;
+  };
+};
+
+// If:实测形状 {type:"If", branches:[IfBranch], elseBody};IfBranch = {condition, body:Block}。
+// v1 只处理 branches[0](无 else-if);elseBody 可能为 null。@ql_truthy 前必 ptrtoint 桥。
+let emitIfStmt = (node) -> {
+  if node.branches.length > 1 {
+    line("; v1: else-if branches ignored (only branches[0] handled)");
+  };
+  let br = node.branches[0];
+  let C = emitExpr(br.condition);
+  let C2 = temp(); let tr = temp();
+  line("  " + C2 + " = ptrtoint ptr " + C + " to i64");
+  line("  " + tr + " = call i1 @ql_truthy(i64 " + C2 + ")");
+  let lThen = lbl(); let lElse = lbl(); let lEnd = lbl();
+  line("  br i1 " + tr + ", label %" + lThen + ", label %" + lElse);
+  line(lThen + ":");
+  curLbl = lThen;
+  emitBlockStmts(br.body.statements);
+  line("  br label %" + lEnd);
+  line(lElse + ":");
+  curLbl = lElse;
+  if node.elseBody != null {
+    emitBlockStmts(node.elseBody.statements);
+  };
+  line("  br label %" + lEnd);
+  line(lEnd + ":");
+  curLbl = lEnd;
+};
+
+// While:实测形状 {type:"While", condition, body:Block}。
+let emitWhileStmt = (node) -> {
+  let lCond = lbl(); let lBody = lbl(); let lExit = lbl();
+  line("  br label %" + lCond);
+  line(lCond + ":");
+  curLbl = lCond;
+  let C = emitExpr(node.condition);
+  let C2 = temp(); let tr = temp();
+  line("  " + C2 + " = ptrtoint ptr " + C + " to i64");
+  line("  " + tr + " = call i1 @ql_truthy(i64 " + C2 + ")");
+  line("  br i1 " + tr + ", label %" + lBody + ", label %" + lExit);
+  line(lBody + ":");
+  curLbl = lBody;
+  emitBlockStmts(node.body.statements);
+  line("  br label %" + lCond);
+  line(lExit + ":");
+  curLbl = lExit;
 };
 
 // 表达式位置的 Call:Task 4 只特例顶层 print/println;回退 NULL 盒保证 IR 有效。
@@ -385,24 +518,13 @@ let emitPrelude = () -> {
   line("}");
 };
 
-// 顶层语句:Let/Assign 真实 emit;print/println 特例;其余一律按表达式语句求值丢弃
+// 顶层语句:Let 真实 emit;其余(Assign/If/While/print-println 特例/表达式语句)走 emitStmtDispatch
 // (boot parser 无 ExprStmt 包装 —— 裸表达式节点直接出现在 program.statements)。
 let emitTopLevelStmt = (node) -> {
   if node.type == "Let" {
     emitLetStmt(node);
-  } else if node.type == "Assign" {
-    emitAssignStmt(node);
-  } else if node.type == "Call" && node.callee.type == "Identifier" && (node.callee.name == "print" || node.callee.name == "println") {
-    // print/println 特例:v1 只处理单参数数字/布尔盒
-    // 注意:host 解析器不允许行首续行二元运算符,条件必须写在同一行。
-    let V = emitExpr(node.arguments[0]);
-    let V2 = temp();
-    let nl = if node.callee.name == "println" { "true" } else { "false" };
-    line("  " + V2 + " = ptrtoint ptr " + V + " to i64");
-    line("  call void @ql_print_uint(i64 " + V2 + ", i1 " + nl + ")");
   } else {
-    // 表达式语句:求值并丢弃返回值
-    emitExpr(node);
+    emitStmtDispatch(node);
   };
 };
 
@@ -415,6 +537,7 @@ let main = (args) -> {
   emitPrelude();
   line("define i32 @main() {");
   line("entry:");
+  curLbl = "entry";
   // R9 Design 2:main 建全局帧 —— pre-scan 顶层 Let 总数 K 作帧槽数。
   let K = 0;
   let s0 = 0;
