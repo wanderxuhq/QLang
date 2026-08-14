@@ -37,25 +37,32 @@ source.ql
 - **编译器是工具**(跑在 boot 解释器上,可以吃 host 机制);**编译产物的运行时是纯 QLang**(语义层零 host)。这是"离开 rust 的摇篮"的完整形态。
 - 编译器复用 boot 的 lexer/parser,把 boot interpreter 的 evaluate 换成 emit —— 语义决策(真值、包装、错误传播)已在 boot 用 QLang 写死,emit 逐节点镜像。
 
-## 值模型与 ABI(NaN-boxing)
+## 值模型与 ABI(全盒指针,无 NaN-boxing)
 
-一个 i64 传遍所有寄存器/栈;数字用普通 double 位模式,非数字用 NaN 载荷:
+**原则:每个 QLang 值 = 一个指向堆对象的指针(单字),对象头带类型 tag;数字也是盒。** 不采用 NaN-boxing(其 tag 编码复杂、需掩码运算、需处理 `0/0` NaN 与 tag 域碰撞及 NaN 归一)。
 
-| 值 | 编码(64 位) | 判定 |
+堆对象布局(ql_alloc 分配,均 8 字节对齐):
+
+| tag 常量 | 对象 | 负载(payload) |
 |---|---|---|
-| Number(普通) | 普通 double 位模式 | 指数非全 1 |
-| Number = NaN | `0x7FF8_0000_0000_0000`(标准 qNaN) | 高 16 位 == `0x7FF8` |
-| Null / Void | `0xFFF8_0000_0000_0001` | 高 16 位 == `0xFFF8` 且低位 tag |
-| False / True | `0xFFF8_0000_0000_0002` / `...0003` | 同上 |
-| 指针(字符串/数组/对象/函数/错误) | `0xFFF8_0000_0000_0000 \| ptr` | 高 16 位 == `0xFFF8` 且低 3 位为 0(8 字节对齐) |
+| 1 NUMBER | 数字 | f64(8 字节) |
+| 2 STRING | 字符串 | len:u64 + buf:ptr(24 字节头 + 字节缓冲) |
+| 3 BOOL | 布尔 | 0 / 1 |
+| 4 NULL | 空 / void | 无(可单例) |
+| 5 ARRAY | 数组 | len/cap/data:ptr |
+| 6 OBJECT | 对象 | 字段哈希表(QLang 写在原始内存上) |
+| 7 FUNCTION | 闭包 | code:fn指针 + env:ptr(16 字节) |
+| 8 ERROR | 错误值 | kind/message/stack/… |
 
-- 普通 double 指数不为全 1,与 tag 域天然互斥;类型判定 = 一次掩码。
-- 指针承载对象的类型从对象头部字段读取(不占 NaN 载荷位)。
-- 数字 NaN 归一:运算产生带载荷的 NaN 统一归一到哨兵模式(实现时对齐 host 语义)。
+- 类型判定 = 读对象头 tag(一次 load),无掩码运算。
+- `0/0` 的 NaN 就是 NUMBER 盒里的普通 f64 负载 —— 无碰撞、无哨兵、无归一。
+- 寄存器 / 参数 / 返回值一律一个指针字(i64),无 struct ABI 歧义。
 
-**调用约定**:`define i64 @ql_fn(i64 %env, i64* %args, i64 %argc)`,返回 NaN-boxed i64。函数值 = 堆上 16 字节块 `{code: fn指针, env: i64}`,调用时解引用。v1 柯里化后置,先支持精确匹配 + 多传忽略。
+**调用约定**:`define i64 @ql_fn(i64 %env, i64* %args, i64 %argc)`,返回指针字。函数值 = 堆上 16 字节块 `{code: fn指针, env: ptr}`,调用时解引用。v1 柯里化后置,先支持精确匹配 + 多传忽略。
 
-**环境** = 链式帧 `{parent: ptr, slots: [i64]}`;let 绑定当前帧新槽,assign 沿链查找,逐字镜像 boot Environment 链语义。
+**环境** = 链式帧 `{parent: ptr, slots: [ptr]}`;let 绑定当前帧新槽,assign 沿链查找,逐字镜像 boot Environment 链语义。
+
+**代价与诚实预期**:数字运算每次分配一个盒(arena 分配约 2 条指令,便宜);全盒 AOT 相对 boot 是几倍~十倍(消除解释分派),相对 C 不神话。拆箱(f64 免盒)需要编译期类型知识,是 M4+ 类型特化方向,不影响本布局。
 
 ## 编译器设计(qlangc.ql)
 
@@ -108,7 +115,7 @@ qlangc 编译目标程序时把 runtime.ql 一并编译进产物(与 rustc 预�
 
 | 里程碑 | 内容 | 出口标准 |
 |---|---|---|
-| **M0 风险解除** | 手写最小 IR + leaf C 层 + runtime.ql 的 `__itoa`;不写编译器 | 打通 NaN-boxing ABI、alloc/write/exit、数字→文本;产物输出与预期一致 |
+| **M0 风险解除** | 手写最小 IR + leaf C 层 + runtime.ql 的 `__itoa`;不写编译器 | 打通全盒指针 ABI、alloc/write/exit、数字→文本;产物输出与预期一致 |
 | **M1** | qlangc.ql v1 + host `--compile` 驱动 | v1 测试集三端字节一致 |
 | **M2** | 字符串/数组/对象(纯 QLang 内存实现)+ 字符串插值 | 中量级程序三端一致 |
 | **M3** | 错误值/`?`/`??`/JSON/Math/全部 stdlib + import | difftest 四端 + 419/419 编译通过 |
