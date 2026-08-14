@@ -3,4 +3,5 @@ _df_*.js
 __pycache__/
 target/
 .vscode/
+.claude/
 design-archive/
