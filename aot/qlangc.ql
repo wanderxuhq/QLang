@@ -50,7 +50,7 @@ let emitNull = () -> {
 // && / || 短路 emit(controller 裁定语义 = host interpreter.rs eval_binary_op):
 //   && :A 假 → 结果 = A 盒(不 eval B);A 真 → 结果 = B 盒
 //   || :A 真 → 结果 = A 盒(不 eval B);A 假 → 结果 = B 盒
-// 返回原值盒,不造 false 盒;done 块 phi = [ A, A 所在块 ] + [ B, evalB ]。
+// 返回原值盒,不造 false 盒;done 块 phi = [ A, A 所在块 ] + [ B, B 所在块 ]。
 // 每次 @ql_truthy 调用前必须 ptrtoint 桥(Task 4 Deviation #6):@ql_truthy 参数是 i64 地址值。
 let emitShortCircuit = (node) -> {
   let op = node.operator;
@@ -68,11 +68,15 @@ let emitShortCircuit = (node) -> {
   line(lEvalB + ":");
   curLbl = lEvalB;
   let B = emitExpr(node.right);
+  // Critical fix (Fix Round 1):B 自身若是短路,emit 会再产 evalB/done 块并把 curLbl
+  // 设为其 done 块 → 外层 br label %lDone 实际从 B 的 done 块发出,phi 前驱必须记
+  // curLbl 而非硬编码 lEvalB(否则 "PHI node entries do not match predecessors!",clang 拒绝)。
+  let predB = curLbl;
   line("  br label %" + lDone);
   line(lDone + ":");
   curLbl = lDone;
   let res = temp();
-  line("  " + res + " = phi ptr [ " + A + ", %" + predA + " ], [ " + B + ", %" + lEvalB + " ]");
+  line("  " + res + " = phi ptr [ " + A + ", %" + predA + " ], [ " + B + ", %" + predB + " ]");
   res;
 };
 
