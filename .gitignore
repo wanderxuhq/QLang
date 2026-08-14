@@ -4,4 +4,5 @@ __pycache__/
 target/
 .vscode/
 .claude/
+.superpowers/
 design-archive/
