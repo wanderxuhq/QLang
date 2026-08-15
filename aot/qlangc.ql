@@ -21,6 +21,63 @@ let lbl = () -> { lblN = lblN + 1; "bb" + std.String.toString(lblN); };
 let f64lit = (x) -> { if x % 1 == 0 { std.String.toString(x) + ".0"; } else { std.String.toString(x); }; };
 // 编译期对象字段名 → 槽号映射(R10-d:runtime.ql 的 {buf,len} 等所有对象共享此映射,v1 形状一致)。
 let objFieldSlots = {};
+// ---- M2 字符串字面量(Task 2)----
+// 全局 .rodata 字符串常量 + interned 全局 STRING 盒(tag=2)。strDecls 缓冲在 main 末尾 flush。
+let strCounter = 0;             // 字符串盒序号
+let strDecls = [];              // 缓冲的全局常量/盒定义(flush 在 main 末尾)
+let stringIntern = {};          // 内容 → @.strboxN(跨 runtime.ql+用户源码整个编译单元)
+
+// escapeC:把解码后的字节重编码为 LLVM IR 字符串常量转义(aot/tests/m0_hello.ll 的
+// `[3 x i8] c"hi\0A"` 格式;\0A = `\`+大写两位十六进制,**无 NUL 终止**)。
+let escapeC = (s) -> {
+  let n = s.length;
+  let out = "";
+  let i = 0;
+  while i < n {
+    let c = s[i];
+    if c == "\n" { out = out + "\\0A"; }
+    else {
+      if c == "\t" { out = out + "\\09"; }
+      else {
+        if c == "\r" { out = out + "\\0D"; }
+        else {
+          if c == "\"" { out = out + "\\22"; }
+          else {
+            if c == "\\" { out = out + "\\5C"; }
+            else {
+              out = out + c;
+            };
+          };
+        };
+      };
+    };
+    i = i + 1;
+  };
+  out;
+};
+
+// internString:内容 → 恒同的全局 STRING 盒地址 @.strboxN(跨整个编译单元 intern)。
+// STRING 盒布局 {tag@0=2, buf@8, len@16};[LEN x i8] 的 LEN = 解码字节长度(无 NUL)。
+let internString = (s) -> {
+  let hit = stringIntern[s];
+  if isError(hit) || hit == null {
+    let n = strCounter;
+    strCounter = strCounter + 1;
+    let lbl = "@.strbox" + std.String.toString(n);
+    stringIntern[s] = lbl;
+    let bufLbl = "@.str" + std.String.toString(n);
+    let len = s.length;
+    strDecls[strDecls.length] = bufLbl + " = private unnamed_addr constant [" + std.String.toString(len) + " x i8] c\"" + escapeC(s) + "\"";
+    strDecls[strDecls.length] = lbl + " = global { i64, ptr, i64 } { i64 2, ptr " + bufLbl + ", i64 " + std.String.toString(len) + " }";
+    lbl;
+  } else {
+    hit;
+  };
+};
+
+let emitStringLiteral = (node) -> {
+  internString(node.value);
+};
 // R10-c:函数计数,生成 ql_fn<N> 名字。
 let funcCounter = 0;
 
@@ -51,9 +108,11 @@ let emitBoolean = (node) -> {
   b;
 };
 
-// null 字面量:tag=4(NULL),无 payload
+// null 字面量:tag=4(NULL)。返回 interned 全局 16B 盒 {tag=4, payload=0} 地址:
+//   [box+8] 恒读 0.0 → null == null(同一盒)fcmp oeq 恒真、null != null 恒假,
+//   host 镜像(c22/c23)。地址非零 → 满足红线(空槽哨兵不能是 0 指针)。
 let emitNull = () -> {
-  allocBox("4");
+  "@.nullbox";
 };
 
 // && / || 短路 emit(controller 裁定语义 = host interpreter.rs eval_binary_op):
@@ -651,6 +710,9 @@ let emitExpr = (node) -> {
     // R10-c/i:函数值 → 闭包盒 emit。name 参数仅作未来诊断用(v1 emitFunction 按 funcCounter
     // 生成 ql_fn<N>,不依赖 name)。调用方(emitLetStmt)已先 defineSlot(name),递归成立。
     emitFunction(node, "");
+  } else if t == "String" {
+    // M2 Task 2:字符串字面量 → interned 全局 STRING 盒地址(直接可作 ptr 操作数)。
+    emitStringLiteral(node);
   } else {
     line("; unhandled expr: " + t);
     emitNull();
@@ -666,6 +728,9 @@ let emitPrelude = () -> {
   line("declare void @ql_mem_store(ptr, i64, i8)");
   line("declare ptr  @ql_mem_get_ptr(ptr, i64)");
   line("declare void @ql_mem_store_ptr(ptr, i64, ptr)");
+
+  // M2 Task 2:interned 全局 null 盒 {tag=4, payload=0}(emitNull 返回其地址;见 emitNull 注释)。
+  line("@.nullbox = global { i64, i64 } { i64 4, i64 0 }");
 
   // --- @ql_truthy(i64 %box) → i1:switch tag —— NUMBER !=0(NaN 真)、BOOL 值、其余假(v1) ---
   // %box 参数按 plan 定为 i64(地址值);内部先 inttoptr 还原为指针再解盒。
@@ -759,6 +824,13 @@ let main = (args) -> {
       j = j + 1;
     };
     b = b + 1;
+  };
+  // M2 Task 2:flush 全局字符串常量/盒(LLVM 顶层实体无序,放函数定义之后合法)。
+  // 注意:必须 println 直接落 IR —— line() 会追加到已 flush 过的 out(死数据,永不出现在 IR)。
+  let si = 0;
+  while si < strDecls.length {
+    println(strDecls[si]);
+    si = si + 1;
   };
 };
 
