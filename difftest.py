@@ -361,6 +361,16 @@ SAFE_CASES = [
     ("d08", 'Object({cfg: {port: Number}, arr: {length: 2, element: String}}).check({cfg: {port: 80}, arr: ["a", "b"]});'),  # both kinds nested
     ("d09", 'Object({cfg: {port: Number}, arr: {length: 2, element: String}}).check({cfg: {port: "x"}, arr: ["a", "b"]});'),  # bad nested field → false
     ("c40", 'let a = [1, 2]; std.Array.push(a)(3); a.length;'),  # native raw-array mutation stays visible to .length (freshness invariant)
+    # ---- M2 m-series (Task 9): strings/arrays/objects surface, host/boot green ----
+    # Only 6 of the brief's 12: m01/m02/m03/m04/m08/m09 use .add/.remove, which the
+    # boot implements as no-ops (pre-existing boot semantics — no grow/shrink), so
+    # host/boot diverge there. m05/m06/m07/m10/m11/m12 are host/boot green.
+    ("m05", "let o = { a: 1 }; o.b = 2; o.a + o.b;"),
+    ("m06", "let o = { a: 1 }; o.a = 5; o.a;"),
+    ('m07', 'let s = "ab"; s[0] + s[1];'),
+    ("m10", "let o = { a: [1, 2] }; o.a.length;"),
+    ('m11', 'let s = "hello"; s.length;'),
+    ("m12", "let a = [1, 2, 3]; let i = 1; a[i];"),
 ]
 
 # Complex cases: multi-feature combinations (recursion / closure mutation / higher-order
@@ -491,6 +501,41 @@ RISKY_CASES = [
     ("p2", "let t = std.Type.of(42); t.check = 42;"),
 ]
 
+# Native AOT whitelist (Task 9, M2): cids whose source compiles through qlangc +
+# runtime.ql to an ELF whose output matches the host. Controller pre-verified every
+# case native==host. Excluded from the brief's 59: c03 (10/4 non-integer — __itoa
+# truncates 2.5 to 2, host prints 2.5), c11/c12/c13 (bitwise has no native lowering
+# — falls through emitBinaryOp's comparison else-chain to fcmp oge → renders BOOL),
+# c25/c26/c27 (if-expression in call-argument position — emitExpr has no If branch
+# → null), m07 (variable string concat → fadd divergence), and m01-m04/m08/m09
+# (boot .add/.remove are no-ops → not host/boot green; see NATIVE_ONLY_CASES).
+NATIVE_CASES = [
+    # M1 regression (numeric/control/short-circuit/closure) — c25/c26/c27 excluded
+    # (if-expr in call-arg unhandled), c03 non-integer, c11/c12/c13 bitwise-unlowered
+    "c01", "c02", "c04", "c05", "c06", "c07", "c08", "c09", "c10",
+    "c20", "c22", "c23", "c24", "c28", "c29", "c30", "c31", "c35",
+    "c42", "c43", "c44", "c45", "c46", "c47", "c48", "c54",
+    # M2 surface: strings/arrays/objects (integer domain)
+    "c14", "c15", "c16", "c36", "c37", "c38", "c39", "c41", "c49", "c50",
+    "c51", "c52", "c53", "c56",
+    # M2 new (host/boot green, native==host) — m07 excluded per brief (variable
+    # concat fadd divergence)
+    "m05", "m06", "m10", "m11", "m12",
+]
+
+# m-cases using .add/.remove: boot implements them as no-ops → host/boot diverge,
+# so they cannot enter SAFE_CASES/NODE_CASES. Native == host (verified), so they get
+# their own NATIVE-only column with a host probe for ground truth.
+NATIVE_ONLY_CASES = ["m01", "m02", "m03", "m04", "m08", "m09"]
+NATIVE_ONLY_SRC = {
+    "m01": "let a = [1, 2]; a.add(3); a.length;",
+    "m02": "let a = [1, 2]; a.add(3); a[2];",
+    "m03": "let a = [1, 2, 3]; a.remove(0); a.length;",
+    "m04": "let a = [1, 2, 3]; a.remove(1); a[0] + a[1];",
+    "m08": "let a = []; a.add(1); a.add(2); a.length;",
+    "m09": "let a = [1]; a.remove(0); a.length;",
+}
+
 # Node.js reference cases: (cid, js_src). js_src is a faithful JavaScript translation
 # of the QLang case; None means the QLang source is valid JS verbatim. Translation
 # rules: `->` → `=>`, `if/while cond` → `if/while (cond)`, block-bodied arrows get an
@@ -553,6 +598,11 @@ NODE_CASES = [
     ("x23", "let reverse = (arr) => { let out = []; let i = arr.length - 1; while (i >= 0) { out[out.length] = arr[i]; i = i - 1; } return out; }; let r = reverse([1, 2, 3]); r[0] + r[1] + r[2];"),
     ("x24", "let s = \"abc\"; let o = { first: s[0], rest: s.length - 1 }; o.first + String(o.rest);"),
     ("x25", "let f = (a) => (b) => (c) => a * b + c; f(2)(3)(4);"),
+    # ---- M2 m-series (Task 9): same 6 as SAFE_CASES (QLang source is valid JS
+    #      verbatim, so js_src=None). m01-m04/m08/m09 excluded: they'd fail
+    #      node_check because the boot .add/.remove no-ops diverge from host. ----
+    ("m05", None), ("m06", None), ("m07", None), ("m10", None), ("m11", None),
+    ("m12", None),
 ]
 
 
@@ -586,6 +636,37 @@ def boot_disp():
         '  else if w.type == "Boolean" { if w.value { "true" } else { "false" } }\n'
         '  else if w.type == "Null" { "null" }\n'
         '  else { "?" + w.type };\n'
+        "};\n"
+    )
+
+
+def native_disp():
+    """Native AOT disp: type dispatch via __type_of (returns the interned type-tag
+    string box; the literal in the source shares the same intern box, so `==` hits
+    the fcmp path). Number → __itoa (integer domain), String → __str (tag 2 box
+    {buf,len}), Boolean/Null, everything else (arrays/objects/error tags 5/6/8) →
+    __str emits the "?Array"/"?Object"/"?Error" label. No string `+` concatenation
+    (non-literal operands diverge)."""
+    return (
+        "let disp = (v) -> {\n"
+        "  let t = __type_of(v);\n"
+        '  if t == "Number" {\n'
+        "    __itoa(v);\n"
+        "  } else {\n"
+        '    if t == "String" {\n'
+        "      __str(v);\n"
+        "    } else {\n"
+        '      if t == "Boolean" {\n'
+        "        __boolstr(v);\n"
+        "      } else {\n"
+        '        if t == "Null" {\n'
+        "          __nullstr();\n"
+        "        } else {\n"
+        "          __str(v);\n"
+        "        };\n"
+        "      };\n"
+        "    };\n"
+        "  };\n"
         "};\n"
     )
 
@@ -647,6 +728,30 @@ def write_boot_one(path, cid, src):
     lines.append('println("%s=" + disp(w));' % cid)
     with open(path, "w") as f:
         f.write("\n".join(lines) + "\n")
+
+
+def write_native_one(path, cid, src):
+    """Write a single NATIVE case's standalone .ql. At compile time runtime.ql is
+    prepended automatically, so __type_of/__itoa/__str/__boolstr/__nullstr/__print
+    are in scope. __print outputs the disp result directly (disp returns a {buf,len}
+    string object; routing it through print would re-__str it into an object label)."""
+    with open(path, "w") as f:
+        f.write(native_disp())
+        f.write(src + "\n")
+        f.write('print("{}=");\n'.format(cid))
+        f.write("__print(disp(%s));\n" % last_expr(src))
+        f.write('print("\\n");\n')
+
+
+def host_ground_truth(cid, src):
+    """Host ground truth for NATIVE_ONLY cases. hres[cid] doesn't exist (not in
+    SAFE_CASES) and the native .ql uses __print which host no-ops, so probe host
+    directly with the host_disp harness (same shape as write_host_one)."""
+    hp = os.path.join(ROOT, "_df_" + cid + "_h.ql")
+    write_host_one(hp, cid, src)
+    hr = run(hp)
+    v = hr[1][0] if hr[1] else "ERR"
+    return norm_err(v, cid)
 
 
 def node_disp():
@@ -816,6 +921,45 @@ def main():
                 hres[cid] = run(hp)
                 bres[cid] = run(bp)
             node_check(cid, hres[cid], bres[cid], nr, divergences)
+
+    # ---- NATIVE cases (M2 whitelist): compile .ql -> ELF, run, compare to host ----
+    # _df_native_*.ql land in ROOT so the cleanup glob below sweeps them; the .bin
+    # files must NOT land in the repo root, so they go in a scratch dir.
+    print("=== NATIVE cases (M2 whitelist) ===")
+    import tempfile
+    nc_dir = tempfile.mkdtemp(prefix="_df_native_")
+    nc_fail = 0
+    for cid in NATIVE_CASES + NATIVE_ONLY_CASES:
+        if cid in NATIVE_ONLY_SRC:
+            src = NATIVE_ONLY_SRC[cid]
+            hval = host_ground_truth(cid, src)
+        else:
+            src = dict(SAFE_CASES)[cid]
+            hval = norm_err(hres[cid][1][0], cid)
+        ql = os.path.join(tmp, "_df_native_%s.ql" % cid)
+        binp = os.path.join(nc_dir, "_df_native_%s.bin" % cid)
+        write_native_one(ql, cid, src)
+        r = subprocess.run(CARGO + ["--compile", ql, "-o", binp],
+                           cwd=ROOT, capture_output=True, text=True)
+        if r.returncode != 0:
+            print("NATIVE COMPILE-FAIL %s: %s" % (cid, r.stderr.strip()))
+            nc_fail = 1
+            continue
+        runr = subprocess.run([binp], capture_output=True, text=True)
+        if runr.returncode != 0:
+            print("NATIVE RUN-FAIL %s (rc=%s): %s" % (cid, runr.returncode, runr.stderr.strip()))
+            nc_fail = 1
+            continue
+        line = [l for l in runr.stdout.splitlines() if l.startswith(cid + "=")]
+        nval = norm_err(line[0].split("=", 1)[1]) if line else "ERR"
+        if nval == hval:
+            print("NATIVE PASS %s" % cid)
+        else:
+            print("NATIVE FAIL %s: native=%r host=%r" % (cid, nval, hval))
+            nc_fail = 1
+    if nc_fail:
+        divergences.append("NATIVE")
+    print("=== NATIVE done ===")
 
     print()
     # Clean up generated temp files (also excluded by .gitignore, double safety)
