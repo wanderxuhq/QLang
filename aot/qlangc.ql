@@ -19,8 +19,6 @@ let line = (s) -> { curSink[curSink.length] = s; };
 let temp = () -> { tmpN = tmpN + 1; "%t" + std.String.toString(tmpN); };
 let lbl = () -> { lblN = lblN + 1; "bb" + std.String.toString(lblN); };
 let f64lit = (x) -> { if x % 1 == 0 { std.String.toString(x) + ".0"; } else { std.String.toString(x); }; };
-// 编译期对象字段名 → 槽号映射(R10-d:runtime.ql 的 {buf,len} 等所有对象共享此映射,v1 形状一致)。
-let objFieldSlots = {};
 // ---- M2 字符串字面量(Task 2)----
 // 全局 .rodata 字符串常量 + interned 全局 STRING 盒(tag=2)。strDecls 缓冲在 main 末尾 flush。
 let strCounter = 0;             // 字符串盒序号
@@ -345,6 +343,11 @@ let emitAssignStmt = (node) -> {
     let I = emitExpr(node.target.index);
     let V = emitExpr(node.value);
     emitCallRegs("__set_index", [O, I, V]);
+  } else if node.target.type == "MemberAccess" {
+    let O = emitExpr(node.target.object);
+    let V = emitExpr(node.value);
+    let key = internString(node.target.field);
+    emitCallRegs("__set_field", [O, key, V]);
   } else {
     emitStoreByName(node.target.name, node.value);
   };
@@ -652,6 +655,14 @@ let emitCall = (node) -> {
       line("  call void @ql_mem_store_ptr(ptr " + p + ", i64 " + off + ", ptr " + v + ")");
       emitNull();
     };
+  } else if node.callee.type == "MemberAccess" && node.callee.field == "add" && node.arguments.length >= 1 {
+    let O = emitExpr(node.callee.object);
+    let V = emitExpr(node.arguments[0]);
+    emitCallRegs("__arr_add", [O, V]);
+  } else if node.callee.type == "MemberAccess" && node.callee.field == "remove" && node.arguments.length >= 1 {
+    let O = emitExpr(node.callee.object);
+    let I = emitExpr(node.arguments[0]);
+    emitCallRegs("__arr_remove", [O, I]);
   } else if calleeIsId || node.callee.type == "MemberAccess" {
     let FN = emitExpr(node.callee);
     let narg = node.arguments.length;
@@ -706,46 +717,27 @@ let emitArrayExpr = (node) -> {
   b;
 };
 
-// 对象字面量(tag 6 盒,R10-d):字段名 → 槽号编译期映射 objFieldSlots(name→slot,首次遇该字段
-// 分配下一槽);每字段 store 到 [%obj + 16+8*slot]。v1 约束:所有对象共享该映射(runtime.ql 的
-// {buf,len} 全同形 → slot 0/1 稳定,size = 16+8*fields.length 不越界)。
-// 注意:不能用 allocBox(tag)(只分 16 字节头)—— 对象字段从 +16 起存,须按本对象字段数分配
-// 16+8*fields.length(否则 store 到对象外 → 运行期越界写,segfault)。
 let emitObjectExpr = (node) -> {
-  let b = temp();
-  line("  " + b + " = call ptr @ql_alloc(i64 " + std.String.toString(16 + 8 * node.fields.length) + ")");
-  line("  store i64 6, ptr " + b);
-  let box = b;
+  let o = emitCallRegs("__obj_new", []);
   let i = 0;
   while i < node.fields.length {
     let f = node.fields[i];
-    let slot = objFieldSlots[f.name];
-    if isError(slot) || slot == null {
-      slot = std.Object.keys(objFieldSlots).length;
-      objFieldSlots[f.name] = slot;
-    };
     let V = emitExpr(f.value);
-    let off = temp();
-    line("  " + off + " = getelementptr i8, ptr " + box + ", i64 " + std.String.toString(16 + 8 * slot));
-    line("  store ptr " + V + ", ptr " + off);
+    let key = internString(f.name);
+    emitCallRegs("__obj_set", [o, key, V]);
     i = i + 1;
   };
-  box;
+  o;
 };
 
-// 字段访问:编译期已知字段(在 objFieldSlots)→ GEP + load ptr;未知字段 → 注释 + NULL 盒。
 let emitMemberAccess = (node) -> {
-  let slot = objFieldSlots[node.field];
-  if isError(slot) || slot == null {
-    line("; unknown field access: " + node.field);
-    emitNull();
+  let O = emitExpr(node.object);
+  if node.field == "length" {
+    let k = internString("length");
+    emitCallRegs("__get_length", [O, k]);
   } else {
-    let O = emitExpr(node.object);
-    let off = temp();
-    line("  " + off + " = getelementptr i8, ptr " + O + ", i64 " + std.String.toString(16 + 8 * slot));
-    let v = temp();
-    line("  " + v + " = load ptr, ptr " + off);
-    v;
+    let k = internString(node.field);
+    emitCallRegs("__get_field", [O, k]);
   };
 };
 
