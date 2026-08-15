@@ -1,0 +1,28 @@
+let mkarr = (a, b, c) -> {
+  let arr = allocBox(5, 24);
+  let els = ql_alloc(24);
+  ql_mem_store_ptr(els, 0, a);
+  ql_mem_store_ptr(els, 8, b);
+  ql_mem_store_ptr(els, 16, c);
+  ql_mem_store_ptr(arr, 8, els);
+  writeU64(arr, 16, 3);
+  arr;
+};
+let a = mkarr(1, 2, 3);
+println(__get_index(a, 0));
+println(__get_index(a, -1));
+println(__get_index(a, 1));
+__arr_add(a, 4);
+println(__get_length(a, "length"));
+println(__get_index(a, 3));
+__arr_remove(a, 0);
+println(__get_index(a, 0));
+println(__get_length(a, "length"));
+let s = "abc";
+println(__get_index(s, 0));
+println(__get_index(s, 2));
+println(__add("ab", "cd"));
+let o = __obj_new();
+__obj_set(o, "buf", 1);
+__obj_set(o, "len", 2);
+println(__get_field(o, "buf"));

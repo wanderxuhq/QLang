@@ -205,8 +205,218 @@ let __rehash = (o) -> {
   null;
 };
 
-// [M2 占位:__norm_idx → __get_length → __get_field → __set_field → __get_index →
-//  __set_index → __arr_add → __arr_remove → __add 在此插入(Task 5)]
+let __norm_idx = (i, len) -> {
+  let bad = 0;
+  let idx = 0;
+  let t = 0;          // 分支内临时量,顶层声明
+  if i % 1 != 0 {
+    bad = 1;
+  } else {
+    if i < 0 {
+      t = len + i;
+      if t < 0 { bad = 1; }
+      else { idx = t; };
+    } else {
+      if i >= len { bad = 1; }
+      else { idx = i; };
+    };
+  };
+  if bad == 1 {
+    __err("IndexOutOfBounds", "Index out of bounds");
+  } else {
+    idx;
+  };
+};
+
+let __get_length = (o, klen) -> {
+  let tag = readU64(o, 0);
+  if tag == 2 {
+    readU64(o, 16);
+  } else {
+    if tag == 5 {
+      readU64(o, 16);
+    } else {
+      if tag == 6 {
+        __obj_get(o, klen);
+      } else {
+        __err("NotAnObject", "Not an object");
+      };
+    };
+  };
+};
+
+let __get_field = (o, key) -> {
+  let tag = readU64(o, 0);
+  if tag == 6 {
+    __obj_get(o, key);
+  } else {
+    if tag == 5 {
+      __err("UndefinedField", "Undefined field");
+    } else {
+      if tag == 2 {
+        __err("NotAnObject", "Not an object");
+      } else {
+        __err("NotAnObject", "Not an object");
+      };
+    };
+  };
+};
+
+let __set_field = (o, key, v) -> {
+  let tag = readU64(o, 0);
+  if tag == 6 {
+    __obj_set(o, key, v);
+    null;
+  } else {
+    __err("NotAnObject", "Not an object");
+  };
+};
+
+let __get_index = (c, i) -> {
+  let tag = readU64(c, 0);
+  let els = null;     // 分支/嵌套内临时量,全部顶层声明(两分支共用槽)
+  let len = 0;
+  let r = null;
+  let buf = null;
+  let chb = null;
+  let box = null;
+  if tag == 5 {
+    els = ql_mem_get_ptr(c, 8);
+    len = readU64(c, 16);
+    r = __norm_idx(i, len);
+    if readU64(r, 0) == 8 {
+      r;
+    } else {
+      ql_mem_get_ptr(els, r * 8);
+    };
+  } else {
+    if tag == 2 {
+      buf = ql_mem_get_ptr(c, 8);
+      len = readU64(c, 16);
+      r = __norm_idx(i, len);
+      if readU64(r, 0) == 8 {
+        r;
+      } else {
+        chb = ql_alloc(1);
+        ql_mem_store(chb, 0, ql_mem_get(buf, r));
+        box = allocBox(2, 24);
+        ql_mem_store_ptr(box, 8, chb);
+        writeU64(box, 16, 1);
+        box;
+      };
+    } else {
+      __err("CannotIndex", "Cannot index");
+    };
+  };
+};
+
+let __set_index = (c, i, v) -> {
+  let tag = readU64(c, 0);
+  let els = null;     // 分支/循环内临时量,全部顶层声明
+  let len = 0;
+  let ne = null;
+  let k = 0;
+  let r = null;
+  if tag == 5 {
+    els = ql_mem_get_ptr(c, 8);
+    len = readU64(c, 16);
+    if i == len {
+      ne = ql_alloc(8 * (len + 1));
+      k = 0;
+      while k < len {
+        ql_mem_store_ptr(ne, k * 8, ql_mem_get_ptr(els, k * 8));
+        k = k + 1;
+      };
+      ql_mem_store_ptr(ne, len * 8, v);
+      ql_mem_store_ptr(c, 8, ne);
+      writeU64(c, 16, len + 1);
+      null;
+    } else {
+      r = __norm_idx(i, len);
+      if readU64(r, 0) == 8 {
+        r;
+      } else {
+        ql_mem_store_ptr(els, r * 8, v);
+        null;
+      };
+    };
+  } else {
+    if tag == 2 {
+      __err("CannotIndex", "Cannot index a string");
+    } else {
+      __err("CannotIndex", "Cannot index");
+    };
+  };
+};
+
+let __arr_add = (a, v) -> {
+  let els = ql_mem_get_ptr(a, 8);
+  let len = readU64(a, 16);
+  let ne = ql_alloc(8 * (len + 1));
+  let k = 0;
+  while k < len {
+    ql_mem_store_ptr(ne, k * 8, ql_mem_get_ptr(els, k * 8));
+    k = k + 1;
+  };
+  ql_mem_store_ptr(ne, len * 8, v);
+  ql_mem_store_ptr(a, 8, ne);
+  writeU64(a, 16, len + 1);
+  null;
+};
+
+let __arr_remove = (a, i) -> {
+  let els = ql_mem_get_ptr(a, 8);
+  let len = readU64(a, 16);
+  let r = __norm_idx(i, len);
+  let j = 0;          // 分支内临时量,顶层声明
+  if readU64(r, 0) == 8 {
+    null;
+  } else {
+    j = r;
+    while j < len - 1 {
+      ql_mem_store_ptr(els, j * 8, ql_mem_get_ptr(els, (j + 1) * 8));
+      j = j + 1;
+    };
+    writeU64(a, 16, len - 1);
+    null;
+  };
+};
+
+let __add = (a, b) -> {
+  let ta = readU64(a, 0);
+  let tb = readU64(b, 0);
+  let ab = null;      // 分支/循环内临时量,全部顶层声明
+  let al = 0;
+  let bb = null;
+  let bl = 0;
+  let nb = null;
+  let i = 0;
+  let j = 0;
+  let box = null;
+  if ta == 2 && tb == 2 {
+    ab = ql_mem_get_ptr(a, 8);
+    al = readU64(a, 16);
+    bb = ql_mem_get_ptr(b, 8);
+    bl = readU64(b, 16);
+    nb = ql_alloc(al + bl);
+    i = 0;
+    while i < al {
+      ql_mem_store(nb, i, ql_mem_get(ab, i));
+      i = i + 1;
+    };
+    j = 0;
+    while j < bl {
+      ql_mem_store(nb, al + j, ql_mem_get(bb, j));
+      j = j + 1;
+    };
+    box = allocBox(2, 24);
+    ql_mem_store_ptr(box, 8, nb);
+    writeU64(box, 16, al + bl);
+    box;
+  } else {
+    __err("TypeMismatch", "Type mismatch");
+  };
+};
 
 // 值 → interned 类型标签字符串盒
 let __type_of = (v) -> {
