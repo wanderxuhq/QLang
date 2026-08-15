@@ -3,6 +3,7 @@
  * 编译进产物:clang -fuse-ld=lld <out.ll> aot/runtime.c -o <out> */
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 static inline long syscall1(long n, long a) {
   register long x0 __asm__("x0") = a;
@@ -45,3 +46,12 @@ void ql_exit(int code) {
 uint8_t ql_mem_get(const void* p, size_t off) { return ((const uint8_t*)p)[off]; }
 
 void ql_mem_store(void* p, size_t off, uint8_t v) { ((uint8_t*)p)[off] = v; }
+
+void* ql_mem_get_ptr(const void* p, size_t off) {
+    void* v;
+    memcpy(&v, (const char*)p + off, sizeof(void*));
+    return v;
+}
+void ql_mem_store_ptr(void* p, size_t off, void* v) {
+    memcpy((char*)p + off, &v, sizeof(void*));
+}

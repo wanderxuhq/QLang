@@ -510,7 +510,7 @@ let boxToInt = (reg, w) -> {
 let emitCall = (node) -> {
   let calleeIsId = node.callee.type == "Identifier";
   let cname = if calleeIsId { node.callee.name } else { "" };
-  let isLeaf = calleeIsId && (cname == "ql_alloc" || cname == "ql_write" || cname == "ql_mem_get" || cname == "ql_mem_store");
+  let isLeaf = calleeIsId && (cname == "ql_alloc" || cname == "ql_write" || cname == "ql_mem_get" || cname == "ql_mem_store" || cname == "ql_mem_get_ptr" || cname == "ql_mem_store_ptr");
   if isLeaf {
     if cname == "ql_alloc" {
       let size = boxToInt(emitExpr(node.arguments[0]), "i64");
@@ -536,11 +536,23 @@ let emitCall = (node) -> {
       line("  " + pay + " = getelementptr i8, ptr " + box + ", i64 8");
       line("  store double " + bv + ", ptr " + pay);
       box;
-    } else {  // ql_mem_store
+    } else if cname == "ql_mem_store" {
       let p = emitExpr(node.arguments[0]);        // raw ptr,直接传
       let off = boxToInt(emitExpr(node.arguments[1]), "i64");
       let v = boxToInt(emitExpr(node.arguments[2]), "i8");
       line("  call void @ql_mem_store(ptr " + p + ", i64 " + off + ", i8 " + v + ")");
+      emitNull();
+    } else if cname == "ql_mem_get_ptr" {
+      let p = emitExpr(node.arguments[0]);        // raw ptr,直接传
+      let off = boxToInt(emitExpr(node.arguments[1]), "i64");
+      let r = temp();
+      line("  " + r + " = call ptr @ql_mem_get_ptr(ptr " + p + ", i64 " + off + ")");
+      r;
+    } else if cname == "ql_mem_store_ptr" {
+      let p = emitExpr(node.arguments[0]);        // raw ptr,直接传
+      let off = boxToInt(emitExpr(node.arguments[1]), "i64");
+      let v = emitExpr(node.arguments[2]);        // raw ptr,直接传
+      line("  call void @ql_mem_store_ptr(ptr " + p + ", i64 " + off + ", ptr " + v + ")");
       emitNull();
     };
   } else if calleeIsId || node.callee.type == "MemberAccess" {
@@ -652,6 +664,8 @@ let emitPrelude = () -> {
   line("declare void @ql_write(i32, ptr, i64)");
   line("declare i8   @ql_mem_get(ptr, i64)");
   line("declare void @ql_mem_store(ptr, i64, i8)");
+  line("declare ptr  @ql_mem_get_ptr(ptr, i64)");
+  line("declare void @ql_mem_store_ptr(ptr, i64, ptr)");
 
   // --- @ql_truthy(i64 %box) → i1:switch tag —— NUMBER !=0(NaN 真)、BOOL 值、其余假(v1) ---
   // %box 参数按 plan 定为 i64(地址值);内部先 inttoptr 还原为指针再解盒。
