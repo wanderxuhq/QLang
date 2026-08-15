@@ -1,0 +1,12 @@
+let a = [1, 2, 3];
+println(a[1]);
+println(a[-1]);
+println(a[0]);
+a[3] = 4;
+println(a[3]);
+a[0] = 9;
+println(a[0]);
+let b = [];
+println(b.length);
+let c = [[1, 2], [3, 4]];
+println(c[1][0]);

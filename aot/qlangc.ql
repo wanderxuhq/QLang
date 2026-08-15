@@ -338,8 +338,16 @@ let emitStoreByName = (name, value) -> {
 };
 
 // assign:沿链找目标帧 slot 写(R9 帧/槽全 ptr 型)。
+// M2 arr:IndexAccess 目标 → 数组元素写(__set_index);其余目标走旧 emitStoreByName。
 let emitAssignStmt = (node) -> {
-  emitStoreByName(node.target.name, node.value);
+  if node.target.type == "IndexAccess" {
+    let O = emitExpr(node.target.object);
+    let I = emitExpr(node.target.index);
+    let V = emitExpr(node.value);
+    emitCallRegs("__set_index", [O, I, V]);
+  } else {
+    emitStoreByName(node.target.name, node.value);
+  };
 };
 
 // ---- 函数/闭包 emit(Task 7,R10-a/b/c/i) ----
@@ -566,6 +574,36 @@ let boxToInt = (reg, w) -> {
 //    参数数组 = call ptr @ql_alloc(i64 8*n) + GEP+store 每参数(盒或 raw ptr 一律 ptr 型);
 //    load 闭包盒 code(+8)/env(+16);call ptr %code(ptr %env, ptr %arr, i64 n)。返回 = call 结果盒。
 // 3) 未解析(callee 非 Identifier/MemberAccess)→ 注释 + NULL 盒。
+// emitCallRegs(fname, argRegs):给定 callee 名与已计算的参数寄存器,构造 args 数组并调用。
+// runtime.ql 函数是顶层 let → 全局帧槽 → emitIdentifier(fname) 解析成功。
+let emitCallRegs = (fname, argRegs) -> {
+  // NOTE(deviation from brief): emitIdentifier 现签名取 Identifier 节点(读 node.name),
+  // 直接传字符串会访问 "str".name → host Error → lookupSlot miss → nullbox(运行期 call null 崩溃)。
+  // 构造节点保持 brief 其余部分逐字不变。Task 7/8 复用同一 emitCallRegs(fname 字符串)调用形式。
+  let FN = emitIdentifier({ type: "Identifier", name: fname });
+  let narg = argRegs.length;
+  let arr = temp();
+  line("  " + arr + " = call ptr @ql_alloc(i64 " + std.String.toString(8 * narg) + ")");
+  let i = 0;
+  while i < narg {
+    let aoff = temp();
+    line("  " + aoff + " = getelementptr ptr, ptr " + arr + ", i64 " + std.String.toString(i));
+    line("  store ptr " + argRegs[i] + ", ptr " + aoff);
+    i = i + 1;
+  };
+  let codep = temp();
+  let codev = temp();
+  line("  " + codep + " = getelementptr i8, ptr " + FN + ", i64 8");
+  line("  " + codev + " = load ptr, ptr " + codep);
+  let envp = temp();
+  let envv = temp();
+  line("  " + envp + " = getelementptr i8, ptr " + FN + ", i64 16");
+  line("  " + envv + " = load ptr, ptr " + envp);
+  let r = temp();
+  line("  " + r + " = call ptr " + codev + "(ptr " + envv + ", ptr " + arr + ", i64 " + std.String.toString(narg) + ")");
+  r;
+};
+
 let emitCall = (node) -> {
   let calleeIsId = node.callee.type == "Identifier";
   let cname = if calleeIsId { node.callee.name } else { "" };
@@ -642,6 +680,32 @@ let emitCall = (node) -> {
   };
 };
 
+// 数组字面量(tag 5 盒,R10-e):@0 tag=5,@8 元素数组 ptr,@16 长度 i64。
+// 元素数组 = call ptr @ql_alloc(i64 8*n),每元素 GEP+store(盒/raw ptr 一律 ptr 型)。
+let emitArrayExpr = (node) -> {
+  let b = temp();
+  line("  " + b + " = call ptr @ql_alloc(i64 24)");
+  line("  store i64 5, ptr " + b);                    // tag ARRAY
+  let n = node.elements.length;
+  let els = temp();
+  line("  " + els + " = call ptr @ql_alloc(i64 " + std.String.toString(8 * n) + ")");
+  let eoff = temp();
+  line("  " + eoff + " = getelementptr i8, ptr " + b + ", i64 8");
+  line("  store ptr " + els + ", ptr " + eoff);
+  let i = 0;
+  while i < n {
+    let v = emitExpr(node.elements[i]);
+    let aoff = temp();
+    line("  " + aoff + " = getelementptr ptr, ptr " + els + ", i64 " + std.String.toString(i));
+    line("  store ptr " + v + ", ptr " + aoff);
+    i = i + 1;
+  };
+  let loff = temp();
+  line("  " + loff + " = getelementptr i8, ptr " + b + ", i64 16");
+  line("  store i64 " + std.String.toString(n) + ", ptr " + loff);
+  b;
+};
+
 // 对象字面量(tag 6 盒,R10-d):字段名 → 槽号编译期映射 objFieldSlots(name→slot,首次遇该字段
 // 分配下一槽);每字段 store 到 [%obj + 16+8*slot]。v1 约束:所有对象共享该映射(runtime.ql 的
 // {buf,len} 全同形 → slot 0/1 稳定,size = 16+8*fields.length 不越界)。
@@ -713,6 +777,12 @@ let emitExpr = (node) -> {
   } else if t == "String" {
     // M2 Task 2:字符串字面量 → interned 全局 STRING 盒地址(直接可作 ptr 操作数)。
     emitStringLiteral(node);
+  } else if node.type == "Array" {
+    emitArrayExpr(node);
+  } else if node.type == "IndexAccess" {
+    let C = emitExpr(node.object);
+    let I = emitExpr(node.index);
+    emitCallRegs("__get_index", [C, I]);
   } else {
     line("; unhandled expr: " + t);
     emitNull();
