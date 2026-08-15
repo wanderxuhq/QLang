@@ -58,12 +58,37 @@ let __mknum = (x) -> {
   b;
 };
 
-// ERROR 盒:kind/msg 为字符串盒(M3 的 error read zone 再读)
-let __err = (kind, msg) -> {
-  let b = allocBox(8, 32);
+// M3:tag-2 STRING 盒 {tag@0=2, buf@8, len@16}
+let __str_new = (buf, len) -> {
+  let box = allocBox(2, 24);
+  ql_mem_store_ptr(box, 8, buf);
+  writeU64(box, 16, len);
+  box;
+};
+
+// M3:48B ERROR 盒 {tag@0=8, kind@8, message@16, line@24, col@32, cause@40}
+// kind/message 为 tag-2 STRING 盒;line/col 为 interned 数字零盒;cause 为 ERROR 盒或 nullbox。
+let __zero_num = 0;
+let __err_new = (kind, msg, cause) -> {
+  let b = allocBox(8, 48);
   ql_mem_store_ptr(b, 8, kind);
   ql_mem_store_ptr(b, 16, msg);
+  ql_mem_store_ptr(b, 24, __zero_num);
+  ql_mem_store_ptr(b, 32, __zero_num);
+  ql_mem_store_ptr(b, 40, cause);
   b;
+};
+let __err = (kind, msg) -> { __err_new(kind, msg, null); };
+let __isError = (v) -> { readU64(v, 0) == 8; };
+let __err_cause = (e) -> { ql_mem_get_ptr(e, 40); };
+let __err_get = (e, field) -> {
+  let k = field;
+  if k == "kind" { ql_mem_get_ptr(e, 8); }
+  else { if k == "message" { ql_mem_get_ptr(e, 16); }
+  else { if k == "line" { ql_mem_get_ptr(e, 24); }
+  else { if k == "col" { ql_mem_get_ptr(e, 32); }
+  else { if k == "cause" { ql_mem_get_ptr(e, 40); }
+  else { __err("UndefinedField", "Undefined field: " + field); }; }; }; }; };
 };
 
 // OBJECT 盒 {tag@0=6, table@8, cap@16, count@24};桶表 ql_alloc(16*cap),[k0,v0,k1,v1,...],
@@ -479,7 +504,7 @@ let __itoa = (n) -> {
     v = (v - d) / 10;
     i = i + 1;
   };
-  { buf: buf, len: total };
+  __str_new(buf, total);
 };
 
 // BOOL 盒 → "true"/"false" 字节缓冲
@@ -500,28 +525,24 @@ let __boolstr = (b) -> {
     ql_mem_store(buf, 3, 115);
     ql_mem_store(buf, 4, 101);
   };
-  { buf: buf, len: len };
+  __str_new(buf, len);
 };
 
-// 空字符串对象 {buf, len}:NULL 盒的标签字符串
+// "null" 标签的 tag-2 STRING 盒:复用 interned "null" 字符串盒的 buf/len
 let __nullstr = () -> {
-  { buf: ql_mem_get_ptr(__LABEL_NULL, 8), len: readU64(__LABEL_NULL, 16) };
+  __str_new(ql_mem_get_ptr(__LABEL_NULL, 8), readU64(__LABEL_NULL, 16));
 };
 
-// 值 → 字符串对象:按盒 tag 全分派(NUMBER→__itoa,STRING→盒内读,BOOL→__boolstr,NULL→"null",
-// ARR/OBJ/ERR/FN→标签字符串)。
+// 值 → tag-2 STRING 盒:按盒 tag 全分派(NUMBER→__itoa,STRING→恒同盒,
+// BOOL→__boolstr,NULL→"null",ARR/OBJ/ERR/FN→interned 标签字符串盒)。
 // 只用嵌套 if/else(boot parser 把 else-if 拍平成 branches[],emitIfStmt 只处理 branches[0])。
 let __str = (v) -> {
   let tag = readU64(v, 0);
-  let b = null;       // 分支内临时量,顶层声明(tag 2 分支用)
-  let l = 0;
   if tag == 1 {
     __itoa(v);
   } else {
     if tag == 2 {
-      b = ql_mem_get_ptr(v, 8);
-      l = readU64(v, 16);
-      { buf: b, len: l };
+      v;
     } else {
       if tag == 3 {
         __boolstr(v);
@@ -530,15 +551,15 @@ let __str = (v) -> {
           __nullstr();
         } else {
           if tag == 5 {
-            { buf: ql_mem_get_ptr(__LABEL_ARR, 8), len: readU64(__LABEL_ARR, 16) };
+            __str_new(ql_mem_get_ptr(__LABEL_ARR, 8), readU64(__LABEL_ARR, 16));
           } else {
             if tag == 6 {
-              { buf: ql_mem_get_ptr(__LABEL_OBJ, 8), len: readU64(__LABEL_OBJ, 16) };
+              __str_new(ql_mem_get_ptr(__LABEL_OBJ, 8), readU64(__LABEL_OBJ, 16));
             } else {
               if tag == 8 {
-                { buf: ql_mem_get_ptr(__LABEL_ERR, 8), len: readU64(__LABEL_ERR, 16) };
+                __str_new(ql_mem_get_ptr(__LABEL_ERR, 8), readU64(__LABEL_ERR, 16));
               } else {
-                { buf: ql_mem_get_ptr(__LABEL_FN, 8), len: readU64(__LABEL_FN, 16) };
+                __str_new(ql_mem_get_ptr(__LABEL_FN, 8), readU64(__LABEL_FN, 16));
               };
             };
           };
@@ -569,6 +590,6 @@ let println = (v) -> {
   __print(__str(v));
   let nl = ql_alloc(1);
   ql_mem_store(nl, 0, 10);
-  __print({ buf: nl, len: 1 });
+  __print(__str_new(nl, 1));
   null;
 };

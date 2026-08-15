@@ -54,8 +54,41 @@ let escapeC = (s) -> {
   out;
 };
 
+// ---- M3 T1 差异项 6:字符串字面量 UTF-8 字节计数 ----
+// escapeC 的转义为 3 字符(\0A 等,每转义 = 1 字节),非 ASCII 原样保留。字节数 =
+// 5 个转义字符各 1 字节 + 可打印 ASCII 各 1 字节 + 非 ASCII 各 3 字节(本项目
+// 实际用到的非 ASCII 为 U+2500~U+2514 框线字符,UTF-8 恒 3 字节)。
+let __PRINT_ASCII = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
+let strByteLen = (s) -> {
+  let n = s.length;
+  let total = 0;
+  let i = 0;
+  while i < n {
+    let c = s[i];
+    if c == "\n" { total = total + 1; }
+    else {
+      if c == "\t" { total = total + 1; }
+      else {
+        if c == "\r" { total = total + 1; }
+        else {
+          if c == "\"" { total = total + 1; }
+          else {
+            if c == "\\" { total = total + 1; }
+            else {
+              if std.String.includes(__PRINT_ASCII)(c) { total = total + 1; }
+              else { total = total + 3; };
+            };
+          };
+        };
+      };
+    };
+    i = i + 1;
+  };
+  total;
+};
+
 // internString:内容 → 恒同的全局 STRING 盒地址 @.strboxN(跨整个编译单元 intern)。
-// STRING 盒布局 {tag@0=2, buf@8, len@16};[LEN x i8] 的 LEN = 解码字节长度(无 NUL)。
+// STRING 盒布局 {tag@0=2, buf@8, len@16};[LEN x i8] 的 LEN = UTF-8 字节长度(无 NUL)。
 let internString = (s) -> {
   let hit = stringIntern[s];
   if isError(hit) || hit == null {
@@ -64,7 +97,7 @@ let internString = (s) -> {
     let lbl = "@.strbox" + std.String.toString(n);
     stringIntern[s] = lbl;
     let bufLbl = "@.str" + std.String.toString(n);
-    let len = s.length;
+    let len = strByteLen(s);
     strDecls[strDecls.length] = bufLbl + " = private unnamed_addr constant [" + std.String.toString(len) + " x i8] c\"" + escapeC(s) + "\"";
     strDecls[strDecls.length] = lbl + " = global { i64, ptr, i64 } { i64 2, ptr " + bufLbl + ", i64 " + std.String.toString(len) + " }";
     lbl;
