@@ -801,6 +801,14 @@ let main = (args) -> {
   line("  " + noff + " = getelementptr i8, ptr " + envReg + ", i64 8");
   line("  store i64 " + std.String.toString(K) + ", ptr " + noff);       // n_slots = K
   curEnv = envReg;
+  // 前向引用安全:先按源码序把全部顶层 let 名注册进 globalScope(defineSlot 幂等 → 槽号
+  // 与逐个 emit 时一致),使函数体 emit 期间对「定义于其后的顶层 let」(如 __obj_set 调
+  // __rehash)能经 parent 链解析到正确槽号;否则 lookupSlot 未命中 → nullbox → 空指针调用。
+  let p0 = 0;
+  while p0 < program.statements.length {
+    if program.statements[p0].type == "Let" { defineSlot(program.statements[p0].name); };
+    p0 = p0 + 1;
+  };
   let i = 0;
   while i < program.statements.length {
     emitTopLevelStmt(program.statements[i]);

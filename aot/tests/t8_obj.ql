@@ -1,0 +1,17 @@
+let o = __obj_new();
+__obj_set(o, "a", 1);
+__obj_set(o, "b", 2);
+__obj_set(o, "c", 3);
+__obj_set(o, "d", 4);
+__obj_set(o, "e", 5);
+__obj_set(o, "f", 6);
+println(__obj_get(o, "a"));
+println(__obj_get(o, "f"));
+println(__obj_get(o, "c"));
+println(__obj_get(o, "d"));
+__obj_set(o, "a", 10);
+println(__obj_get(o, "a"));
+let p = o;
+__obj_set(o, "z", 9);
+println(__obj_get(p, "z"));
+println(__obj_get(p, "a"));

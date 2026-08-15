@@ -12,6 +12,7 @@ let __LABEL_FN = "?Function";
 let __LABEL_NULL = "null";
 let __K_BUF = "buf";
 let __K_LEN = "len";
+let __EMPTY = "";   // 哈希表空槽哨兵(interned "" 字符串盒)
 
 let writeU64 = (p, off, v) -> {
   let b0 = v % 256;        ql_mem_store(p, off,     b0);
@@ -65,9 +66,147 @@ let __err = (kind, msg) -> {
   b;
 };
 
-// [M2 占位:__hash → __obj_new → __obj_get → __obj_set → __rehash → __norm_idx →
-//  __get_length → __get_field → __set_field → __get_index → __set_index →
-//  __arr_add → __arr_remove → __add 在此插入(Task 4/5)]
+// OBJECT 盒 {tag@0=6, table@8, cap@16, count@24};桶表 ql_alloc(16*cap),[k0,v0,k1,v1,...],
+// 槽 i 键 table+i*16、值 table+i*16+8;空槽哨兵 __EMPTY 盒(绝不存 raw 0)。
+
+// 键字符串 → 散列:逐字节扫前 24B,f64 盒 payload 含长度+内容(ql_mem_get 单字节读)
+let __hash = (key) -> {
+  let h = 7;
+  let i = 0;
+  let b = 0;          // 顶层声明(循环体内 let 不受支持),循环内只赋值
+  while i < 24 {
+    b = ql_mem_get(key, i);
+    h = (h * 31 + b) % 1000003;
+    i = i + 1;
+  };
+  h;
+};
+
+let __obj_new = () -> {
+  let o = allocBox(6, 32);
+  let cap = 4;
+  let table = ql_alloc(16 * cap);
+  let i = 0;
+  while i < 8 {
+    ql_mem_store_ptr(table, i * 8, __EMPTY);
+    i = i + 1;
+  };
+  ql_mem_store_ptr(o, 8, table);
+  writeU64(o, 16, cap);
+  writeU64(o, 24, 0);
+  o;
+};
+
+// 线性探测;空槽终止探测。state:0 探测中 / 1 命中 / 2 未命中(空槽)。found 存值盒。
+let __obj_get = (o, key) -> {
+  let table = ql_mem_get_ptr(o, 8);
+  let cap = readU64(o, 16);
+  let h = __hash(key);
+  let i = 0;
+  let state = 0;
+  let found = null;
+  let slot = 0;       // 循环内临时量,全部顶层声明
+  let k = null;
+  while state == 0 {
+    slot = (h + i) % cap;
+    k = ql_mem_get_ptr(table, slot * 16);
+    if k == __EMPTY {
+      state = 2;
+    } else {
+      if k == key {
+        found = ql_mem_get_ptr(table, slot * 16 + 8);
+        state = 1;
+      } else {
+        i = i + 1;
+      };
+    };
+  };
+  if state == 1 {
+    found;
+  } else {
+    __err("UndefinedField", "Undefined field");
+  };
+};
+
+let __obj_set = (o, key, v) -> {
+  let table = ql_mem_get_ptr(o, 8);
+  let cap = readU64(o, 16);
+  let count = readU64(o, 24);
+  let h = __hash(key);
+  let i = 0;
+  let done = 0;
+  let slot = 0;       // 循环内临时量,全部顶层声明
+  let k = null;
+  while done == 0 {
+    slot = (h + i) % cap;
+    k = ql_mem_get_ptr(table, slot * 16);
+    if k == __EMPTY {
+      ql_mem_store_ptr(table, slot * 16, key);
+      ql_mem_store_ptr(table, slot * 16 + 8, v);
+      count = count + 1;
+      writeU64(o, 24, count);
+      if count * 10 >= cap * 7 {
+        __rehash(o);
+      };
+      done = 1;
+    } else {
+      if k == key {
+        ql_mem_store_ptr(table, slot * 16 + 8, v);
+        done = 1;
+      } else {
+        i = i + 1;
+      };
+    };
+  };
+  null;
+};
+
+let __rehash = (o) -> {
+  let old = ql_mem_get_ptr(o, 8);
+  let cap = readU64(o, 16);
+  let newcap = cap * 2;
+  let table = ql_alloc(16 * newcap);
+  let i = 0;
+  while i < newcap * 2 {
+    ql_mem_store_ptr(table, i * 8, __EMPTY);
+    i = i + 1;
+  };
+  let j = 0;
+  let k = null;       // 以下循环/分支临时量全部顶层声明
+  let v = null;
+  let h = 0;
+  let p = 0;
+  let done = 0;
+  let slot = 0;
+  let k2 = null;
+  while j < cap {
+    k = ql_mem_get_ptr(old, j * 16);
+    if k != __EMPTY {
+      v = ql_mem_get_ptr(old, j * 16 + 8);
+      h = __hash(k);
+      p = 0;
+      done = 0;
+      while done == 0 {
+        slot = (h + p) % newcap;
+        k2 = ql_mem_get_ptr(table, slot * 16);
+        if k2 == __EMPTY {
+          ql_mem_store_ptr(table, slot * 16, k);
+          ql_mem_store_ptr(table, slot * 16 + 8, v);
+          done = 1;
+        } else {
+          p = p + 1;
+        };
+      };
+    };
+    j = j + 1;
+  };
+  ql_mem_store_ptr(o, 8, table);
+  writeU64(o, 16, newcap);
+  null;
+};
+
+// [M2 占位:__norm_idx → __get_length → __get_field → __set_field → __get_index →
+//  __set_index → __arr_add → __arr_remove → __add 在此插入(Task 5)]
 
 // 值 → interned 类型标签字符串盒
 let __type_of = (v) -> {
