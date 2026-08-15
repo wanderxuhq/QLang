@@ -344,10 +344,30 @@ let emitBinaryOp = (node) -> {
   };
 };
 
-// 一元运算:- → fneg 新 NUMBER 盒;! → @ql_truthy 反转后存 BOOL 盒。
+// 一元运算:`?` → Error 折回函数 epilogue(顶层 __exit_error + unreachable);- → fneg 新 NUMBER 盒;
+// ! → @ql_truthy 反转后存 BOOL 盒。
 let emitUnaryOp = (node) -> {
   let O = emitExpr(node.operand);
-  if node.operator == "-" {
+  if node.operator == "?" {
+    // M3 T3 Propagate:operand 为 Error → 折回函数返回(或顶层 __exit_error);否则原值继续
+    let tO = temp(); let eO = temp();
+    line("  " + tO + " = load i64, ptr " + O);
+    line("  " + eO + " = icmp eq i64 " + tO + ", 8");
+    let lProp = lbl(); let lOk = lbl();
+    line("  br i1 " + eO + ", label %" + lProp + ", label %" + lOk);
+    line(lProp + ":");
+    curLbl = lProp;
+    if isTopLevel {
+      emitCallRegs("__exit_error", [O]);
+      line("  unreachable");
+    } else {
+      line("  store ptr " + O + ", ptr " + curRetv);
+      line("  br label %" + curEpiLbl);
+    };
+    line(lOk + ":");
+    curLbl = lOk;
+    O;
+  } else if node.operator == "-" {
     let a = temp(); let f = temp(); let n = temp();
     line("  " + a + " = getelementptr i8, ptr " + O + ", i64 8");
     line("  " + f + " = load double, ptr " + a);
@@ -415,6 +435,11 @@ let curEnv = "";
 // 当前正在 emit 的基本块标签(短路 phi 需记录「emit A + truthy 所在块」作前驱;main 入口、
 // if/while 各块、短路各块处都要更新 —— 否则短路出现在非 entry 块时 phi 前驱写错)。
 let curLbl = "";
+// M3 T3:`?` 的传播目标 = 当前函数 epilogue(%retv alloca + %epilogue label)。
+// 顶层(isTopLevel)无 epilogue → `?` 走 __exit_error + unreachable。
+let curRetv = "";       // 当前函数 %retv 寄存器名
+let curEpiLbl = "";     // 当前函数 epilogue label 名
+let isTopLevel = true;  // main 顶层 ? → __exit_error
 
 // 表达式位置的标识符:沿当前帧 parent 链走 depth 步,读目标帧 slot(帧/槽全 ptr 型)。
 let emitIdentifier = (node) -> {
@@ -555,15 +580,27 @@ let emitFunction = (node, name) -> {
     line("  store ptr " + rv + ", ptr " + off);
     a = a + 1;
   };
+  // M3 T3:epilogue —— %retv alloca 在 entry 分配;body 末 store + br;? 的 prop 分支同样 store 后 br。
+  let rv = temp();
+  line("  " + rv + " = alloca ptr");
+  let lEpi = lbl();
+  let savedRetv = curRetv; let savedEpi = curEpiLbl; let savedTop = isTopLevel;
+  curRetv = rv; curEpiLbl = lEpi; isTopLevel = false;
   // 函数体:R10-a 语句级 last-value 语义 —— emitBlockStmts 返回最后值寄存器;函数结果 =
   // 函数体最后值(恒有值,默认 NULL 盒)。
   let bodyLast = emitBlockStmts(node.body.statements);
-  let retv = bodyLast;
-  if retv == null {
-    retv = emitNull();
+  let bl = bodyLast;
+  if bl == null {
+    bl = emitNull();
   };
-  line("  ret ptr " + retv);
+  line("  store ptr " + bl + ", ptr " + rv);
+  line("  br label %" + lEpi);
+  line(lEpi + ":");
+  let rv2 = temp();
+  line("  " + rv2 + " = load ptr, ptr " + rv);
+  line("  ret ptr " + rv2);
   line("}");
+  curRetv = savedRetv; curEpiLbl = savedEpi; isTopLevel = savedTop;
   fnBlocks[fnBlocks.length] = blk;
   // 恢复调用方上下文;闭包盒指令写回调用方当前块/当前 sink。
   curSink = savedSink;
@@ -758,7 +795,12 @@ let emitCallRegs = (fname, argRegs) -> {
 let emitCall = (node) -> {
   let calleeIsId = node.callee.type == "Identifier";
   let cname = if calleeIsId { node.callee.name } else { "" };
-  let isLeaf = calleeIsId && (cname == "ql_alloc" || cname == "ql_write" || cname == "ql_mem_get" || cname == "ql_mem_store" || cname == "ql_mem_get_ptr" || cname == "ql_mem_store_ptr");
+  // M3 R15:错误实参传播只对纯 Identifier 的用户函数。runtime.ql 全部内部函数(__ 前缀 +
+  // readU64/writeU64/allocBox/print/println)接受错误值/原始缓冲(host accepts_errors 镜像;
+  // 且 readU64(err,0) 必须能读 tag —— 否则 __op_eq/__isError 对错误值无限递归),豁免;
+  // MemberAccess callee 不走检查。
+  let errAccepting = cname == "print" || cname == "println" || cname == "readU64" || cname == "writeU64" || cname == "allocBox" || (cname.length >= 2 && cname[0] == "_" && cname[1] == "_");
+  let isLeaf = calleeIsId && (cname == "ql_alloc" || cname == "ql_write" || cname == "ql_mem_get" || cname == "ql_mem_store" || cname == "ql_mem_get_ptr" || cname == "ql_mem_store_ptr" || cname == "ql_exit");
   if isLeaf {
     if cname == "ql_alloc" {
       let size = boxToInt(emitExpr(node.arguments[0]), "i64");
@@ -802,6 +844,10 @@ let emitCall = (node) -> {
       let v = emitExpr(node.arguments[2]);        // raw ptr,直接传
       line("  call void @ql_mem_store_ptr(ptr " + p + ", i64 " + off + ", ptr " + v + ")");
       emitNull();
+    } else if cname == "ql_exit" {
+      let code = boxToInt(emitExpr(node.arguments[0]), "i32");
+      line("  call void @ql_exit(i32 " + code + ")");
+      emitNull();
     };
   } else if node.callee.type == "MemberAccess" && node.callee.field == "add" && node.arguments.length >= 1 {
     let O = emitExpr(node.callee.object);
@@ -811,7 +857,64 @@ let emitCall = (node) -> {
     let O = emitExpr(node.callee.object);
     let I = emitExpr(node.arguments[0]);
     emitCallRegs("__arr_remove", [O, I]);
+  } else if calleeIsId && !errAccepting {
+    // M3 R15:用户函数(纯 Identifier callee)实参为 Error → 该错误成为调用结果(不进入 callee)。
+    let FN = emitExpr(node.callee);
+    let narg = node.arguments.length;
+    let lAllDone = lbl();
+    let argRegs = [];
+    let errRegs = [];
+    let errBlks = [];
+    let i = 0;
+    while i < narg {
+      let v = emitExpr(node.arguments[i]);
+      let t = temp(); let e = temp();
+      line("  " + t + " = load i64, ptr " + v);
+      line("  " + e + " = icmp eq i64 " + t + ", 8");
+      let lNext = lbl(); let lErr = lbl();
+      line("  br i1 " + e + ", label %" + lErr + ", label %" + lNext);
+      line(lErr + ":");
+      curLbl = lErr;
+      errRegs[errRegs.length] = v;
+      errBlks[errBlks.length] = curLbl;
+      line("  br label %" + lAllDone);
+      line(lNext + ":");
+      curLbl = lNext;
+      argRegs[argRegs.length] = v;
+      i = i + 1;
+    };
+    let arr = temp();
+    line("  " + arr + " = call ptr @ql_alloc(i64 " + std.String.toString(8 * narg) + ")");
+    let j = 0;
+    while j < narg {
+      let aoff = temp();
+      line("  " + aoff + " = getelementptr ptr, ptr " + arr + ", i64 " + std.String.toString(j));
+      line("  store ptr " + argRegs[j] + ", ptr " + aoff);
+      j = j + 1;
+    };
+    let codep = temp(); let codev = temp();
+    line("  " + codep + " = getelementptr i8, ptr " + FN + ", i64 8");
+    line("  " + codev + " = load ptr, ptr " + codep);
+    let envp = temp(); let envv = temp();
+    line("  " + envp + " = getelementptr i8, ptr " + FN + ", i64 16");
+    line("  " + envv + " = load ptr, ptr " + envp);
+    let r = temp();
+    line("  " + r + " = call ptr " + codev + "(ptr " + envv + ", ptr " + arr + ", i64 " + std.String.toString(narg) + ")");
+    let cleanBlk = curLbl;
+    line("  br label %" + lAllDone);
+    line(lAllDone + ":");
+    curLbl = lAllDone;
+    let res = temp();
+    let ph = "  " + res + " = phi ptr [ " + r + ", %" + cleanBlk + " ]";
+    let e2 = 0;
+    while e2 < errBlks.length {
+      ph = ph + ", [ " + errRegs[e2] + ", %" + errBlks[e2] + " ]";
+      e2 = e2 + 1;
+    };
+    line(ph);
+    res;
   } else if calleeIsId || node.callee.type == "MemberAccess" {
+    // M3 R15:MemberAccess callee(std.* / 实例方法)与 error-accepting 运行时函数不走错误实参检查。
     let FN = emitExpr(node.callee);
     let narg = node.arguments.length;
     let arr = temp();
@@ -938,6 +1041,7 @@ let emitPrelude = () -> {
   line("declare void @ql_mem_store(ptr, i64, i8)");
   line("declare ptr  @ql_mem_get_ptr(ptr, i64)");
   line("declare void @ql_mem_store_ptr(ptr, i64, ptr)");
+  line("declare void @ql_exit(i32)");
 
   // M2 Task 2:interned 全局 null 盒 {tag=4, payload=0}(emitNull 返回其地址;见 emitNull 注释)。
   line("@.nullbox = global { i64, i64 } { i64 4, i64 0 }");

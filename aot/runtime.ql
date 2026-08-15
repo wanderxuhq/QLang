@@ -712,3 +712,33 @@ let println = (v) -> {
   __print(__str_new(nl, 1));
   null;
 };
+
+// ---- M3 T3:错误链格式化 + 顶层未捕获错误退出 ----
+
+// 错误链文本:`{kind}: {message}` + 每级 cause `\n  └─ caused by: {kind}: {message}`
+// (递归;`"\n  └─ caused by: "` 含非 ASCII → qlangc byte-aware internString 已就绪)
+let __err_chain = (e) -> {
+  let base = __err_get(e, "kind") + ": " + __err_get(e, "message");
+  let c = __err_cause(e);
+  let r = base;
+  if __isError(c) {
+    r = base + "\n  └─ caused by: " + __err_chain(c);
+  };
+  r;
+};
+
+// 写 fd(1/2)+ 字符串(直接 STRING 盒)
+let __wfd = (fd, s) -> {
+  ql_write(fd, ql_mem_get_ptr(s, 8), readU64(s, 16));
+  null;
+};
+
+// 顶层未捕获错误:stderr 打印错误链 + exit 1
+let __exit_error = (e) -> {
+  __wfd(2, __err_chain(e));
+  let nl = ql_alloc(1);
+  ql_mem_store(nl, 0, 10);
+  ql_write(2, nl, 1);
+  ql_exit(1);
+  null;
+};
