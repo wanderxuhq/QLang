@@ -1,7 +1,17 @@
 // aot/runtime.ql — 编译进产物的运行时语义层(QLang)
-// 仅依赖 leaf:ql_alloc / ql_mem_get / ql_mem_store / ql_write / ql_exit。
+// 仅依赖 leaf:ql_alloc / ql_mem_get / ql_mem_store / ql_write / ql_exit / ql_mem_get_ptr / ql_mem_store_ptr。
 // 内存函数(对象头、字符串缓冲)全部封装于此,不暴露给编译器。
 // QLang 无移位符 → u64 字节读写用「除 256 + 取模」分解/合成。
+
+// 顶层标签/键盒:字符串字面量被 qlangc intern,"buf"/"len" 字段名与 __K_BUF/__K_LEN
+// 内容相同 → 同一盒 = 「键 = 指针同一」的落点。
+let __LABEL_ARR = "?Array";
+let __LABEL_OBJ = "?Object";
+let __LABEL_ERR = "?Error";
+let __LABEL_FN = "?Function";
+let __LABEL_NULL = "null";
+let __K_BUF = "buf";
+let __K_LEN = "len";
 
 let writeU64 = (p, off, v) -> {
   let b0 = v % 256;        ql_mem_store(p, off,     b0);
@@ -38,6 +48,59 @@ let allocBox = (tag, size) -> {
   let p = ql_alloc(size);
   writeU64(p, 0, tag);
   p;
+};
+
+// NUMBER 盒 → 新 NUMBER 盒:readU64 读出 f64 原始 8 字节位模式,writeU64 写回 → 位保持
+let __mknum = (x) -> {
+  let b = allocBox(1, 16);
+  writeU64(b, 8, readU64(x, 8));
+  b;
+};
+
+// ERROR 盒:kind/msg 为字符串盒(M3 的 error read zone 再读)
+let __err = (kind, msg) -> {
+  let b = allocBox(8, 32);
+  ql_mem_store_ptr(b, 8, kind);
+  ql_mem_store_ptr(b, 16, msg);
+  b;
+};
+
+// [M2 占位:__hash → __obj_new → __obj_get → __obj_set → __rehash → __norm_idx →
+//  __get_length → __get_field → __set_field → __get_index → __set_index →
+//  __arr_add → __arr_remove → __add 在此插入(Task 4/5)]
+
+// 值 → interned 类型标签字符串盒
+let __type_of = (v) -> {
+  let tag = readU64(v, 0);
+  if tag == 1 {
+    "Number";
+  } else {
+    if tag == 2 {
+      "String";
+    } else {
+      if tag == 3 {
+        "Boolean";
+      } else {
+        if tag == 4 {
+          "Null";
+        } else {
+          if tag == 5 {
+            __LABEL_ARR;
+          } else {
+            if tag == 6 {
+              __LABEL_OBJ;
+            } else {
+              if tag == 8 {
+                __LABEL_ERR;
+              } else {
+                __LABEL_FN;
+              };
+            };
+          };
+        };
+      };
+    };
+  };
 };
 
 // 数字 → 字符串对象 {buf, len}:整数快速路径(host Value::to_string 镜像)
@@ -91,18 +154,65 @@ let __boolstr = (b) -> {
   { buf: buf, len: len };
 };
 
-// 值 → 字符串对象:按盒 tag 分派(NUMBER→__itoa,BOOL→__boolstr)。
+// 空字符串对象 {buf, len}:NULL 盒的标签字符串
+let __nullstr = () -> {
+  { buf: ql_mem_get_ptr(__LABEL_NULL, 8), len: readU64(__LABEL_NULL, 16) };
+};
+
+// 值 → 字符串对象:按盒 tag 全分派(NUMBER→__itoa,STRING→盒内读,BOOL→__boolstr,NULL→"null",
+// ARR/OBJ/ERR/FN→标签字符串)。
 // 只用嵌套 if/else(boot parser 把 else-if 拍平成 branches[],emitIfStmt 只处理 branches[0])。
 let __str = (v) -> {
   let tag = readU64(v, 0);
+  let b = null;       // 分支内临时量,顶层声明(tag 2 分支用)
+  let l = 0;
   if tag == 1 {
     __itoa(v);
   } else {
-    __boolstr(v);
+    if tag == 2 {
+      b = ql_mem_get_ptr(v, 8);
+      l = readU64(v, 16);
+      { buf: b, len: l };
+    } else {
+      if tag == 3 {
+        __boolstr(v);
+      } else {
+        if tag == 4 {
+          __nullstr();
+        } else {
+          if tag == 5 {
+            { buf: ql_mem_get_ptr(__LABEL_ARR, 8), len: readU64(__LABEL_ARR, 16) };
+          } else {
+            if tag == 6 {
+              { buf: ql_mem_get_ptr(__LABEL_OBJ, 8), len: readU64(__LABEL_OBJ, 16) };
+            } else {
+              if tag == 8 {
+                { buf: ql_mem_get_ptr(__LABEL_ERR, 8), len: readU64(__LABEL_ERR, 16) };
+              } else {
+                { buf: ql_mem_get_ptr(__LABEL_FN, 8), len: readU64(__LABEL_FN, 16) };
+              };
+            };
+          };
+        };
+      };
+    };
   };
 };
 
-let __print = (s) -> { ql_write(1, s.buf, s.len); };
+// 字符串输出:双路径 —— STRING 盒(tag 2)内联读 buf@8/len@16;{buf,len} 对象(tag 6)走成员访问。
+let __print = (s) -> {
+  let tag = readU64(s, 0);
+  let b = null;       // 分支内临时量,顶层声明(tag 2 分支用)
+  let l = 0;
+  if tag == 2 {
+    b = ql_mem_get_ptr(s, 8);
+    l = readU64(s, 16);
+    ql_write(1, b, l);
+  } else {
+    ql_write(1, s.buf, s.len);
+  };
+  null;
+};
 
 let print = (v) -> { __print(__str(v)); null; };
 
