@@ -161,26 +161,30 @@ let emitBinaryOp = (node) -> {
     line("  " + a2 + " = getelementptr i8, ptr " + R + ", i64 8");
     line("  " + f2 + " = load double, ptr " + a2);
     if op == "+" || op == "-" || op == "*" || op == "/" || op == "%" {
-      let rr = temp();
-      if op == "%" {
-        // `frem` 在 AArch64 后端被降级为 libm fmod 调用,而产物无 libc 依赖(runtime.c 纯 syscall,
-        // 且 src/main.rs 不在本 task 提交范围)→ 用 a - b*trunc(a/b) 内联实现浮点余数(语义同 frem:
-        // 结果带被除数符号;v1 测试商值均落在 i64 内,fptosi 安全)。
-        let q = temp(); let qi = temp(); let qf = temp(); let m = temp();
-        line("  " + q + " = fdiv double " + f1 + ", " + f2);
-        line("  " + qi + " = fptosi double " + q + " to i64");
-        line("  " + qf + " = sitofp i64 " + qi + " to double");
-        line("  " + m + " = fmul double " + f2 + ", " + qf);
-        line("  " + rr + " = fsub double " + f1 + ", " + m);
+      if op == "+" && node.left.type == "String" && node.right.type == "String" {
+        emitCallRegs("__add", [L, R]);
       } else {
-        let fop = if op == "+" { "fadd" } else if op == "-" { "fsub" } else if op == "*" { "fmul" } else { "fdiv" };
-        line("  " + rr + " = " + fop + " double " + f1 + ", " + f2);
-      }
-      let b = allocBox("1");
-      let bpay = temp();
-      line("  " + bpay + " = getelementptr i8, ptr " + b + ", i64 8");
-      line("  store double " + rr + ", ptr " + bpay);
-      b;
+        let rr = temp();
+        if op == "%" {
+          // `frem` 在 AArch64 后端被降级为 libm fmod 调用,而产物无 libc 依赖(runtime.c 纯 syscall,
+          // 且 src/main.rs 不在本 task 提交范围)→ 用 a - b*trunc(a/b) 内联实现浮点余数(语义同 frem:
+          // 结果带被除数符号;v1 测试商值均落在 i64 内,fptosi 安全)。
+          let q = temp(); let qi = temp(); let qf = temp(); let m = temp();
+          line("  " + q + " = fdiv double " + f1 + ", " + f2);
+          line("  " + qi + " = fptosi double " + q + " to i64");
+          line("  " + qf + " = sitofp i64 " + qi + " to double");
+          line("  " + m + " = fmul double " + f2 + ", " + qf);
+          line("  " + rr + " = fsub double " + f1 + ", " + m);
+        } else {
+          let fop = if op == "+" { "fadd" } else if op == "-" { "fsub" } else if op == "*" { "fmul" } else { "fdiv" };
+          line("  " + rr + " = " + fop + " double " + f1 + ", " + f2);
+        }
+        let b = allocBox("1");
+        let bpay = temp();
+        line("  " + bpay + " = getelementptr i8, ptr " + b + ", i64 8");
+        line("  store double " + rr + ", ptr " + bpay);
+        b;
+      };
     } else {
       // 比较:== oeq,!= une,< olt,<= ole,> ogt,>= oge
       let cmp = if op == "==" { "oeq" } else if op == "!=" { "une" } else if op == "<" { "olt" } else if op == "<=" { "ole" } else if op == ">" { "ogt" } else { "oge" };
