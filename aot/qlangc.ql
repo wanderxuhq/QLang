@@ -149,16 +149,30 @@ let emitNull = () -> {
 // && / || 短路 emit(controller 裁定语义 = host interpreter.rs eval_binary_op):
 //   && :A 假 → 结果 = A 盒(不 eval B);A 真 → 结果 = B 盒
 //   || :A 真 → 结果 = A 盒(不 eval B);A 假 → 结果 = B 盒
-// 返回原值盒,不造 false 盒;done 块 phi = [ A, A 所在块 ] + [ B, B 所在块 ]。
+// 返回原值盒,不造 false 盒;done 块 phi = [ A, A 所在块 ] + [ B, B 所在块 ] + [ errRes, err 块 ]。
+// M3 R2:左操作数为 Error → 操作区截获(host:&&/|| 对错误不短路),结果 = TypeMismatch。
 // 每次 @ql_truthy 调用前必须 ptrtoint 桥(Task 4 Deviation #6):@ql_truthy 参数是 i64 地址值。
 let emitShortCircuit = (node) -> {
   let op = node.operator;
   let A = emitExpr(node.left);
+  // M3 R2:左操作数为 Error → 操作区截获(host:&&/|| 对错误不短路),结果 = TypeMismatch
+  let tA = temp(); let eA = temp();
+  line("  " + tA + " = load i64, ptr " + A);
+  line("  " + eA + " = icmp eq i64 " + tA + ", 8");
+  let lErr = lbl(); let lNorm = lbl(); let lDone = lbl();
+  line("  br i1 " + eA + ", label %" + lErr + ", label %" + lNorm);
+  line(lErr + ":");
+  curLbl = lErr;
+  let errRes = emitCallRegs("__op_zone_error", [internString("logical operation"), A, emitNull()]);
+  let errLbl = curLbl;
+  line("  br label %" + lDone);
+  line(lNorm + ":");
+  curLbl = lNorm;
   let A2 = temp(); let trA = temp();
   line("  " + A2 + " = ptrtoint ptr " + A + " to i64");
   line("  " + trA + " = call i1 @ql_truthy(i64 " + A2 + ")");
   let predA = curLbl;                       // emit A + truthy 所在块 = br 的前驱
-  let lEvalB = lbl(); let lDone = lbl();
+  let lEvalB = lbl();
   if op == "&&" {
     line("  br i1 " + trA + ", label %" + lEvalB + ", label %" + lDone);
   } else {
@@ -175,60 +189,157 @@ let emitShortCircuit = (node) -> {
   line(lDone + ":");
   curLbl = lDone;
   let res = temp();
-  line("  " + res + " = phi ptr [ " + A + ", %" + predA + " ], [ " + B + ", %" + predB + " ]");
+  line("  " + res + " = phi ptr [ " + A + ", %" + predA + " ], [ " + B + ", %" + predB + " ], [ " + errRes + ", %" + errLbl + " ]");
   res;
 };
 
-// 二元运算:先求值左右操作数,再解盒;算术造新 NUMBER 盒,比较造 BOOL 盒。
+// 数值路径(内联):仅当调用方已确认左右 tag 均 == 1(NUMBER)。除零检查内联。
+// 位运算:差异项 3 —— fptosi → and/or/xor → sitofp(与算术同构)。
+let emitNumOp = (op, L, R) -> {
+  let a1 = temp(); let f1 = temp(); let a2 = temp(); let f2 = temp();
+  line("  " + a1 + " = getelementptr i8, ptr " + L + ", i64 8");
+  line("  " + f1 + " = load double, ptr " + a1);
+  line("  " + a2 + " = getelementptr i8, ptr " + R + ", i64 8");
+  line("  " + f2 + " = load double, ptr " + a2);
+  if op == "+" || op == "-" || op == "*" {
+    let rr = temp();
+    let fop = if op == "+" { "fadd" } else if op == "-" { "fsub" } else { "fmul" };
+    line("  " + rr + " = " + fop + " double " + f1 + ", " + f2);
+    let b = allocBox("1");
+    let bpay = temp();
+    line("  " + bpay + " = getelementptr i8, ptr " + b + ", i64 8");
+    line("  store double " + rr + ", ptr " + bpay);
+    b;
+  } else if op == "/" || op == "%" {
+    // 除零检查:R == 0.0 → __op_div0(造 DivisionByZero 错误)
+    let z = temp(); let l0 = lbl(); let lOk = lbl(); let lEnd = lbl();
+    line("  " + z + " = fcmp oeq double " + f2 + ", 0.0");
+    line("  br i1 " + z + ", label %" + l0 + ", label %" + lOk);
+    line(lOk + ":");
+    curLbl = lOk;
+    let rr = temp();
+    if op == "%" {
+      // a - b*trunc(a/b)(M2 内联,frem 降级规避)
+      let q = temp(); let qi = temp(); let qf = temp(); let m = temp();
+      line("  " + q + " = fdiv double " + f1 + ", " + f2);
+      line("  " + qi + " = fptosi double " + q + " to i64");
+      line("  " + qf + " = sitofp i64 " + qi + " to double");
+      line("  " + m + " = fmul double " + f2 + ", " + qf);
+      line("  " + rr + " = fsub double " + f1 + ", " + m);
+    } else {
+      line("  " + rr + " = fdiv double " + f1 + ", " + f2);
+    };
+    let b = allocBox("1");
+    let bpay = temp();
+    line("  " + bpay + " = getelementptr i8, ptr " + b + ", i64 8");
+    line("  store double " + rr + ", ptr " + bpay);
+    let okLbl = curLbl;
+    line("  br label %" + lEnd);
+    line(l0 + ":");
+    curLbl = l0;
+    let errV = emitCallRegs("__op_div0", []);
+    let zeroLbl = curLbl;
+    line("  br label %" + lEnd);
+    line(lEnd + ":");
+    curLbl = lEnd;
+    let res = temp();
+    line("  " + res + " = phi ptr [ " + b + ", %" + okLbl + " ], [ " + errV + ", %" + zeroLbl + " ]");
+    res;
+  } else if op == "==" || op == "!=" || op == "<" || op == "<=" || op == ">" || op == ">=" {
+    let cmp = if op == "==" { "oeq" } else if op == "!=" { "une" } else if op == "<" { "olt" } else if op == "<=" { "ole" } else if op == ">" { "ogt" } else { "oge" };
+    let c = temp(); let c2 = temp();
+    line("  " + c + " = fcmp " + cmp + " double " + f1 + ", " + f2);
+    line("  " + c2 + " = zext i1 " + c + " to i64");
+    let b = allocBox("3");
+    let bpay = temp();
+    line("  " + bpay + " = getelementptr i8, ptr " + b + ", i64 8");
+    line("  store i64 " + c2 + ", ptr " + bpay);
+    b;
+  } else {
+    // 位运算 & | ^(差异项 3):fptosi → and/or/xor → sitofp
+    let op2 = if op == "&" { "and" } else if op == "|" { "or" } else { "xor" };
+    let i1 = temp(); let i2 = temp(); let ir = temp();
+    line("  " + i1 + " = fptosi double " + f1 + " to i64");
+    line("  " + i2 + " = fptosi double " + f2 + " to i64");
+    line("  " + ir + " = " + op2 + " i64 " + i1 + ", " + i2);
+    let fr = temp();
+    line("  " + fr + " = sitofp i64 " + ir + " to double");
+    let b = allocBox("1");
+    let bpay = temp();
+    line("  " + bpay + " = getelementptr i8, ptr " + b + ", i64 8");
+    line("  store double " + fr + ", ptr " + bpay);
+    b;
+  };
+};
+
+// 非数值派发路径:每 op 有至多一个合法非数值组合(+ STR 拼接;== / != tag 感知),其余 TypeMismatch。
+let emitDispOp = (op, L, R) -> {
+  if op == "+" {
+    emitCallRegs("__op_add", [L, R]);
+  } else if op == "==" {
+    emitCallRegs("__op_eq", [L, R]);
+  } else if op == "!=" {
+    emitCallRegs("__op_ne", [L, R]);
+  } else {
+    let word = if op == "-" || op == "*" || op == "/" || op == "%" {
+      "numeric operation"
+    } else if op == "<" || op == "<=" || op == ">" || op == ">=" {
+      "comparison"
+    } else {
+      "bitwise operation"
+    };
+    emitCallRegs("__op_zone_error", [internString(word), L, R]);
+  };
+};
+
+// ?? 空值合并:T9 实现真实逻辑;T2 先以 stub 占位,保证 qlangc 解析不崩。
+let emitCoalesce = (node) -> {
+  line("; T2 stub: coalesce");
+  emitNull();
+};
+
+// 二元运算:M3 R1 双路径 —— 静态两侧均为 Number 字面量 → 内联 emitNumOp;否则运行期
+// tag 检查,双 NUMBER → 内联数值路径,否则按 op 派发 __op_add/__op_eq/__op_ne/__op_zone_error。
 // && / || 不走这里 —— 先在顶部截获走 emitShortCircuit(短路,避免无条件先求值右操作数)。
 let emitBinaryOp = (node) -> {
   if node.operator == "&&" || node.operator == "||" {
     emitShortCircuit(node);
+  } else if node.operator == "??" {
+    emitCoalesce(node);        // T9 定义;T2 内先留 stub(见 Step 4)
   } else {
-    let L = emitExpr(node.left);
-    let R = emitExpr(node.right);
     let op = node.operator;
-    let a1 = temp(); let f1 = temp(); let a2 = temp(); let f2 = temp();
-    line("  " + a1 + " = getelementptr i8, ptr " + L + ", i64 8");
-    line("  " + f1 + " = load double, ptr " + a1);
-    line("  " + a2 + " = getelementptr i8, ptr " + R + ", i64 8");
-    line("  " + f2 + " = load double, ptr " + a2);
-    if op == "+" || op == "-" || op == "*" || op == "/" || op == "%" {
-      if op == "+" && node.left.type == "String" && node.right.type == "String" {
-        emitCallRegs("__add", [L, R]);
-      } else {
-        let rr = temp();
-        if op == "%" {
-          // `frem` 在 AArch64 后端被降级为 libm fmod 调用,而产物无 libc 依赖(runtime.c 纯 syscall,
-          // 且 src/main.rs 不在本 task 提交范围)→ 用 a - b*trunc(a/b) 内联实现浮点余数(语义同 frem:
-          // 结果带被除数符号;v1 测试商值均落在 i64 内,fptosi 安全)。
-          let q = temp(); let qi = temp(); let qf = temp(); let m = temp();
-          line("  " + q + " = fdiv double " + f1 + ", " + f2);
-          line("  " + qi + " = fptosi double " + q + " to i64");
-          line("  " + qf + " = sitofp i64 " + qi + " to double");
-          line("  " + m + " = fmul double " + f2 + ", " + qf);
-          line("  " + rr + " = fsub double " + f1 + ", " + m);
-        } else {
-          let fop = if op == "+" { "fadd" } else if op == "-" { "fsub" } else if op == "*" { "fmul" } else { "fdiv" };
-          line("  " + rr + " = " + fop + " double " + f1 + ", " + f2);
-        }
-        let b = allocBox("1");
-        let bpay = temp();
-        line("  " + bpay + " = getelementptr i8, ptr " + b + ", i64 8");
-        line("  store double " + rr + ", ptr " + bpay);
-        b;
-      };
+    let bothNum = node.left.type == "Number" && node.right.type == "Number";
+    let isDivMod = op == "/" || op == "%";
+    if bothNum && !isDivMod {
+      let L = emitExpr(node.left);
+      let R = emitExpr(node.right);
+      emitNumOp(op, L, R);
     } else {
-      // 比较:== oeq,!= une,< olt,<= ole,> ogt,>= oge
-      let cmp = if op == "==" { "oeq" } else if op == "!=" { "une" } else if op == "<" { "olt" } else if op == "<=" { "ole" } else if op == ">" { "ogt" } else { "oge" };
-      let c = temp(); let c2 = temp();
-      line("  " + c + " = fcmp " + cmp + " double " + f1 + ", " + f2);
-      line("  " + c2 + " = zext i1 " + c + " to i64");
-      let b = allocBox("3");
-      let bpay = temp();
-      line("  " + bpay + " = getelementptr i8, ptr " + b + ", i64 8");
-      line("  store i64 " + c2 + ", ptr " + bpay);
-      b;
+      let L = emitExpr(node.left);
+      let R = emitExpr(node.right);
+      let t1 = temp(); let t2 = temp(); let c1 = temp(); let c2 = temp(); let c3 = temp();
+      line("  " + t1 + " = load i64, ptr " + L);
+      line("  " + t2 + " = load i64, ptr " + R);
+      line("  " + c1 + " = icmp eq i64 " + t1 + ", 1");
+      line("  " + c2 + " = icmp eq i64 " + t2 + ", 1");
+      line("  " + c3 + " = and i1 " + c1 + ", " + c2);
+      let lNum = lbl(); let lDisp = lbl(); let lMerge = lbl();
+      line("  br i1 " + c3 + ", label %" + lNum + ", label %" + lDisp);
+      line(lNum + ":");
+      curLbl = lNum;
+      let numRes = emitNumOp(op, L, R);
+      let numLbl = curLbl;
+      line("  br label %" + lMerge);
+      line(lDisp + ":");
+      curLbl = lDisp;
+      let dispRes = emitDispOp(op, L, R);
+      let dispLbl = curLbl;
+      line("  br label %" + lMerge);
+      line(lMerge + ":");
+      curLbl = lMerge;
+      let res = temp();
+      line("  " + res + " = phi ptr [ " + numRes + ", %" + numLbl + " ], [ " + dispRes + ", %" + dispLbl + " ]");
+      res;
     };
   };
 };

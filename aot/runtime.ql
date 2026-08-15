@@ -407,40 +407,159 @@ let __arr_remove = (a, i) -> {
   };
 };
 
-let __add = (a, b) -> {
+// ---- M3 T2:操作区派发(R1/R14)----
+// 递归安全:__op_zone_error 的 "cannot apply " + word + ... STRING 拼接在编译期经
+// emitBinaryOp 派发 __op_add,__op_add 内字节拷贝算术全 NUMBER → 内联,无递归;__op_eq
+// 内 ta == 8 等为 NUMBER 比较 → 内联 fcmp;true/false 字面量 ✓。
+
+// BOOL 盒 {tag@0=3, payload@8=i64 0/1}
+let __mkbool = (b) -> {
+  let box = allocBox(3, 16);
+  let v = 0;
+  if b { v = 1; };
+  writeU64(box, 8, v);
+  box;
+};
+
+// 操作区:任一操作数 Error → TypeMismatch(cause=出错操作数)。消息格式归一化下等价 host。
+let __op_zone_error = (word, L, R) -> {
+  let tL = readU64(L, 0);
+  let tR = readU64(R, 0);
+  if tL == 8 {
+    __err_new("TypeMismatch", "cannot apply " + word + " to " + __type_of(L) + " and " + __type_of(R), L);
+  } else {
+    if tR == 8 {
+      __err_new("TypeMismatch", "cannot apply " + word + " to " + __type_of(L) + " and " + __type_of(R), R);
+    } else {
+      __err("TypeMismatch", "cannot apply " + word + " to " + __type_of(L) + " and " + __type_of(R));
+    };
+  };
+};
+
+let __op_div0 = () -> {
+  __err("DivisionByZero", "division by zero");
+};
+
+// 字符串内容相等:len 相等 + 逐字节相等(ASCII 域 len = 字符数)
+let __str_eq = (a, b) -> {
+  let la = readU64(a, 16);
+  let lb = readU64(b, 16);
+  let same = 0;
+  let ba = null;    // 分支内临时量,顶层声明
+  let bb = null;
+  let i = 0;
+  let eq = 0;
+  if la == lb {
+    ba = ql_mem_get_ptr(a, 8);
+    bb = ql_mem_get_ptr(b, 8);
+    i = 0;
+    eq = 1;
+    while i < la && eq == 1 {
+      if ql_mem_get(ba, i) != ql_mem_get(bb, i) { eq = 0; };
+      i = i + 1;
+    };
+    same = eq;
+  };
+  __mkbool(same == 1);
+};
+
+// tag 感知相等(host values_equal 镜像)。数值路径不达此(emit 内联);字符串内容、对象/数组/函数载荷同一。
+let __op_eq = (a, b) -> {
   let ta = readU64(a, 0);
   let tb = readU64(b, 0);
-  let ab = null;      // 分支/循环内临时量,全部顶层声明
+  if ta == 8 {
+    __op_zone_error("comparison", a, b);
+  } else {
+    if tb == 8 {
+      __op_zone_error("comparison", a, b);
+    } else {
+      if ta == 4 && tb == 4 {
+        true;
+      } else {
+        if ta == 2 && tb == 2 {
+          __str_eq(a, b);
+        } else {
+          if ta == 3 && tb == 3 {
+            __mkbool(readU64(a, 8) == readU64(b, 8));
+          } else {
+            if ta == 5 && tb == 5 {
+              __mkbool(readU64(a, 8) == readU64(b, 8));
+            } else {
+              if ta == 6 && tb == 6 {
+                __mkbool(readU64(a, 8) == readU64(b, 8));
+              } else {
+                if ta == 7 && tb == 7 {
+                  __mkbool(readU64(a, 16) == readU64(b, 16));
+                } else {
+                  false;
+                };
+              };
+            };
+          };
+        };
+      };
+    };
+  };
+};
+
+let __op_ne = (a, b) -> {
+  let ta = readU64(a, 0);
+  let tb = readU64(b, 0);
+  if ta == 8 {
+    __op_zone_error("comparison", a, b);
+  } else {
+    if tb == 8 {
+      __op_zone_error("comparison", a, b);
+    } else {
+      !__op_eq(a, b);
+    };
+  };
+};
+
+// 字符串拼接(STR+STR → tag-2;错误传播;其余 TypeMismatch)。数值路径不达此。
+let __op_add = (a, b) -> {
+  let ta = readU64(a, 0);
+  let tb = readU64(b, 0);
+  let ab = null;    // 分支/循环内临时量,全部顶层声明
   let al = 0;
   let bb = null;
   let bl = 0;
   let nb = null;
   let i = 0;
   let j = 0;
-  let box = null;
-  if ta == 2 && tb == 2 {
-    ab = ql_mem_get_ptr(a, 8);
-    al = readU64(a, 16);
-    bb = ql_mem_get_ptr(b, 8);
-    bl = readU64(b, 16);
-    nb = ql_alloc(al + bl);
-    i = 0;
-    while i < al {
-      ql_mem_store(nb, i, ql_mem_get(ab, i));
-      i = i + 1;
-    };
-    j = 0;
-    while j < bl {
-      ql_mem_store(nb, al + j, ql_mem_get(bb, j));
-      j = j + 1;
-    };
-    box = allocBox(2, 24);
-    ql_mem_store_ptr(box, 8, nb);
-    writeU64(box, 16, al + bl);
-    box;
+  if ta == 8 {
+    __op_zone_error("addition", a, b);
   } else {
-    __err("TypeMismatch", "Type mismatch");
+    if tb == 8 {
+      __op_zone_error("addition", a, b);
+    } else {
+      if ta == 2 && tb == 2 {
+        ab = ql_mem_get_ptr(a, 8);
+        al = readU64(a, 16);
+        bb = ql_mem_get_ptr(b, 8);
+        bl = readU64(b, 16);
+        nb = ql_alloc(al + bl);
+        i = 0;
+        while i < al {
+          ql_mem_store(nb, i, ql_mem_get(ab, i));
+          i = i + 1;
+        };
+        j = 0;
+        while j < bl {
+          ql_mem_store(nb, al + j, ql_mem_get(bb, j));
+          j = j + 1;
+        };
+        __str_new(nb, al + bl);
+      } else {
+        __op_zone_error("addition", a, b);
+      };
+    };
   };
+};
+
+// M2 遗留测试(t8_comp.ql 直接调用 __add)兼容别名。
+let __add = (a, b) -> {
+  __op_add(a, b);
 };
 
 // 值 → interned 类型标签字符串盒
