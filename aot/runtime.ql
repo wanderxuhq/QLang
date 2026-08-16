@@ -322,22 +322,27 @@ let __get_index = (c, i) -> {
       ql_mem_get_ptr(els, r * 8);
     };
   } else {
-    if tag == 2 {
-      buf = ql_mem_get_ptr(c, 8);
-      len = readU64(c, 16);
-      r = __norm_idx(i, len);
-      if readU64(r, 0) == 8 {
-        r;
-      } else {
-        chb = ql_alloc(1);
-        ql_mem_store(chb, 0, ql_mem_get(buf, r));
-        box = allocBox(2, 24);
-        ql_mem_store_ptr(box, 8, chb);
-        writeU64(box, 16, 1);
-        box;
-      };
+    if tag == 6 {
+      // M3 T5 Gap A:OBJECT 索引读 —— i 为键 STRING 盒(interned/表内键 → 指针同一命中)
+      __obj_get(c, i);
     } else {
-      __err("CannotIndex", "Cannot index");
+      if tag == 2 {
+        buf = ql_mem_get_ptr(c, 8);
+        len = readU64(c, 16);
+        r = __norm_idx(i, len);
+        if readU64(r, 0) == 8 {
+          r;
+        } else {
+          chb = ql_alloc(1);
+          ql_mem_store(chb, 0, ql_mem_get(buf, r));
+          box = allocBox(2, 24);
+          ql_mem_store_ptr(box, 8, chb);
+          writeU64(box, 16, 1);
+          box;
+        };
+      } else {
+        __err("CannotIndex", "Cannot index");
+      };
     };
   };
 };
@@ -373,10 +378,16 @@ let __set_index = (c, i, v) -> {
       };
     };
   } else {
-    if tag == 2 {
-      __err("CannotIndex", "Cannot index a string");
+    if tag == 6 {
+      // M3 T5 Gap A:OBJECT 索引写 —— i 为键 STRING 盒(interned/表内键 → 指针同一命中)
+      __obj_set(c, i, v);
+      null;
     } else {
-      __err("CannotIndex", "Cannot index");
+      if tag == 2 {
+        __err("CannotIndex", "Cannot index a string");
+      } else {
+        __err("CannotIndex", "Cannot index");
+      };
     };
   };
 };
@@ -604,33 +615,126 @@ let __type_of = (v) -> {
 };
 
 // 数字 → 字符串对象 {buf, len}:整数快速路径(host Value::to_string 镜像)
-// 非整数/|n|>=1e15 回退到整数截断 —— M2 补完整 f64 Display;v1 测试集全整数
+// 非整数:精确十进制展开(预算 ≤12 位小数,终止才渲染,否则回退整数截断)
+// M3 T5(差异项 5):10/4 → "2.5"、1/8 → "0.125"(可精确表示二进制分数与 host f64 Display 一致)
 let __itoa = (n) -> {
   let neg = n < 0;
   let x = n;
   if neg { x = -n; };
-  let k = 0;
-  let t = x;
-  while t >= 1 {
-    k = k + 1;
-    t = (t - t % 10) / 10;
-  };
-  if k == 0 { k = 1; };                       // "0"
+  let ip = x - (x % 1);          // 整数部分(Ruling T5-F:显式括号)
+  let fr = x % 1;                // 小数部分
+  let k = 0;                     // 整数部分位数
+  let t = 0;                     // 通用临时量(k 计数 / 分数展开)
   let start = 0;
-  if neg { start = 1; };
-  let total = start + k;
-  let buf = ql_alloc(total);
-  if neg { ql_mem_store(buf, 0, 45); };       // '-'
-  let v = x;
-  let d = 0;                                  // d 必须函数顶层声明(分支内 let 不受支持)
+  let total = 0;
+  let buf = null;
+  let v = 0;
+  let d = 0;                     // 顶层声明(分支/循环内只赋值)
   let i = 0;
-  while i < k {
-    d = v % 10;
-    ql_mem_store(buf, start + k - 1 - i, 48 + d);
-    v = (v - d) / 10;
-    i = i + 1;
+  let j = 0;
+  let digits = [];
+  let f = 0;
+  let budget = 12;
+  let done = 0;
+  let nd = 0;
+  let dd = null;
+  if fr == 0 {
+    // 整数快速路径(M2 逐位逻辑,逐字节不变)
+    k = 0;
+    t = ip;
+    while t >= 1 {
+      k = k + 1;
+      t = (t - t % 10) / 10;
+    };
+    if k == 0 { k = 1; };                     // "0"
+    start = 0;
+    if neg { start = 1; };
+    total = start + k;
+    buf = ql_alloc(total);
+    if neg { ql_mem_store(buf, 0, 45); };     // '-'
+    v = ip;
+    i = 0;
+    while i < k {
+      d = v % 10;
+      ql_mem_store(buf, start + k - 1 - i, 48 + d);
+      v = (v - d) / 10;
+      i = i + 1;
+    };
+    __str_new(buf, total);
+  } else {
+    // 精确十进制展开:预算 12 位小数,终止才渲染,否则回退整数截断
+    f = fr;
+    budget = 12;
+    done = 0;
+    while done == 0 {
+      if f == 0 { done = 1; }
+      else {
+        if budget <= 0 { done = 2; }
+        else {
+          t = f * 10;
+          d = t - (t % 1);
+          digits.add(d);
+          f = t - d;
+          budget = budget - 1;
+        };
+      };
+    };
+    if done == 2 {
+      // 回退:整数截断
+      k = 0;
+      t = ip;
+      while t >= 1 {
+        k = k + 1;
+        t = (t - t % 10) / 10;
+      };
+      if k == 0 { k = 1; };
+      start = 0;
+      if neg { start = 1; };
+      total = start + k;
+      buf = ql_alloc(total);
+      if neg { ql_mem_store(buf, 0, 45); };
+      v = ip;
+      i = 0;
+      while i < k {
+        d = v % 10;
+        ql_mem_store(buf, start + k - 1 - i, 48 + d);
+        v = (v - d) / 10;
+        i = i + 1;
+      };
+      __str_new(buf, total);
+    } else {
+      // 整数部分 + '.' + 逐位小数
+      k = 0;
+      t = ip;
+      while t >= 1 {
+        k = k + 1;
+        t = (t - t % 10) / 10;
+      };
+      if k == 0 { k = 1; };
+      nd = readU64(digits, 16);
+      start = 0;
+      if neg { start = 1; };
+      total = start + k + 1 + nd;
+      buf = ql_alloc(total);
+      if neg { ql_mem_store(buf, 0, 45); };
+      v = ip;
+      i = 0;
+      while i < k {
+        d = v % 10;
+        ql_mem_store(buf, start + k - 1 - i, 48 + d);
+        v = (v - d) / 10;
+        i = i + 1;
+      };
+      ql_mem_store(buf, start + k, 46);       // '.'
+      j = 0;
+      while j < nd {
+        dd = ql_mem_get_ptr(ql_mem_get_ptr(digits, 8), j * 8);
+        ql_mem_store(buf, start + k + 1 + j, 48 + dd);
+        j = j + 1;
+      };
+      __str_new(buf, total);
+    };
   };
-  __str_new(buf, total);
 };
 
 // BOOL 盒 → "true"/"false" 字节缓冲
@@ -926,6 +1030,68 @@ let __obj_keys = (o) -> {
   res;
 };
 
+// 对象值收集(遍历桶表;值为 tag-2 盒等)→ tag-5 数组盒
+// Ruling T5-A:T4 只定义了 __obj_keys,这里补 __obj_values 镜像(收集值盒 table[j*16+8])
+let __obj_values = (o) -> {
+  let table = ql_mem_get_ptr(o, 8);
+  let cap = readU64(o, 16);
+  let res = null;
+  let els = null;
+  let j = 0;
+  let k = null;
+  let v = null;
+  let n = 0;
+  res = allocBox(5, 24);
+  els = ql_alloc(8 * cap);
+  ql_mem_store_ptr(res, 8, els);
+  writeU64(res, 16, 0);
+  j = 0;
+  while j < cap {
+    k = ql_mem_get_ptr(table, j * 16);
+    if k != __EMPTY {
+      v = ql_mem_get_ptr(table, j * 16 + 8);
+      ql_mem_store_ptr(els, n * 8, v);
+      n = n + 1;
+    };
+    j = j + 1;
+  };
+  writeU64(res, 16, n);
+  res;
+};
+
+// std.Object.merge(o1)(o2) 柯里化:o1 键序 + o2 键序复制进新对象(键为表内键 → 指针同一)
+let __obj_merge = (o1) -> (o2) -> {
+  let out = __obj_new();
+  let k1 = __obj_keys(o1);
+  let i = 0;
+  let k = null;     // 循环内临时量,顶层声明
+  while i < readU64(k1, 16) {
+    k = __get_index(k1, i);
+    __obj_set(out, k, __obj_get(o1, k));
+    i = i + 1;
+  };
+  let k2 = __obj_keys(o2);
+  let j = 0;
+  while j < readU64(k2, 16) {
+    k = __get_index(k2, j);
+    __obj_set(out, k, __obj_get(o2, k));
+    j = j + 1;
+  };
+  out;
+};
+
+// std.Object.hasOwn(o)(k) 柯里化:键缺失 → __obj_get 返回 tag-8 ERROR 盒 → false
+let __obj_hasown = (o) -> (k) -> {
+  let v = __obj_get(o, k);
+  readU64(v, 0) != 8;
+};
+
+// std.Object.get(o)(k) 柯里化:键缺失 → null(host fields.get → Void 镜像)
+let __obj_get2 = (o) -> (k) -> {
+  let v = __obj_get(o, k);
+  if readU64(v, 0) == 8 { null; } else { v; };
+};
+
 // Object(Type):所有键通过 key_check(host object_check_keys 镜像)
 let __obj_check_keys = (kc, o) -> {
   let tag = readU64(o, 0);
@@ -1219,6 +1385,55 @@ let __error_tostring = (err) -> {
   };
 };
 
+// std.Number.isNaN(n):NUMBER 盒 → n != n(NaN 探测,inline fcmp une);非数值 → false
+let __num_isnan = (n) -> {
+  if readU64(n, 0) == 1 { n != n; } else { false; };
+};
+
+// std.Number.isFinite(n):NUMBER 盒 → NaN 或 inf-inf → 非有限(host n.is_finite 镜像)
+let __num_isfinite = (n) -> {
+  if readU64(n, 0) == 1 { !(n != n || (n - n) != (n - n)); } else { false; };
+};
+
+// std.Number.parseFloat(s):trim 空白 + 可选 '-' + 数字 + 可选 '.' 小数;失败 → __mknum_from_zero
+// (失败路径白名单外,已知发散不阻塞;成功路径数值正确)
+let __parse_float = (s) -> {
+  let buf = ql_mem_get_ptr(s, 8);
+  let len = readU64(s, 16);
+  let i = 0;
+  let neg = 0;
+  let acc = 0;
+  let any = 0;
+  let fr = 0;
+  let scale = 1;
+  let v = 0;
+  while i < len && ql_mem_get(buf, i) == 32 { i = i + 1; };
+  if i < len && ql_mem_get(buf, i) == 45 { neg = 1; i = i + 1; };
+  while i < len && ql_mem_get(buf, i) >= 48 && ql_mem_get(buf, i) <= 57 {
+    acc = acc * 10 + (ql_mem_get(buf, i) - 48);
+    any = 1;
+    i = i + 1;
+  };
+  if i < len && ql_mem_get(buf, i) == 46 {
+    i = i + 1;
+    while i < len && ql_mem_get(buf, i) >= 48 && ql_mem_get(buf, i) <= 57 {
+      fr = fr * 10 + (ql_mem_get(buf, i) - 48);
+      scale = scale * 10;
+      any = 1;
+      i = i + 1;
+    };
+  };
+  if any == 0 {
+    __mknum_from_zero();          // NaN 不可廉价产 → 用 0 占位(已知发散,白名单外)
+  } else {
+    v = acc + fr / scale;
+    if neg == 1 { -v; } else { v; };
+  };
+};
+
+// 前向引用安全(M2 pre-scan):__parse_float 的失败占位
+let __mknum_from_zero = () -> { 0; };
+
 // ---- 类型单例 + std(init 期执行的对象字面量;置于文件最末尾,遵守 init-time forward-ref 纪律)----
 let Number = { check: __pred_number };
 let String = { check: __pred_string };
@@ -1232,7 +1447,23 @@ let Never = { check: __pred_never };
 let Error = { check: __pred_error };
 let Type = { check: __pred_type, of: __type_of_val, make: __type_make };
 let stdError = { raise: __error_raise, toString: __error_tostring };
-let std = { Type: Type, Error: stdError };
+// M3 T5:std.Object / std.Number(host create_object_module/create_number_module 镜像)
+// Ruling T5-B:field 必须非柯里化 2 参(host arity-2);merge/hasOwn/get 保持柯里化
+let stdObject = {
+  keys: __obj_keys,
+  values: __obj_values,
+  merge: __obj_merge,
+  hasOwn: __obj_hasown,
+  get: __obj_get2,
+  field: (o, k) -> { __obj_get(o, k); },
+};
+let stdNumber = {
+  toString: __itoa,
+  isNaN: __num_isnan,
+  isFinite: __num_isfinite,
+  parseFloat: __parse_float,
+};
+let std = { Type: Type, Error: stdError, Object: stdObject, Number: stdNumber };
 let isError = __isError;
 let Array = __arr_ctor;
 let Object = __obj_ctor;
