@@ -799,7 +799,7 @@ let emitCall = (node) -> {
   // readU64/writeU64/allocBox/print/println)接受错误值/原始缓冲(host accepts_errors 镜像;
   // 且 readU64(err,0) 必须能读 tag —— 否则 __op_eq/__isError 对错误值无限递归),豁免;
   // MemberAccess callee 不走检查。
-  let errAccepting = cname == "print" || cname == "println" || cname == "readU64" || cname == "writeU64" || cname == "allocBox" || (cname.length >= 2 && cname[0] == "_" && cname[1] == "_");
+  let errAccepting = cname == "print" || cname == "println" || cname == "readU64" || cname == "writeU64" || cname == "allocBox" || cname == "isError" || (cname.length >= 2 && cname[0] == "_" && cname[1] == "_");
   let isLeaf = calleeIsId && (cname == "ql_alloc" || cname == "ql_write" || cname == "ql_mem_get" || cname == "ql_mem_store" || cname == "ql_mem_get_ptr" || cname == "ql_mem_store_ptr" || cname == "ql_exit");
   if isLeaf {
     if cname == "ql_alloc" {

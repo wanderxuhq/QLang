@@ -1,0 +1,24 @@
+// M3 t9_type:类型系统(3-way;host/native 逐字节一致)
+println(isError(42));
+let T = std.Type.make((v) -> std.Type.of(v) == Number);
+println(T.check(5));
+println(!T.check("s"));
+println(std.Type.of(42) == Number);
+println(std.Type.of("s") == String);
+println(std.Type.of(Number) == std.Type);
+println(std.Type.of(std.Type) == std.Type);
+let A3 = Array({ length: 3, element: Number });
+println(A3.check([1, 2, 3]));
+println(!A3.check([1, 2]));
+println(!A3.check([1, "s"]));
+let O = Object({ a: Number });
+println(O.check({ a: 1 }));
+println(!O.check({ a: "s" }));
+println(!O.check({}));
+let P = Object((o) -> o.a > 0);
+println(P.check({ a: 1 }));
+println(!P.check({ a: -1 }));
+let e = std.Error.raise("TypeMismatch", "boom", null);
+println(isError(e));
+println(e.type == "TypeMismatch");
+println(e.message == "boom");

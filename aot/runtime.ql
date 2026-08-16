@@ -275,11 +275,18 @@ let __get_field = (o, key) -> {
   if tag == 6 {
     __obj_get(o, key);
   } else {
-    if tag == 5 {
-      __err("UndefinedField", "Undefined field");
+    if tag == 8 {
+      // M3 T4:ERROR 盒读域(host error_read_zone 镜像):.type→kind@8、.message→message@16、
+      // .line/.col→零盒@24/@32、.cause→cause@40;未知域 → UndefinedField。
+      if key == "type" { ql_mem_get_ptr(o, 8); }
+      else { if key == "message" { ql_mem_get_ptr(o, 16); }
+      else { if key == "line" { ql_mem_get_ptr(o, 24); }
+      else { if key == "col" { ql_mem_get_ptr(o, 32); }
+      else { if key == "cause" { ql_mem_get_ptr(o, 40); }
+      else { __err("UndefinedField", "Undefined field: " + key); }; }; }; }; };
     } else {
-      if tag == 2 {
-        __err("NotAnObject", "Not an object");
+      if tag == 5 {
+        __err("UndefinedField", "Undefined field");
       } else {
         __err("NotAnObject", "Not an object");
       };
@@ -742,3 +749,490 @@ let __exit_error = (e) -> {
   ql_exit(1);
   null;
 };
+
+// ---- M3 T4:类型系统 + std.Type + Array/Object 构造器 + std.Error(R4/R18)----
+// 类型值识别:tag6 对象且带 tag7 函数 check 字段(host types.rs:16-27 is_type_value 镜像)。
+// 全部函数定义为「顶层 let」(仅建闭包盒,无 init 副作用);单例与 std 对象字面量置于本文件
+// 最末尾(init 期执行的对象字面量),遵守 init-time forward-reference 纪律。
+let __is_type_value = (v) -> {
+  let tag = readU64(v, 0);
+  let c = null;
+  if tag == 6 {
+    c = __obj_get(v, "check");
+    if readU64(c, 0) == 8 {
+      false;
+    } else {
+      readU64(c, 0) == 7;
+    };
+  } else {
+    false;
+  };
+};
+
+// 类型单例谓词(host builtin_type 镜像)。Function = tag7 或带 check 的对象(419 断言依赖)。
+let __pred_number = (v) -> { readU64(v, 0) == 1; };
+let __pred_string = (v) -> { readU64(v, 0) == 2; };
+let __pred_boolean = (v) -> { readU64(v, 0) == 3; };
+let __pred_null = (v) -> { readU64(v, 0) == 4; };
+let __pred_array = (v) -> { readU64(v, 0) == 5; };
+let __pred_object = (v) -> { readU64(v, 0) == 6 && !__is_type_value(v); };
+let __pred_function = (v) -> { readU64(v, 0) == 7 || __is_type_value(v); };
+let __pred_any = (v) -> { true; };
+let __pred_never = (v) -> { false; };
+let __pred_error = (v) -> { readU64(v, 0) == 8; };
+let __pred_type = (v) -> { __is_type_value(v); };
+
+// 类型对象构造 {check: cf}(普通 tag6 对象,非受保护;host user_type 镜像)
+let __mk_otype = (cf) -> {
+  let o = __obj_new();
+  __obj_set(o, "check", cf);
+  o;
+};
+
+// Type.make(f)(host types.rs:148-159 镜像):f 非 tag7 函数 → TypeMismatch
+let __type_make = (f) -> {
+  if readU64(f, 0) == 7 {
+    __mk_otype(f);
+  } else {
+    __err("TypeMismatch", "Type.make: expected a function");
+  };
+};
+
+// Type.of(v)(host types.rs:129-147 镜像):tag→类型单例;Object 带 check → Type;否则 AnyObject。
+let __type_of_val = (v) -> {
+  let tag = readU64(v, 0);
+  if tag == 1 {
+    Number;
+  } else {
+    if tag == 2 {
+      String;
+    } else {
+      if tag == 3 {
+        Boolean;
+      } else {
+        if tag == 4 {
+          Null;
+        } else {
+          if tag == 5 {
+            AnyArray;
+          } else {
+            if tag == 7 {
+              Function;
+            } else {
+              if tag == 8 {
+                Error;
+              } else {
+                if __is_type_value(v) {
+                  Type;
+                } else {
+                  AnyObject;
+                };
+              };
+            };
+          };
+        };
+      };
+    };
+  };
+};
+
+// 数组类型:所有元素通过谓词(host all_check 镜像:任一元素失败/错误 → false)
+let __arr_elem_check = (cf, a) -> {
+  let tag = readU64(a, 0);
+  let ok = 0;
+  let els = null;
+  let len = 0;
+  let i = 0;
+  let r = null;
+  if tag == 5 {
+    els = ql_mem_get_ptr(a, 8);
+    len = readU64(a, 16);
+    ok = 1;
+    i = 0;
+    while ok == 1 && i < len {
+      r = cf(ql_mem_get_ptr(els, i * 8));
+      if readU64(r, 0) == 8 {
+        ok = 0;
+      } else {
+        if readU64(r, 8) == 0 {
+          ok = 0;
+        } else {
+          i = i + 1;
+        };
+      };
+    };
+  };
+  __mkbool(ok == 1);
+};
+
+// 数组类型:逐位置检查(host ArrayMode::Tuple 镜像):长度相等 + 每位通过
+let __tuple_check = (checks, a) -> {
+  let tag = readU64(a, 0);
+  let ok = 0;
+  let els = null;
+  let len = 0;
+  let clen = 0;
+  let i = 0;
+  let r = null;
+  let ce = null;
+  if tag == 5 {
+    els = ql_mem_get_ptr(a, 8);
+    len = readU64(a, 16);
+    clen = readU64(checks, 16);
+    if len == clen {
+      ok = 1;
+      i = 0;
+      while ok == 1 && i < len {
+        ce = ql_mem_get_ptr(ql_mem_get_ptr(checks, 8), i * 8);
+        r = ce(ql_mem_get_ptr(els, i * 8));
+        if readU64(r, 0) == 8 {
+          ok = 0;
+        } else {
+          if readU64(r, 8) == 0 {
+            ok = 0;
+          } else {
+            i = i + 1;
+          };
+        };
+      };
+    };
+  };
+  __mkbool(ok == 1);
+};
+
+// 对象键收集(遍历桶表;键为 tag-2 STRING 盒)→ tag-5 数组盒
+let __obj_keys = (o) -> {
+  let table = ql_mem_get_ptr(o, 8);
+  let cap = readU64(o, 16);
+  let res = null;
+  let els = null;
+  let j = 0;
+  let k = null;
+  let n = 0;
+  res = allocBox(5, 24);
+  els = ql_alloc(8 * cap);
+  ql_mem_store_ptr(res, 8, els);
+  writeU64(res, 16, 0);
+  j = 0;
+  while j < cap {
+    k = ql_mem_get_ptr(table, j * 16);
+    if k != __EMPTY {
+      ql_mem_store_ptr(els, n * 8, k);
+      n = n + 1;
+    };
+    j = j + 1;
+  };
+  writeU64(res, 16, n);
+  res;
+};
+
+// Object(Type):所有键通过 key_check(host object_check_keys 镜像)
+let __obj_check_keys = (kc, o) -> {
+  let tag = readU64(o, 0);
+  let ok = 0;
+  let keys = null;
+  let kn = 0;
+  let i = 0;
+  let k = null;
+  let r = null;
+  if tag == 6 && !__is_type_value(o) {
+    keys = __obj_keys(o);
+    kn = readU64(keys, 16);
+    ok = 1;
+    i = 0;
+    while ok == 1 && i < kn {
+      k = ql_mem_get_ptr(ql_mem_get_ptr(keys, 8), i * 8);
+      r = kc(k);
+      if readU64(r, 0) == 8 {
+        ok = 0;
+      } else {
+        if readU64(r, 8) == 0 {
+          ok = 0;
+        } else {
+          i = i + 1;
+        };
+      };
+    };
+  };
+  __mkbool(ok == 1);
+};
+
+// Object(schema):每个 schema 键存在且通过对应检查(host object_check_schema 镜像)
+let __obj_check_schema = (ks, cs, o) -> {
+  let tag = readU64(o, 0);
+  let ok = 0;
+  let kn = 0;
+  let i = 0;
+  let fv = null;
+  let ce = null;
+  let r = null;
+  if tag == 6 && !__is_type_value(o) {
+    ok = 1;
+    kn = readU64(ks, 16);
+    i = 0;
+    while ok == 1 && i < kn {
+      fv = __obj_get(o, ql_mem_get_ptr(ql_mem_get_ptr(ks, 8), i * 8));
+      if readU64(fv, 0) == 8 {
+        ok = 0;
+      } else {
+        ce = ql_mem_get_ptr(ql_mem_get_ptr(cs, 8), i * 8);
+        r = ce(fv);
+        if readU64(r, 0) == 8 {
+          ok = 0;
+        } else {
+          if readU64(r, 8) == 0 {
+            ok = 0;
+          } else {
+            i = i + 1;
+          };
+        };
+      };
+    };
+  };
+  __mkbool(ok == 1);
+};
+
+// Object(pred):谓词函数判对象(host object_check_predicate 镜像)
+let __obj_check_pred = (pred, o) -> {
+  let tag = readU64(o, 0);
+  let ok = 0;
+  let r = null;
+  if tag == 6 && !__is_type_value(o) {
+    r = pred(o);
+    if readU64(r, 0) == 8 {
+      ok = 0;
+    } else {
+      if readU64(r, 8) == 0 {
+        ok = 0;
+      } else {
+        ok = 1;
+      };
+    };
+  };
+  __mkbool(ok == 1);
+};
+
+// 编译 schema 成员为类型值(host compile_schema_type 镜像):类型值 → 自身;
+// {length,element} 对象 → Array 类型;普通描述符对象 → Object 类型;否则 TypeMismatch(fallback)。
+let __compile_schema = (v, fallback) -> {
+  let tag = readU64(v, 0);
+  let L = null;
+  let E = null;
+  if __is_type_value(v) {
+    v;
+  } else {
+    if tag == 6 {
+      L = __get_field(v, "length");
+      E = __get_field(v, "element");
+      if readU64(L, 0) == 8 || readU64(E, 0) == 8 {
+        __obj_ctor(v);
+      } else {
+        __arr_ctor(v);
+      };
+    } else {
+      __err("TypeMismatch", fallback);
+    };
+  };
+};
+
+// Array 构造器(host build_array_type 镜像,4 联合):Number 定长 / Type 元素 / [Type] 逐位 /
+// {length, element} 元数据(长度拷贝 element.check 的 tuple)。
+let __arr_ctor = (x) -> {
+  let tag = readU64(x, 0);
+  let cf = null;
+  let checks = null;
+  let els = null;
+  let clen = 0;
+  let i = 0;
+  let ce = null;
+  let bad = 0;
+  let nb = null;
+  let lv = null;
+  if tag == 1 {
+    if x % 1 != 0 || x < 0 {
+      __err("TypeMismatch", "Array: length must be a non-negative integer");
+    } else {
+      __mk_otype((a) -> { readU64(a, 0) == 5 && readU64(a, 16) == x; });
+    };
+  } else {
+    if __is_type_value(x) {
+      cf = __get_field(x, "check");
+      __mk_otype((a) -> { __arr_elem_check(cf, a); });
+    } else {
+      if tag == 5 {
+        els = ql_mem_get_ptr(x, 8);
+        clen = readU64(x, 16);
+        bad = 0;
+        i = 0;
+        while i < clen {
+          ce = ql_mem_get_ptr(els, i * 8);
+          if __is_type_value(ce) {
+            i = i + 1;
+          } else {
+            bad = 1;
+            i = clen;
+          };
+        };
+        if bad == 1 {
+          __err("TypeMismatch", "Array: tuple elements must all be type values");
+        } else {
+          // 校验函数指针数组须为 tag-5 Array 盒(@8=els,@16=len),供 __tuple_check 读取。
+          checks = allocBox(5, 24);
+          nb = ql_alloc(8 * clen);
+          ql_mem_store_ptr(checks, 8, nb);
+          writeU64(checks, 16, clen);
+          i = 0;
+          while i < clen {
+            ce = ql_mem_get_ptr(els, i * 8);
+            ql_mem_store_ptr(nb, i * 8, __get_field(ce, "check"));
+            i = i + 1;
+          };
+          __mk_otype((a) -> { __tuple_check(checks, a); });
+        };
+      } else {
+        if tag == 6 {
+          lv = __get_field(x, "length");
+          cf = __get_field(x, "element");
+          if readU64(lv, 0) == 8 || readU64(cf, 0) == 8 {
+            __err("TypeMismatch", "Array: metadata must have a type 'element'");
+          } else {
+            if readU64(lv, 0) != 1 || lv % 1 != 0 || lv < 0 {
+              __err("TypeMismatch", "Array: metadata must have a non-negative integer 'length'");
+            } else {
+              ce = __compile_schema(cf, "metadata must have a type 'element'");
+              if readU64(ce, 0) == 8 {
+                ce;
+              } else {
+                cf = __get_field(ce, "check");
+                // 同上:校验指针须为 tag-5 Array 盒(@8=els,@16=len)。
+                checks = allocBox(5, 24);
+                els = ql_alloc(8 * lv);
+                ql_mem_store_ptr(checks, 8, els);
+                writeU64(checks, 16, lv);
+                i = 0;
+                while i < lv {
+                  ql_mem_store_ptr(els, i * 8, cf);
+                  i = i + 1;
+                };
+                __mk_otype((a) -> { __tuple_check(checks, a); });
+              };
+            };
+          };
+        } else {
+          __err("TypeMismatch", "Array: argument must be a length, a type, a list of types, or {length, element}");
+        };
+      };
+    };
+  };
+};
+
+// Object 构造器(host build_object_type 镜像,3 联合):Type 键类型 / shape 描述符 / 谓词函数。
+let __obj_ctor = (x) -> {
+  let tag = readU64(x, 0);
+  let cf = null;
+  let ks = null;
+  let cs = null;
+  let kn = 0;
+  let i = 0;
+  let k = null;
+  let fv = null;
+  let ce = null;
+  let bad = 0;
+  let nb = null;
+  if __is_type_value(x) {
+    cf = __get_field(x, "check");
+    __mk_otype((o) -> { __obj_check_keys(cf, o); });
+  } else {
+    if tag == 6 {
+      ks = __obj_keys(x);
+      kn = readU64(ks, 16);
+      // 校验函数指针须为 tag-5 Array 盒(@8=els,@16=len),供 __obj_check_schema 读取。
+      cs = allocBox(5, 24);
+      nb = ql_alloc(8 * kn);
+      ql_mem_store_ptr(cs, 8, nb);
+      writeU64(cs, 16, kn);
+      bad = 0;
+      i = 0;
+      while i < kn {
+        k = ql_mem_get_ptr(ql_mem_get_ptr(ks, 8), i * 8);
+        fv = __obj_get(x, k);
+        if readU64(fv, 0) == 8 {
+          bad = 1;
+          ce = fv;
+          i = kn;
+        } else {
+          ce = __compile_schema(fv, "schema field is not a type value");
+          if readU64(ce, 0) == 8 {
+            bad = 1;
+            i = kn;
+          } else {
+            ql_mem_store_ptr(nb, i * 8, __get_field(ce, "check"));
+            i = i + 1;
+          };
+        };
+      };
+      if bad == 1 {
+        ce;
+      } else {
+        __mk_otype((o) -> { __obj_check_schema(ks, cs, o); });
+      };
+    } else {
+      if tag == 7 {
+        __mk_otype((o) -> { __obj_check_pred(x, o); });
+      } else {
+        __err("TypeMismatch", "Object: argument must be a type (keys), a shape object (schema), or a predicate function");
+      };
+    };
+  };
+};
+
+// std.Error.raise(kind, message, cause)(host create_error_module 镜像):kind 非字符串 → "Error";
+// message 非字符串 → 值 to_string;cause 非 Error → 忽略(null)。
+let __error_raise = (kind, message, cause) -> {
+  let k = null;
+  let m = null;
+  let c = null;
+  if readU64(kind, 0) == 2 {
+    k = kind;
+  } else {
+    k = "Error";
+  };
+  if readU64(message, 0) == 2 {
+    m = message;
+  } else {
+    m = __str(message);
+  };
+  if readU64(cause, 0) == 8 {
+    c = cause;
+  } else {
+    c = null;
+  };
+  __err_new(k, m, c);
+};
+
+// std.Error.toString(err)(host create_error_module toString 镜像;__err_chain 已在 T3 定义)
+let __error_tostring = (err) -> {
+  if readU64(err, 0) == 8 {
+    __err_chain(err);
+  } else {
+    "not an error";
+  };
+};
+
+// ---- 类型单例 + std(init 期执行的对象字面量;置于文件最末尾,遵守 init-time forward-ref 纪律)----
+let Number = { check: __pred_number };
+let String = { check: __pred_string };
+let Boolean = { check: __pred_boolean };
+let Null = { check: __pred_null };
+let AnyArray = { check: __pred_array };
+let AnyObject = { check: __pred_object };
+let Function = { check: __pred_function };
+let Any = { check: __pred_any };
+let Never = { check: __pred_never };
+let Error = { check: __pred_error };
+let Type = { check: __pred_type, of: __type_of_val, make: __type_make };
+let stdError = { raise: __error_raise, toString: __error_tostring };
+let std = { Type: Type, Error: stdError };
+let isError = __isError;
+let Array = __arr_ctor;
+let Object = __obj_ctor;
