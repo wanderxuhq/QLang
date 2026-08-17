@@ -849,11 +849,11 @@ let emitCall = (node) -> {
       line("  call void @ql_exit(i32 " + code + ")");
       emitNull();
     };
-  } else if node.callee.type == "MemberAccess" && node.callee.field == "add" && node.arguments.length >= 1 {
+  } else if node.callee.type == "MemberAccess" && node.callee.field == "add" && node.callee.object.type == "Identifier" && node.arguments.length >= 1 {
     let O = emitExpr(node.callee.object);
     let V = emitExpr(node.arguments[0]);
     emitCallRegs("__arr_add", [O, V]);
-  } else if node.callee.type == "MemberAccess" && node.callee.field == "remove" && node.arguments.length >= 1 {
+  } else if node.callee.type == "MemberAccess" && node.callee.field == "remove" && node.callee.object.type == "Identifier" && node.arguments.length >= 1 {
     let O = emitExpr(node.callee.object);
     let I = emitExpr(node.arguments[0]);
     emitCallRegs("__arr_remove", [O, I]);

@@ -509,7 +509,8 @@ let __op_eq = (a, b) -> {
                 if ta == 7 && tb == 7 {
                   __mkbool(readU64(a, 16) == readU64(b, 16));
                 } else {
-                  false;
+                  // Ruling T6-C:双 NUMBER 盒 → 内联 fcmp(emitBinaryOp 双 tag1 路径,不递归)
+                  if ta == 1 && tb == 1 { a == b; } else { false; };
                 };
               };
             };
@@ -1463,7 +1464,296 @@ let stdNumber = {
   isFinite: __num_isfinite,
   parseFloat: __parse_float,
 };
-let std = { Type: Type, Error: stdError, Object: stdObject, Number: stdNumber };
+// ---- M3 T6:std.Array / std.String 辅助(host stdlib/mod.rs create_array_module/
+// create_string_module 镜像)。Ruling T6-H:内部辅助 __arr_indexof/__arr_join 非柯里化
+// (链式柯里化调用 f(a)(b) 在 native emitNull 丢弃);柯里化成员为薄包装(体内一次 Call,无链)。
+// Ruling T6-B:分支/循环内无 let,临时量全部顶层声明。
+let __arr_push = (a) -> (v) -> {
+  __arr_add(a, v);
+  readU64(a, 16);
+};
+let __arr_pop = (a) -> () -> {
+  let n = readU64(a, 16);
+  let v = null;        // 分支内临时量,顶层声明
+  if n == 0 {
+    null;
+  } else {
+    v = __get_index(a, n - 1);
+    __arr_remove(a, n - 1);
+    v;
+  };
+};
+let __arr_indexof = (a, v) -> {
+  let n = readU64(a, 16);
+  let i = 0;
+  let found = -1;
+  while i < n && found < 0 {
+    if __op_eq(__get_index(a, i), v) { found = i; };
+    i = i + 1;
+  };
+  found;
+};
+let __arr_join = (a, sep) -> {
+  let n = readU64(a, 16);
+  let out = "";
+  let i = 0;
+  while i < n {
+    if i > 0 { out = out + __str(sep); };
+    out = out + __str(__get_index(a, i));
+    i = i + 1;
+  };
+  out;
+};
+// Ruling T6-A:toString = `[` + 逐元素 __str + `", "` 分隔 + `]`(host JS 风格)
+let __arr_tostring = (a) -> {
+  let n = readU64(a, 16);
+  let out = "[";
+  let i = 0;
+  while i < n {
+    if i > 0 { out = out + ", "; };
+    out = out + __str(__get_index(a, i));
+    i = i + 1;
+  };
+  out + "]";
+};
+// Ruling T6-J:reverse 返回新数组(host reversed.clone()+reverse),原数组不变
+let __arr_reverse = (a) -> {
+  let n = readU64(a, 16);
+  let out = [];
+  let i = 0;
+  while i < n {
+    out.add(__get_index(a, n - 1 - i));
+    i = i + 1;
+  };
+  out;
+};
+let __arr_concat = (a) -> (b) -> {
+  let out = [];
+  let i = 0;
+  while i < readU64(a, 16) {
+    out.add(__get_index(a, i));
+    i = i + 1;
+  };
+  let j = 0;
+  while j < readU64(b, 16) {
+    out.add(__get_index(b, j));
+    j = j + 1;
+  };
+  out;
+};
+// ---- std.String 辅助(全 ASCII 字节操作;Ruling T6-E)----
+let __s_len = (s) -> { readU64(s, 16); };
+let __s_concat = (a, b) -> { __op_add(a, b); };
+let __s_trim = (s) -> {
+  let buf = ql_mem_get_ptr(s, 8);
+  let len = readU64(s, 16);
+  let i = 0;
+  while i < len && ql_mem_get(buf, i) == 32 { i = i + 1; };
+  let j = len;
+  while j > i && ql_mem_get(buf, j - 1) == 32 { j = j - 1; };
+  let nb = ql_alloc(j - i);
+  let k = 0;
+  while k < j - i {
+    ql_mem_store(nb, k, ql_mem_get(buf, i + k));
+    k = k + 1;
+  };
+  __str_new(nb, j - i);
+};
+let __s_case = (s, up) -> {
+  let buf = ql_mem_get_ptr(s, 8);
+  let len = readU64(s, 16);
+  let nb = ql_alloc(len);
+  let i = 0;
+  let c = 0;           // 循环内临时量,顶层声明
+  while i < len {
+    c = ql_mem_get(buf, i);
+    if up {
+      if c >= 97 && c <= 122 { ql_mem_store(nb, i, c - 32); }
+      else { ql_mem_store(nb, i, c); };
+    } else {
+      if c >= 65 && c <= 90 { ql_mem_store(nb, i, c + 32); }
+      else { ql_mem_store(nb, i, c); };
+    };
+    i = i + 1;
+  };
+  __str_new(nb, len);
+};
+let __s_includes = (hay) -> (needle) -> {
+  let hb = ql_mem_get_ptr(hay, 8);
+  let hlen = readU64(hay, 16);
+  let nb = ql_mem_get_ptr(needle, 8);
+  let nlen = readU64(needle, 16);
+  let found = 0;
+  let i = 0;
+  let j = 0;           // 循环内临时量,顶层声明
+  let eq = 1;
+  while i <= hlen - nlen && found == 0 {
+    j = 0;
+    eq = 1;
+    while j < nlen && eq == 1 {
+      if ql_mem_get(hb, i + j) != ql_mem_get(nb, j) { eq = 0; };
+      j = j + 1;
+    };
+    if eq == 1 { found = 1; };
+    i = i + 1;
+  };
+  found == 1;
+};
+let __s_replace = (s) -> (from) -> (to) -> {
+  let sb = ql_mem_get_ptr(s, 8);
+  let sl = readU64(s, 16);
+  let fb = ql_mem_get_ptr(from, 8);
+  let fl = readU64(from, 16);
+  let tb = ql_mem_get_ptr(to, 8);
+  let tl = readU64(to, 16);
+  let pos = -1;
+  let i = 0;
+  let j = 0;           // 循环内临时量,顶层声明
+  let eq = 1;
+  let out = null;
+  let k = 0;
+  let m = 0;
+  let r = 0;
+  while i <= sl - fl && pos < 0 {
+    j = 0;
+    eq = 1;
+    while j < fl && eq == 1 {
+      if ql_mem_get(sb, i + j) != ql_mem_get(fb, j) { eq = 0; };
+      j = j + 1;
+    };
+    if eq == 1 { pos = i; };
+    i = i + 1;
+  };
+  // 未找到 → 返回原串(host str::replace 无匹配镜像);避免负偏移越界写
+  if pos < 0 {
+    s;
+  } else {
+    out = ql_alloc(sl - fl + tl);
+    while k < pos { ql_mem_store(out, k, ql_mem_get(sb, k)); k = k + 1; };
+    while m < tl { ql_mem_store(out, pos + m, ql_mem_get(tb, m)); m = m + 1; };
+    while r < sl - fl - pos { ql_mem_store(out, pos + tl + r, ql_mem_get(sb, pos + fl + r)); r = r + 1; };
+    __str_new(out, sl - fl + tl);
+  };
+};
+let __s_repeat = (s) -> (n) -> {
+  let sb = ql_mem_get_ptr(s, 8);
+  let sl = readU64(s, 16);
+  let nb = ql_alloc(sl * n);
+  let i = 0;
+  let j = 0;           // 循环内临时量,顶层声明
+  while i < n {
+    j = 0;
+    while j < sl { ql_mem_store(nb, i * sl + j, ql_mem_get(sb, j)); j = j + 1; };
+    i = i + 1;
+  };
+  __str_new(nb, sl * n);
+};
+let __s_sw = (s) -> (prefix) -> {
+  let sb = ql_mem_get_ptr(s, 8);
+  let pb = ql_mem_get_ptr(prefix, 8);
+  let pl = readU64(prefix, 16);
+  let i = 0;           // 分支内临时量,顶层声明
+  let eq = 1;
+  if readU64(s, 16) < pl {
+    false;
+  } else {
+    i = 0;
+    eq = 1;
+    while i < pl && eq == 1 {
+      if ql_mem_get(sb, i) != ql_mem_get(pb, i) { eq = 0; };
+      i = i + 1;
+    };
+    eq == 1;
+  };
+};
+let __s_ew = (s) -> (suffix) -> {
+  let sb = ql_mem_get_ptr(s, 8);
+  let sl = readU64(s, 16);
+  let fb = ql_mem_get_ptr(suffix, 8);
+  let fl = readU64(suffix, 16);
+  let i = 0;           // 分支内临时量,顶层声明
+  let eq = 1;
+  if sl < fl {
+    false;
+  } else {
+    i = 0;
+    eq = 1;
+    while i < fl && eq == 1 {
+      if ql_mem_get(sb, sl - fl + i) != ql_mem_get(fb, i) { eq = 0; };
+      i = i + 1;
+    };
+    eq == 1;
+  };
+};
+let __s_split = (s) -> (sep) -> {
+  let sb = ql_mem_get_ptr(s, 8);
+  let sl = readU64(s, 16);
+  let pb = ql_mem_get_ptr(sep, 8);
+  let pl = readU64(sep, 16);
+  let parts = [];
+  let cur = [];
+  let i = 0;
+  let j = 0;           // 循环内临时量,顶层声明
+  let eq = 1;
+  let b = null;
+  let k = 0;
+  while i < sl {
+    j = 0;
+    eq = 1;
+    while j < pl && i + j < sl && eq == 1 {
+      if ql_mem_get(sb, i + j) != ql_mem_get(pb, j) { eq = 0; };
+      j = j + 1;
+    };
+    if eq == 1 && j == pl {
+      b = ql_alloc(cur.length);
+      k = 0;
+      while k < cur.length { ql_mem_store(b, k, cur[k]); k = k + 1; };
+      parts.add(__str_new(b, cur.length));
+      cur = [];
+      i = i + pl;
+    } else {
+      cur.add(ql_mem_get(sb, i));
+      i = i + 1;
+    };
+  };
+  b = ql_alloc(cur.length);
+  k = 0;
+  while k < cur.length { ql_mem_store(b, k, cur[k]); k = k + 1; };
+  parts.add(__str_new(b, cur.length));
+  parts;
+};
+let stdArray = {
+  length: (a) -> { readU64(a, 16); },
+  toString: (a) -> { __arr_tostring(a); },
+  add: (a) -> (v) -> { __arr_add(a, v); },
+  remove: (a) -> (i) -> { __arr_remove(a, i); },
+  push: __arr_push,
+  pop: __arr_pop,
+  get: (a) -> (i) -> { __get_index(a, i); },
+  indexOf: (a) -> (v) -> { __arr_indexof(a, v); },
+  includes: (a) -> (v) -> { __arr_indexof(a, v) >= 0; },
+  join: (a) -> (sep) -> { __arr_join(a, sep); },
+  reverse: __arr_reverse,
+  concat: __arr_concat,
+  at: (a, i) -> { __get_index(a, i); },
+};
+let stdString = {
+  length: __s_len,
+  concat: __s_concat,
+  toString: (s) -> { s; },
+  trim: __s_trim,
+  toUpperCase: (s) -> { __s_case(s, true); },
+  toLowerCase: (s) -> { __s_case(s, false); },
+  includes: __s_includes,
+  replace: __s_replace,
+  split: __s_split,
+  repeat: __s_repeat,
+  startsWith: __s_sw,
+  endsWith: __s_ew,
+  join: (a) -> (sep) -> { __arr_join(a, sep); },
+  at: (s, i) -> { __get_index(s, i); },
+};
+let std = { Type: Type, Error: stdError, Object: stdObject, Number: stdNumber, Array: stdArray, String: stdString };
 let isError = __isError;
 let Array = __arr_ctor;
 let Object = __obj_ctor;
