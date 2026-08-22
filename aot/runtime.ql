@@ -1753,7 +1753,107 @@ let stdString = {
   join: (a) -> (sep) -> { __arr_join(a, sep); },
   at: (s, i) -> { __get_index(s, i); },
 };
-let std = { Type: Type, Error: stdError, Object: stdObject, Number: stdNumber, Array: stdArray, String: stdString };
+// ---- M3 T7:std.Math(host stdlib/mod.rs create_math_module 纯 QLang 镜像)----
+// Ruling T7-A:pow 保持柯里化 (base) -> (exp)(host 同构;链式调用 f(a)(b) 在 native emitCall
+// 返回 nullbox —— pre-existing,测试一律 let 绑定首参)。
+// Ruling T7-B:max/min 用固定 2 参(host 是变参 native;boot parser 无 rest 参数)。
+// Ruling T7-C:不含 PI/E(__itoa 12 位小数预算无法精确渲染 → 白名单外)。
+// Ruling T7-D:random 恒返 0.5(host 为真实随机 → NATIVE-only,不进任何 3-way 测试)。
+// Ruling T7-E:trunc(n) = n - n % 1 精确(fptosi 截断),floor/ceil/round 全产生精确整数
+// → __itoa 整数快速路径。round = half away from zero(host f64::round)。
+// Ruling T7-F:sqrt 牛顿 10 次(完美平方精确收敛;n==0 时循环内 DivisionByZero 错误盒静默
+// 传播、由末尾 if n == 0 短路返回 0);sin/cos 泰勒 8 项(白名单只用 x=0)。
+// Ruling T7-G:pow 迭代幂,白名单只测小非负整数指数(负/小数指数发散;大指数挂死)。
+// 函数体内 let 全部顶层声明(T7-H),分支/循环内只赋值;无 return;无 else-if。
+let __math_abs = (n) -> { if n < 0 { -n; } else { n; }; };
+let __math_trunc = (n) -> { n - n % 1; };
+let __math_floor = (n) -> {
+  let t = __math_trunc(n);
+  if n < t { t - 1; } else { t; };
+};
+let __math_ceil = (n) -> { -__math_floor(-n); };
+let __math_round = (n) -> {
+  // half away from zero(host f64::round):round(2.5)=3、round(-2.5)=-3
+  let a = __math_abs(n);
+  let f = __math_floor(a);
+  let r = 0;
+  if a - f >= 0.5 { r = f + 1; } else { r = f; };
+  if n < 0 { -r; } else { r; };
+};
+let __math_sqrt = (n) -> {
+  // 牛顿迭代 ~10 次;n==0 → 0;n<0 → 发散(白名单外)
+  let x = n / 2;
+  let i = 0;
+  while i < 10 {
+    x = (x + n / x) / 2;
+    i = i + 1;
+  };
+  if n == 0 { 0; } else { x; };
+};
+let __math_pow = (a) -> (b) -> {
+  // 迭代式幂(白名单:小非负整数指数)
+  let base = a;
+  let exp = b;
+  let acc = 1;
+  while exp > 0 {
+    acc = acc * base;
+    exp = exp - 1;
+  };
+  acc;
+};
+let __math_max = (a, b) -> { if a > b { a; } else { b; }; };
+let __math_min = (a, b) -> { if a < b { a; } else { b; }; };
+let __math_random = () -> {
+  // 恒定值(NATIVE-only,host 为真实随机,不进白名单)
+  0.5;
+};
+let __math_sin = (x) -> {
+  // 泰勒 ~8 项;白名单只用 sin(0)=0
+  let r = 0;
+  let t = x;
+  let n = 1;
+  let sgn = 1;
+  let k = 0;
+  while k < 8 {
+    r = r + sgn * t;
+    t = t * x * x / ((2 * n) * (2 * n + 1));
+    sgn = -sgn;
+    n = n + 1;
+    k = k + 1;
+  };
+  r;
+};
+let __math_cos = (x) -> {
+  // 泰勒 ~8 项;白名单只用 cos(0)=1
+  let r = 1;
+  let t = 1;
+  let sgn = -1;
+  let n = 1;
+  let k = 0;
+  while k < 8 {
+    t = t * x * x / ((2 * n - 1) * (2 * n));
+    r = r + sgn * t;
+    sgn = -sgn;
+    n = n + 1;
+    k = k + 1;
+  };
+  r;
+};
+let stdMath = {
+  abs: __math_abs,
+  floor: __math_floor,
+  ceil: __math_ceil,
+  round: __math_round,
+  trunc: __math_trunc,
+  sqrt: __math_sqrt,
+  pow: __math_pow,
+  max: __math_max,
+  min: __math_min,
+  random: __math_random,
+  sin: __math_sin,
+  cos: __math_cos,
+};
+let std = { Type: Type, Error: stdError, Object: stdObject, Number: stdNumber, Array: stdArray, String: stdString, Math: stdMath };
 let isError = __isError;
 let Array = __arr_ctor;
 let Object = __obj_ctor;
