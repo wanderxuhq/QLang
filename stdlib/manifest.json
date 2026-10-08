@@ -1,0 +1,39 @@
+{
+  "modules": [
+    "unicode_data.ql",
+    "string.ql",
+    "array.ql",
+    "math.ql",
+    "decimal.ql",
+    "number.ql",
+    "object.ql",
+    "json_quote.ql",
+    "json.ql"
+  ],
+  "exports": [
+    {
+      "name": "String",
+      "value": "StringLibrary"
+    },
+    {
+      "name": "Array",
+      "value": "ArrayLibrary"
+    },
+    {
+      "name": "Math",
+      "value": "MathLibrary"
+    },
+    {
+      "name": "Number",
+      "value": "NumberLibrary"
+    },
+    {
+      "name": "Object",
+      "value": "ObjectLibrary"
+    },
+    {
+      "name": "JSON",
+      "value": "JSONLibrary"
+    }
+  ]
+}

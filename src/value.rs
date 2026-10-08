@@ -129,6 +129,9 @@ pub struct FunctionValue {
     pub parameters: Rc<Vec<Parameter>>,
     pub body: Rc<Block>,
     pub closure: EnvRef,
+    /// Definition-site file/source, retained across module boundaries.
+    pub source_path: String,
+    pub source: Rc<str>,
     /// Parameter annotation evaluated at definition time: (type value, source text); None = the parameter has no annotation.
     pub param_types: Rc<Vec<Option<(Value, String)>>>,
     /// Pre-built Rc<str> parameter-name keys: per-call param binding clones the Rc

@@ -1,0 +1,14 @@
+let saved = null;
+let identity = (value) -> value;
+let save = (value) -> { saved = value; null; };
+let read = () -> saved;
+let call = (f, a, b) -> f(a, b);
+let callAfterWrite = (f, o) -> { o.n = 40; let result = f(o); {object: o, result: result, n: o.n}; };
+let makeCycle = () -> { let o = {type: "Object", value: 7}; o.self = o; o; };
+let shrink = (a) -> { a.remove(0); a; };
+let annotated = (T) -> (x: T) -> x;
+let checkStored = (T, o) -> { let value: T = o.value; value; };
+let positive = std.Type.make((n) -> Number.check(n) && n > 0);
+let types = [Number, String, Boolean, Null, AnyArray, AnyObject, Function, Error, Any, Never, std.Type];
+let isPrint = (f) -> f == println;
+export {isPrint, identity, save, read, call, callAfterWrite, makeCycle, shrink, annotated, checkStored, positive, types, arguments: args, stringify: std.JSON.stringify};

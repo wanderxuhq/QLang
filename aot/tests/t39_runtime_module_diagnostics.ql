@@ -1,0 +1,18 @@
+import ./runtime_diagnostics/lib.ql;
+let result = boom();
+let checks = 0;
+let check = (ok, label) -> { checks = checks + 1; if !ok { println("FAIL " + label); }; };
+check(result.line == 3 && result.col == 9, "imported definition coordinates");
+check(result.file.type == "UndefinedField", "imported Error has no public file field");
+check(result.trace.type == "UndefinedField", "imported Error has no public trace field");
+check(broken.line == 5 && broken.trace.type == "UndefinedField", "Error export retains origin");
+let failure = import ./runtime_diagnostics/failure.ql;
+check(failure.line == 2 && failure.col == 3, "module initialization coordinates");
+check(failure.trace.type == "UndefinedField", "module Error has no public trace field");
+let outer = () -> boom();
+let nested = outer();
+check(nested.line == 3 && nested.col == 9, "nested call retains origin");
+println("runtime module source checks: " + std.String.toString(checks));
+if args.length > 0 && args[0] == "trace" { nested?; };
+if args.length > 0 && args[0] == "import" { failure?; };
+if args.length > 0 && args[0] == "assign" { let a = []; a[1] = 3; };

@@ -1,15 +1,16 @@
 # QLang → LLVM AOT 编译器(编译器与运行时全 QLang)设计
 
 - **日期**:2026-08-14
-- **状态**:待评审
+- **状态**:已冻结(2026-08-14)
 - **范围**:新子系统 —— QLang 源代码 → LLVM IR(文本)→ 各平台原生可执行文件;编译器本体用 QLang 写;编译产物的运行时语义层用 QLang 实现
 - **目标**:产出可独立运行的原生二进制;宿主依赖压到"仅 LLVM 自带工具链 + 极薄 C 垫底";保持与既有 host/boot 解释器的字节级一致验证纪律
+- **已定决策(2026-08-14)**:① 交付形态 AOT;② v1 = 数值+控制流,含字符串字面量与函数/闭包(柯里化后置);③ 运行时纯 QLang;④ leaf 极薄,内存函数收进 runtime.ql;⑤ RC 后置 M4 之后;⑥ 先 aarch64 Linux 跑通,跨平台为设计卖点不作 v1 门;⑦ 文档不追踪 git
 
 ## 硬性约束(Global Constraints)
 
 1. **编译器用 QLang 写**。qlangc 的源码是 `.ql`,逻辑全部是 QLang 数据与 QLang 函数。
 2. **编译产物的运行时语义层用 QLang 实现**("QLang 的数据必须用 QLang 的"):字符串/数组/对象/JSON/Error/Math 等语义全部由编译进产物的 QLang 代码承担;不链接任何 host stdlib 原生函数。
-3. **只允许一层极薄机制垫底**(leaf,见 §6):`alloc/free/write/exit/mem8/mem64` 级别的原始机制,相当于"给 QLang 一块 libc 形状的地基"。垫底不实现任何语言语义。
+3. **只允许一层极薄机制垫底**(leaf,见 §6):仅 `ql_alloc / ql_write / ql_exit`(+ 按需 `ql_mem_get`)级别的原始机制,相当于"给 QLang 一块 libc 形状的地基";**内存管理函数收进 runtime.ql**,不暴露给编译器。垫底不实现任何语言语义。
 4. **编译驱动不新增 native**。`--compile` 由现有 host CLI 承载,零新原生函数;qlangc 的输出经 stdout 捕获。
 5. **宿主工具链依赖最小**:目标平台只要求 LLVM 自带工具链(`llc`/`clang`/`lld`);**不要求 gcc / build-essential / MSVC / Windows SDK**。产物链接仅依赖 libc 级三五个符号或纯 syscall。
 6. **验证纪律不变**:HOST / BOOT / NATIVE 三端输出**逐字节一致**;`demo/type_gymnastics.ql` 419/419 为 M3 终极目标;difftest 从三端扩为四端(加 NATIVE 列)。
@@ -72,25 +73,29 @@ source.ql
 
 ## 运行时设计
 
-### leaf(runtime.c,约 60 行,clang 编译,不依赖 CRT)
+### leaf(runtime.c,极小,clang 编译,不依赖 CRT)
+
+leaf 是 QLang 语言表达不了的 syscall 边界,仅这几个:
 
 ```c
-void*   ql_alloc(size_t n);                    // brk/mmap 分配
-void    ql_free(void* p);
-void    ql_write(int fd, const void* buf, size_t n);   // syscall
-void    ql_exit(int code);                     // syscall
-uint8_t ql_mem8_get(void* p, size_t off);      // QLang 建世界的两个扳手
-void    ql_mem8_store(void* p, size_t off, uint8_t v);
-uint64_t ql_mem64_get(void* p, size_t off);
-void    ql_mem64_store(void* p, size_t off, uint64_t v);
+void*   ql_alloc(size_t n);                   // brk/mmap 分配
+void    ql_write(int fd, const void* buf, size_t n);   // write syscall
+void    ql_exit(int code);                    // exit syscall
+uint8_t ql_mem_get(const void* p, size_t off); // 读原始内存一字节(QLang 语言表达不了)
 ```
+
+- **内存的几个函数收进 runtime.ql**,不暴露给编译器:alloc/mem.get/mem.store 封装在 runtime 内部,QLang 语义层在其上自建对象头、字符串缓冲、哈希表、arena。
+- `free` / `retain` / `release` 不在此列 —— 泄漏+arena 策略不需要;RC 里程碑(零 GC 终局)时再加。
+- `mem.get` 按需保留/裁剪:若 QLang 的读原字节仍需 leaf,则留这一个;实现时若发现写也需要,再补 `ql_mem_store`(共 4 个)。
 
 ### runtime.ql(随编译器分发的固定文件,QLang 写)
 
-qlangc 编译目标程序时把 runtime.ql 一并编译进产物(与 rustc 预编译 std 同款做法):
+qlangc 编译目标程序时把 runtime.ql 一并编译进产物(与 rustc 预编译 std 同款做法)。
 
-- **v1**:`__itoa`(数字→十进制字节缓冲,经 `ql_mem8_store` 构建)、`__print`(`ql_write` 输出)、字符串对象 = `{buf: ptr, len: i64}`。
-- **M2+** 膨胀:字符串全操作、数组、对象(哈希表,QLang 写在 `ql_alloc` 原始内存上)、JSON、Error、Math —— 全部 QLang,通过 leaf 的 mem8/alloc 自建。
+**编译器 emit 只调用 runtime.ql 暴露的 QLang 层接口,不直接 emit 对 leaf 的裸调用。** 内存管理(对象头 tag、arena bump、字符串缓冲、哈希表)全部封装在 runtime.ql 内部:
+
+- **v1 暴露的 QLang 层 API**:`allocBox(tag,size)`(包装 ql_alloc + 写 tag)、`__itoa`(数字→十进制字节缓冲,QLang 写)、`__print`(`ql_write` 输出)、字符串对象 = `{buf: ptr, len: i64}`。
+- **M2+** 膨胀:字符串全操作、数组、对象(哈希表,QLang 写在 `ql_alloc` 原始内存上)、JSON、Error、Math —— 全部 QLang,经 leaf 的 alloc/mem_get 自建。
 
 ## 驱动设计(host CLI 子命令)
 
@@ -117,8 +122,8 @@ qlangc 编译目标程序时把 runtime.ql 一并编译进产物(与 rustc 预�
 |---|---|---|
 | **M0 风险解除** | 手写最小 IR + leaf C 层 + runtime.ql 的 `__itoa`;不写编译器 | 打通全盒指针 ABI、alloc/write/exit、数字→文本;产物输出与预期一致 |
 | **M1** | qlangc.ql v1 + host `--compile` 驱动 | v1 测试集三端字节一致 |
-| **M2** | 字符串/数组/对象(纯 QLang 内存实现)+ 字符串插值 | 中量级程序三端一致 |
-| **M3** | 错误值/`?`/`??`/JSON/Math/全部 stdlib + import | difftest 四端 + 419/419 编译通过 |
+| **M2** | 字符串/数组/对象(纯 QLang 内存实现) | 中量级程序三端一致 |
+| **M3** | 字符串插值 + 错误值/`?`/`??`/JSON/Math/全部 stdlib + import | difftest 四端 + 419/419 编译通过 |
 | **M4 自举** | 编译 boot 解释器本体 → 原生快速解释器;编译 qlangc 自己 → 原生编译器 | 编译器提速 + 自举闭环 |
 
 ## 不做的事(YAGNI)

@@ -41,19 +41,20 @@ fn main() {
         // stdout is restored), so capture_stdout takes a closure that runs qlangc
         // on a fresh interpreter with args[0] = source text, args[1] = source path.
         // R10-h: the compiled artifact embeds runtime.ql as the runtime semantics
-        // layer (qlangc emits it as the first top-level statements). Concatenate it
-        // ahead of the user source; args[1] stays the user source path.
+        // layer (qlangc emits it as the first top-level statements). Pass it
+        // separately as args[2], so the compiler can identify trusted runtime code.
         let runtime_src = std::fs::read_to_string("aot/runtime.ql").unwrap_or_else(|e| {
             eprintln!("Error reading aot/runtime.ql: {}", e);
             std::process::exit(1);
         });
         let mut run_error: Option<RuntimeError> = None;
-        let combined = format!("{}\n{}", runtime_src, src);
         let src_path_str = src_path.to_string();
         let ir = capture_stdout(|interp| {
-            interp.set_args(&[combined, src_path_str]);
-            if let Err(e) = interp.run_file(Path::new("aot/qlangc.ql")) {
-                run_error = Some(e);
+            interp.set_args(&[src, src_path_str, runtime_src]);
+            match interp.run_file(Path::new("aot/qlangc.ql")) {
+                Ok(Value::Error(e)) => run_error = Some(RuntimeError::UserError(e)),
+                Err(e) => run_error = Some(e),
+                Ok(_) => {}
             }
         });
         if let Some(e) = run_error {
@@ -66,7 +67,7 @@ fn main() {
             std::process::exit(1);
         });
         let st = std::process::Command::new("clang")
-            .args(["-fuse-ld=lld", tmp_ll.to_str().unwrap(), "aot/runtime.c", "-o", out_path])
+            .args(["-fuse-ld=lld", "-Wl,--threads=1", tmp_ll.to_str().unwrap(), "aot/runtime.c", "-o", out_path])
             .status();
         std::fs::remove_file(&tmp_ll).ok();
         match st {

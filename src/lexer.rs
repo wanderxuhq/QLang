@@ -508,11 +508,13 @@ impl<'a> Lexer<'a> {
     fn template_string(&mut self) -> Result<Token, LexerError> {
         let mut parts = Vec::new();
         let mut current_literal = String::new();
+        let mut terminated = false;
 
         while let Some(&(_, c)) = self.chars.peek() {
             // Encountered the closing backtick, exit
             if c == '`' {
                 self.advance();
+                terminated = true;
                 break;
             }
 
@@ -529,6 +531,7 @@ impl<'a> Lexer<'a> {
                         '\'' => '\'',
                         '\\' => '\\',
                         '$' => '$',
+                        '`' => '`',
                         '{' => '{',
                         '}' => '}',
                         _ => {
@@ -569,6 +572,10 @@ impl<'a> Lexer<'a> {
             }
         }
 
+        if !terminated {
+            return Err(LexerError::UnterminatedString(self.start));
+        }
+
         // Save the final literal
         if !current_literal.is_empty() {
             parts.push(StringPart::Literal(current_literal));
@@ -580,140 +587,32 @@ impl<'a> Lexer<'a> {
         })
     }
 
-    /// Collects the token sequence inside a `${...}` interpolation expression
-    ///
-    /// Precondition: the `$` and `{` characters have already been consumed.
-    ///
-    /// # Responsibilities
-    ///
-    /// 1. Track the brace nesting depth (supports nesting such as `${{"a": 1}.a}`)
-    /// 2. Handle backslash escapes inside the interpolation (as String literal tokens)
-    /// 3. Hand the remaining characters to scan_interpolation_token for collection
-    ///
-    /// # Known limitations
-    ///
-    /// scan_interpolation_token cannot handle quoted strings inside the interpolation;
-    /// template strings and ordinary strings (`"..."`/`'...'`) share this limitation in their interpolation.
+    /// Reuse ordinary tokenization inside interpolation. Strings and comments
+    /// consume their own braces; only brace tokens change the nesting depth.
     fn collect_interpolation_tokens(&mut self, dollar_pos: usize) -> Result<Vec<Token>, LexerError> {
-        // Collect the tokens inside the interpolation
-        let mut interp_tokens = Vec::new();
-        let mut brace_count = 1; // track brace nesting
-
-        while let Some(&(_, c)) = self.chars.peek() {
-            if c == '{' {
-                brace_count += 1;
-                self.advance();
-            } else if c == '}' {
-                brace_count -= 1;
-                self.advance();
-                if brace_count == 0 {
-                    break; // interpolation ended
-                }
-            } else if c == '\\' {
-                // Handle escapes inside the interpolation
-                self.advance();
-                if let Some(&(_, escaped)) = self.chars.peek() {
-                    self.advance();
-                    interp_tokens.push(Token::new(
-                        TokenKind::String(vec![StringPart::Literal(
-                            format!("\\{}", escaped),
-                        )]),
-                        Span::new(dollar_pos, self.current),
-                    ));
-                }
-            } else {
-                // Collect a single token inside the interpolation
-                interp_tokens.push(self.scan_interpolation_token()?);
+        let outer_start = self.start;
+        let mut tokens = Vec::new();
+        let mut depth = 1;
+        loop {
+            self.skip_whitespace_and_comments()?;
+            if self.is_at_end() {
+                return Err(LexerError::UnterminatedString(dollar_pos));
             }
-        }
-
-        Ok(interp_tokens)
-    }
-
-    /// Parses a token inside a template string interpolation
-    ///
-    /// The syntax inside the interpolation is similar to the main syntax, but simpler (template strings do not need to be handled).
-    /// This is a simplified version of scan_token.
-    fn scan_interpolation_token(&mut self) -> Result<Token, LexerError> {
-        self.start = self.current;
-
-        let c = match self.advance() {
-            Some(c) => c,
-            None => return Ok(Token::eof(self.current)),
-        };
-
-        match c {
-            '(' => self.make_token(TokenKind::LeftParen),
-            ')' => self.make_token(TokenKind::RightParen),
-            '{' => self.make_token(TokenKind::LeftBrace),
-            '}' => self.make_token(TokenKind::RightBrace),
-            '[' => self.make_token(TokenKind::LeftBracket),
-            ']' => self.make_token(TokenKind::RightBracket),
-            ',' => self.make_token(TokenKind::Comma),
-            ':' => self.make_token(TokenKind::Colon),
-            '+' => self.make_token(TokenKind::Plus),
-            '-' => {
-                if self.match_char('>') {
-                    self.make_token(TokenKind::Arrow)
-                } else {
-                    self.make_token(TokenKind::Minus)
+            self.start = self.current;
+            let token = self.scan_token()?;
+            match token.kind {
+                TokenKind::LeftBrace => depth += 1,
+                TokenKind::RightBrace => {
+                    depth -= 1;
+                    if depth == 0 {
+                        tokens.push(Token::eof(token.span.start));
+                        self.start = outer_start;
+                        return Ok(tokens);
+                    }
                 }
+                _ => {}
             }
-            '*' => self.make_token(TokenKind::Star),
-            '/' => self.make_token(TokenKind::Slash),
-            '%' => self.make_token(TokenKind::Percent),
-            '=' => {
-                if self.match_char('=') {
-                    self.make_token(TokenKind::EqualEqual)
-                } else {
-                    self.make_token(TokenKind::Equal)
-                }
-            }
-            '!' => {
-                if self.match_char('=') {
-                    self.make_token(TokenKind::NotEqual)
-                } else {
-                    self.make_token(TokenKind::Bang)
-                }
-            }
-            '<' => {
-                if self.match_char('=') {
-                    self.make_token(TokenKind::LessEqual)
-                } else {
-                    self.make_token(TokenKind::Less)
-                }
-            }
-            '>' => {
-                if self.match_char('=') {
-                    self.make_token(TokenKind::GreaterEqual)
-                } else {
-                    self.make_token(TokenKind::Greater)
-                }
-            }
-            '&' => {
-                if self.match_char('&') {
-                    self.make_token(TokenKind::And)
-                } else {
-                    self.make_token(TokenKind::BitwiseAnd)
-                }
-            }
-            '|' => {
-                if self.match_char('|') {
-                    self.make_token(TokenKind::Or)
-                } else {
-                    self.make_token(TokenKind::BitwiseOr)
-                }
-            }
-            '?' => {
-                if self.match_char('?') {
-                    self.make_token(TokenKind::QuestionQuestion)
-                } else {
-                    self.make_token(TokenKind::Question)
-                }
-            }
-            '0'..='9' => self.number(),
-            c if c.is_alphabetic() || c == '_' => self.identifier(),
-            _ => Err(LexerError::UnexpectedCharacter(c, self.current)),
+            tokens.push(token);
         }
     }
 

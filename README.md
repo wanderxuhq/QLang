@@ -1,6 +1,19 @@
 # QLang
 
-A dynamically-typed programming language written in Rust, featuring self-hosting capability.
+A dynamically-typed language whose core implementation is written in QLang.
+
+The QLang lexer, parser, AST and interpreter in `bootstrapped/` are the core;
+`aot/qlangc.ql` uses that same frontend to compile the AST to LLVM IR. Syntax
+sugar is normalized by the QLang parser before either execution path consumes it.
+See [the core implementation](bootstrapped/README.md) and [LLVM progress](aot/README.md).
+
+Rust supplies the initial bootstrap runner. Its implementation is retained for
+compatibility and future embedding as a Rust library; it is not the language's
+semantic authority. The native QLang compiler can now rebuild itself: stages 2
+and 3 emit byte-identical LLVM IR. Those stages run without the Rust interpreter;
+Clang links the IR with the native allocation and syscall layer. The core
+interpreter also compiles to a native executable and passes the 419-assertion
+type-system demo without Rust.
 
 ## Features
 
@@ -21,11 +34,35 @@ The executable will be at `target/release/qlang`.
 
 ## Usage
 
+Run source with the core QLang interpreter after building the bootstrap runner:
+
 ```bash
-cargo run -- example.ql
+./target/release/qlang bootstrapped/run_file.ql example.ql
 ```
 
-Or after building:
+Compile through the QLang frontend and LLVM backend (see the AOT platform requirements):
+
+```bash
+./target/release/qlang --compile example.ql -o /tmp/example
+/tmp/example
+```
+
+Build and verify the native compiler's self-compilation pipeline:
+
+```bash
+QLANG=./target/release/qlang python3 aot/run_selfhost_tests.py --self --output-dir target/selfhost
+./target/selfhost/stage2 --emit-llvm example.ql aot/runtime.ql > /tmp/example.ll
+python3 aot/native_link.py /tmp/example.ll -o /tmp/example
+```
+
+Build the native interpreter using that compiler, then run QLang files:
+
+```bash
+python3 aot/run_interpreter_tests.py --compiler target/selfhost/stage2 --output-dir target/native-interpreter
+./target/native-interpreter/interpreter example.ql
+```
+
+The retained Rust interpreter can also execute source directly:
 
 ```bash
 ./target/release/qlang example.ql
@@ -103,8 +140,6 @@ let integer = 42
 let negative = -10
 let scientific = 1.5e-10
 let hex = 0xff          // 255 (parsed as decimal, hex is just notation)
-let infinity = Infinity // predefined global (shadowable)
-let nan_val = std.Number.isNaN(NaN)   // true
 ```
 
 Number literals can be:
@@ -180,15 +215,17 @@ person.age = 31             // Update field
 #### Null
 
 `null` is the **single empty value** — type `Null`, value `null`. There is no
-separate `void`: a function without a return statement yields `null`, and
-`std.Type.of(null)` returns the `Null` type value. The empty block expression
-`{}` also evaluates to `null`. `Null` is the unit type (its only value is
+separate `void`. Without an explicit `return`, a function returns the last value
+produced by its body; an empty function body returns `null`.
+`std.Type.of(null)` returns the `Null` type value. In expression context, `{}`
+is an empty object, not `null`. `Null` is the unit type (its only value is
 `null`) — not the bottom type (`Never`), which is reserved for functions that
 never return (e.g. `exit`).
 
 ```qlang
 let nothing = null
-let alsoNothing = () -> { 1; }  // empty return → null
+let alsoNothing = () -> {}     // alsoNothing() → null
+let implicitResult = () -> { 1; }  // implicitResult() → 1
 ```
 
 `??` only falls back on **error values** — a `null` left operand passes through
@@ -380,7 +417,9 @@ while i < 10 {
 
 #### Return Statement
 
-Use `return` to exit a function early with a value:
+`return` is allowed only inside a function body. A script or module top-level
+`return` is a syntax error, including in an untaken branch. Use `return` to
+exit a function early with a value:
 
 ```qlang
 let abs = (n) -> {
@@ -395,6 +434,15 @@ abs(3);   // 3
 ```
 
 ### Assignment
+
+Assignments are statements. Chained assignment such as `a = b = 1` is a
+syntax error; use separate assignments instead.
+
+Field and index assignments evaluate the right side first, then the receiver
+and index once. An invalid destination or failed write returns an Error from
+the current function/module; at top level it exits with status 1. Subsequent
+statements do not execute. Valid destinations can still store Error values as
+data. These rules are shared by the QLang interpreter and LLVM backend.
 
 Variables can be reassigned:
 
@@ -515,17 +563,18 @@ let foo = () -> {
 
 Value literals follow [JSON5](https://json5.org/), plus QLang extensions:
 
-**Numbers** — hex, leading/trailing decimal points, exponents, signs, Infinity/NaN:
+**Numbers** — hex, leading/trailing decimal points, exponents and signs:
 ```qlang
 let a = 0xFF;          // 255
 let b = .5;            // 0.5
 let c = 5.;            // 5.0
 let d = 1e30;          // exponent
 let e = +5;            // unary plus
-let f = Infinity;      // predefined global (shadowable)
-let g = -Infinity;     // via unary minus
-let h = NaN;
 ```
+
+Predefined `Infinity` and `NaN` names are still under consideration and are
+not part of the self-hosted implementation. Existing nonfinite arithmetic
+results are a separate design question.
 
 **Strings** — single or double quotes, full JSON5 escapes:
 ```qlang
@@ -568,6 +617,13 @@ std.Math.random()        // Random number in [0, 1)
 std.Math.sin(0)          // 0 (radians)
 std.Math.cos(0)          // 1
 ```
+
+`Math.max` and `Math.min` accept zero or more Number arguments. With no arguments,
+`max` returns negative infinity and `min` returns positive infinity. NaN
+propagates; non-Number arguments produce `TypeMismatch`, even after a NaN.
+For mixed positive/negative zeros, `max` selects +0 and `min` selects -0.
+Arrays are not implicitly spread into arguments.
+
 
 ### Array Module
 
@@ -702,7 +758,7 @@ let parsed = std.JSON.parse(json)
 
 ```qlang
 std.Number.toString(123)                 // "123"
-std.Number.isNaN(NaN)                    // true
+std.Number.isNaN(std.Number.parseFloat("not a number"))                    // true
 std.Number.isFinite(1)                   // true
 std.Number.parseFloat("3.14")            // 3.14
 std.Number.parseFloat("not a number")    // NaN (a plain Number, not an error value)
@@ -894,7 +950,7 @@ x.message   // 'value of type "String" does not match the annotated type "Number
 
 ### Shadowing and protected members
 
-- Names can be shadowed: `let Number = 42` is legal (like `Infinity`/`NaN`).
+- Names can be shadowed: `let Number = 42` is legal.
   After that, `let y: Number = 5` evaluates the annotation to `42` →
   `TypeCheck` error value. Shadowing is local, visible, and recoverable — it
   cannot silently corrupt the type mechanism (unlike overwriting `check`).
@@ -974,6 +1030,11 @@ cargo run -- verify_bootstrap.ql
 ```
 
 ## Differential Testing
+
+Core language contracts are tested directly in QLang, including
+`bootstrapped/tests/function_ast.ql` and AOT fixtures with fixed `.expected`
+outputs. The following differential suites are supplementary compatibility
+checks. Rust or Node behavior does not override the intended QLang semantics.
 
 `difftest.py` runs the same QLang source through both the Rust host
 interpreter and the bootstrapped interpreter and asserts identical results —
@@ -1125,19 +1186,20 @@ TypeMismatch: cannot apply addition to Number and Error (at line 5, col 12)
 
 **Known boundaries** (self-hosting milestones, tracked separately):
 
-- The bootstrapped interpreter has no `exit` primitive: an unhandled top-level
-  error — bare (e.g. a program ending in `1 / 0;`) or `?`-raised — prints its
-  diagnostic via `std.Error.toString` and exits 0, where the host prints the
-  full diagnostic and exits 1.
-- The host's `import` merges only the imported file's exports: an unhandled
-  top-level error in the imported file (bare or `?`-raised) is silently
-  discarded — its diagnostic is never printed. The bootstrapped interpreter
-  does not support importing user code (a nested `import` raises an explicit
-  `NotImplemented` error value); undefined variables are reported as
-  `UndefinedVariable` error values, matching the host.
-- Top-level assignment to an undefined variable: the host terminates with an
-  `Undefined variable` error, while the bootstrapped interpreter silently
-  ignores it.
+- The file runner unwraps an unhandled interpreter error into its hosting
+  runtime's error channel, so both bare errors and top-level `?` exit with
+  status 1. The `runSource` API itself returns a result record for embedding.
+- HOST and BOOT load user modules relative to their definition files. Every
+  import executes a fresh module and merges its exports; initialization errors
+  return without merging exports. Cyclic file imports are diagnosed. LLVM
+  supports literal imports/exports inside functions and control flow, and
+  computed `import (path)` for separately compiled native extensions. The
+  latter returns a namespace and also works in the native QLang AST interpreter.
+  Hosts without its private native bridge return `NativeExtensionUnavailable`. See
+  [module semantics](docs/module-semantics.md) for the precise boundaries.
+- Assigning to an undeclared or out-of-scope name raises `UndefinedVariable`;
+  it never creates a binding or silently discards the write. An uninitialized
+  declaration can be assigned normally, including through a captured binding.
 
 Under error-value semantics the two implementations render errors differently
 — the host prints a multi-line diagnostic with positions; the boot renders its
@@ -1149,10 +1211,9 @@ must match byte-for-byte, and `==` stays type-strict value/reference equality
 
 ### Node.js reference (V8)
 
-The host and boot implementations are not independent (the bootstrapped
-interpreter runs on the host), so a third, truly independent reference is used:
-QLang semantics are JS-flavored, and for the overlapping subset the same
-program is run under Node.js/V8. 78 cases are compared three-way (host, boot,
+The QLang interpreter currently runs on the Rust bootstrap runner, so the two
+execution paths are not independent. Node.js/V8 adds an independent comparison
+for a curated overlapping subset; JavaScript does not define QLang semantics. 78 cases are compared three-way (host, boot,
 node) and must all match. Cases where QLang deliberately diverges from JS
 (negative index wrapping, error values — QLang returns error values where JS
 throws) are excluded; the JS translations

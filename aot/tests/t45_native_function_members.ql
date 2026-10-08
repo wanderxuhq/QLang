@@ -1,0 +1,34 @@
+// Dotted native function members must behave equally in compiled and AST code.
+let checks = 0;
+let check = (ok, label) -> { checks = checks + 1; if !ok { return std.Error.raise("AssertionFailed", label, null); }; null; };
+let native = std.Object.keys; let name = native.name;
+check(String.check(name), "native name is a String")?;
+check(name == "Object.keys", "native name comparison")?;
+check(name.length == 11, "native name length")?;
+check(name[0] == "O" && name[-1] == "s", "native name indexing")?;
+check(std.String.startsWith(name)("Object."), "native name passed to library")?;
+check(println.name == "println", "diagnostic native name")?;
+let curried = std.Number.ldexp(2);
+check(curried.name == "Number.ldexp<curried>", "returned native name")?;
+check([].add.name == "Array.add", "bound native name")?;
+check(native.params.type == "NotAnObject", "native private fields remain inaccessible")?;
+let ordinary = (v) -> v;
+check(ordinary.name.type == "NotAnObject", "ordinary function has no native name")?;
+let aliases = [native, curried];
+check(aliases[0].name == "Object.keys" && aliases[1].name == curried.name, "member access through aliases")?;
+// A partial is an existing exact-arity callable with native-style metadata.
+let add = (a, b) -> a + b;
+let partial = add(2);
+check(String.check(partial.name) && partial.name == "<curried>", "user partial name")?;
+check(partial.name.length == 9 && std.String.startsWith(partial.name)("<cur"), "partial name is a language String")?;
+check(partial(3) == 5, "partial still calls original body")?;
+check(partial().type == "ArityMismatch", "partial missing arguments")?;
+check(partial(3, 4).type == "ArityMismatch", "partial excess arguments")?;
+let emptyPartial = add();
+check(emptyPartial.name == "<curried>" && emptyPartial(4, 5) == 9, "zero-bound partial name and call")?;
+check(partial.params.type == "NotAnObject" && partial.boundArgs.type == "NotAnObject" && partial.allParams.type == "NotAnObject", "partial storage remains private")?;
+let partialAliases = [partial, emptyPartial];
+check(partialAliases[0].name == partialAliases[1].name && partialAliases[0](6) == 8, "partial aliases preserve metadata and calls")?;
+check(std.Object.merge.name.type == "NotAnObject", "migrated Object function has ordinary metadata")?;
+check(std.Object.merge({}).name.type == "NotAnObject", "migrated Object closure has ordinary metadata")?;
+println("native function member checks: " + std.String.toString(checks));

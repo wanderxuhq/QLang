@@ -1,0 +1,1 @@
+Error.raise("initialization failed")?;

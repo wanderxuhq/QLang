@@ -1,0 +1,70 @@
+// Native argument lists must remain positional at every arity.
+let checks = 0; let failures = 0;
+let check = (ok, name) -> {
+  checks = checks + 1;
+  if !ok { failures = failures + 1; println("FAIL " + name); };
+};
+// Error values are inspected outside ordinary user-function arguments.
+let describe = (f, expected) -> {
+  let e = f(1, 2, 3, 4, 5, 6);
+  e.type == "ArityMismatch" && e.message == "Arity mismatch: expected " + std.String.toString(expected) + " arguments, got 6";
+};
+// Keep the native-dispatch probe independent of portable library migrations.
+check(std.Object.keys.name == "Object.keys", "unary probe is a native function");
+check(describe(std.Object.keys, 1), "unary native");
+check(describe(std.Math.random, 0), "zero-argument native");
+check(describe(std.Object.field, 2), "binary ordinary library function");
+check(describe(std.Error.raise, 3), "ternary diagnostic native");
+check(describe(std.JSON.stringify, 1), "JSON must not serialize the argument list");
+check(describe(std.Number.isNaN, 1), "isNaN must not inspect the argument list");
+check(describe(std.String.toString, 1), "String conversion must reject extra arguments");
+check(describe(std.Object.keys, 1), "Object keys arity");
+check(describe(std.Type.of, 1), "type probe arity");
+check(describe(println, 1), "println must not print the argument list");
+check(describe(print, 1), "print must not print the argument list");
+check(describe(isError, 1), "diagnostic alias");
+let replace = std.String.replace("abc")("a");
+check(describe(replace, 1), "returned curried library function");
+let add = [].add;
+check(describe(add, 1), "bound native method");
+let e = std.Object.keys();
+check(e.type == "ArityMismatch" && std.String.includes(e.message)("got 0"), "zero actual arguments");
+e = std.Object.keys(1, 2, 3, 4, 5);
+check(e.type == "ArityMismatch" && std.String.includes(e.message)("got 5"), "five actual arguments");
+e = std.Object.field(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12);
+check(e.type == "ArityMismatch" && std.String.includes(e.message)("got 12"), "twelve actual arguments");
+let first = Error.raise("first"); let second = Error.raise("second");
+e = std.Object.keys(1, 2, 3, 4, 5, first, second);
+check(e.type == "TypeMismatch" && e.cause.message == "first", "Error rejection precedes arity and preserves first cause");
+e = std.JSON.stringify(1, 2, 3, 4, 5, first);
+check(e.type == "TypeMismatch" && e.cause.message == "first", "Error rejection before JSON conversion");
+e = println(1, 2, 3, 4, 5, first);
+check(e.type == "ArityMismatch", "diagnostic accepts Error before arity validation");
+e = std.Type.of(1, 2, 3, 4, 5, first);
+check(e.type == "ArityMismatch", "diagnostic type probe policy");
+let sequence = 0;
+let mark = (v) -> { sequence = sequence * 10 + v; v; };
+let callee = () -> { sequence = sequence * 10 + 1; std.Object.keys; };
+e = callee()(mark(2), mark(3), mark(4), mark(5), mark(6));
+check(e.type == "ArityMismatch" && sequence == 123456, "callee and all arguments evaluated once in order");
+sequence = 0;
+e = std.Object.keys(first, mark(1), mark(2), mark(3), mark(4), mark(5));
+check(e.cause.message == "first" && sequence == 12345, "all arguments evaluated before Error rejection");
+sequence = 0;
+let propagated = () -> std.Object.keys(first?, mark(1), mark(2), mark(3), mark(4), mark(5));
+e = propagated();
+check(e.message == "first" && sequence == 0, "explicit propagation stops later arguments");
+let functions = [std.JSON.stringify, std.Object.keys];
+check(describe(functions[0], 1), "computed native callee");
+let saved = std.Object.keys;
+std.Object.keys = (a, b, c, d, e, f) -> a + b + c + d + e + f;
+check(std.Object.keys(1, 2, 3, 4, 5, 6) == 21, "user replacement retains ordinary function behavior");
+check(describe(saved, 1), "saved native alias retains arity");
+// Mutating the user namespace cannot replace the interpreter's private bridge.
+std.__callNative = (f, a) -> 999;
+check(std.Math.max(1, 2, 3, 4, 5, 6, 7) == 7, "private bridge namespace isolation");
+check(describe(saved, 1), "private bridge still checks arity");
+check(std.JSON.stringify([1, 2, 3, 4, 5, 6]) == "[1,2,3,4,5,6]", "an explicitly passed Array remains one argument");
+check(replace("z") == "zbc", "valid curried invocation");
+check(std.Math.min(7, 6, 5, 4, 3, 2, 1) == 1, "variadic minimum through generic bridge");
+println("native call checks: " + std.String.toString(checks));

@@ -49,6 +49,10 @@ let __hostAnyArray = AnyArray;
 let __hostAnyObject = AnyObject;
 let __hostFunction = Function;
 let __hostError = Error;
+let __hostAny = Any;
+let __hostNever = Never;
+let __hostArray = Array;
+let __hostObject = Object;
 let __hostType = __hostTypeOf(Number);
 
 // Type-value predicate: an object with a callable check member. Boot type constants are {check: <function>}
@@ -93,12 +97,12 @@ let callCheck = (check, v) -> {
 // and null is always passed bare. check handles error-value arguments the same as the host (host predicates accepts_errors: true,
 // returning false/true rather than erroring): .type probes on bare values/error values are error values, so guard
 // with !isError before comparing.
-let Number   = { check: (v) -> v != null && !isError(v.type) && v.type == "Number" };
-let String   = { check: (v) -> v != null && !isError(v.type) && v.type == "String" };
-let Boolean  = { check: (v) -> v != null && !isError(v.type) && v.type == "Boolean" };
+let Number   = { check: (v) -> v != null && ((!isError(v.type) && v.type == "Number") || __hostTypeOf(v) == __hostNumber) };
+let String   = { check: (v) -> v != null && ((!isError(v.type) && v.type == "String") || __hostTypeOf(v) == __hostString) };
+let Boolean  = { check: (v) -> v != null && ((!isError(v.type) && v.type == "Boolean") || __hostTypeOf(v) == __hostBoolean) };
 let Null     = { check: (v) -> v == null };
-let AnyArray = { check: (v) -> v != null && !isError(v.type) && v.type == "Array" };
-let AnyObject= { check: (v) -> v != null && !isError(v.type) && v.type == "Object" && !isTypeValue(v) };
+let AnyArray = { check: (v) -> v != null && ((!isError(v.type) && v.type == "Array") || __hostTypeOf(v) == __hostAnyArray) };
+let AnyObject= { check: (v) -> v != null && ((!isError(v.type) && v.type == "Object" && !isTypeValue(v)) || (isError(v.type) && __hostTypeOf(v) == __hostAnyObject && !isTypeValue(v))) };
 // Boot function records carry the wrapper tag "Function" (uppercase; brief's "function"/"native" are also
 // tolerated); bare native functions have no type field under host probing (the variant noted in the brief) — hence the host-probe
 // branch: bare host functions (native and QLang, e.g. print) are Function under the host Type.of.
@@ -446,4 +450,21 @@ let fs = {
 // Export the type library: interpreter.ql uses it to populate the boot global environment (Number/String/.../
 // Array/Object/Type) and the wrapping points (typeTag); the host std object, after std.Type is replaced, is
 // accessed by user code via std.Type.*.
-export { std, isTypeValue, Number, String, Boolean, Null, AnyArray, AnyObject, Function, Any, Never, Error, Array, Object, Type, typeTag };
+// Internal canonical identities for the evaluator/native bridge.
+let nativeTypes = [
+  {core: Number, host: __hostNumber}, {core: String, host: __hostString},
+  {core: Boolean, host: __hostBoolean}, {core: Null, host: __hostNull},
+  {core: AnyArray, host: __hostAnyArray}, {core: AnyObject, host: __hostAnyObject},
+  {core: Function, host: __hostFunction}, {core: Error, host: __hostError},
+  {core: Any, host: __hostAny}, {core: Never, host: __hostNever},
+  {core: Type, host: __hostType}, {core: Array, host: __hostArray},
+  {core: Object, host: __hostObject}, {core: Type.of, host: __hostTypeOf},
+  {core: Type.make, host: __hostType.make}
+];
+let nativeTypeIndex = 0;
+while nativeTypeIndex < 11 {
+  let pair = nativeTypes[nativeTypeIndex];
+  nativeTypes[nativeTypes.length] = {core: pair.core.check, host: pair.host.check};
+  nativeTypeIndex = nativeTypeIndex + 1;
+};
+export { nativeTypes, std, isTypeValue, Number, String, Boolean, Null, AnyArray, AnyObject, Function, Any, Never, Error, Array, Object, Type, typeTag };

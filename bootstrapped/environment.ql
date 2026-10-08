@@ -8,27 +8,30 @@ let Environment = (parent) -> {
   // Binding.annotation's "reassignment keeps the annotation" semantics.
   let anns = {};
 
-  // Task: three-state bindings — values holds bound values (a key's existence means "has a value",
-  // including explicit null); uninit records uninitialized declarations (key exists = uninitialized). Undefined = in neither set and absent from the parent chain.
+  // Binding state is separate from values: an active uninit marker hides any
+  // previous value. An absent binding is looked up in the parent scope.
+  // Explicit null is an ordinary initialized value.
   let uninit = {};
-  let doDefine = (name, value) -> { values[name] = value; };
   let doDefineUninit = (name, ann) -> {
     uninit[name] = true;
-    if ann != null { anns[name] = ann; };
+    anns[name] = ann;
   };
 
   // Simple object access without std
-  let doDefine = (name, value) -> { values[name] = value; };
+  let doDefine = (name, value) -> { values[name] = value; uninit[name] = null; anns[name] = null; };
   // Task 11: annotated binding (corresponds to the host's define_annotated). ann has the shape { ty, text }.
   let doDefineAnnotated = (name, value, ann) -> {
     values[name] = value;
+    uninit[name] = null;
     anns[name] = ann;
   };
   // Task 11: look up the annotation along the parent chain (corresponds to the host's get_annotation); none → null.
   let doGetAnnotation = (name) -> {
     // Probing a missing key yields an error value (error-as-value); the isError guard is required (same as doGet)
     let a = anns[name];
-    if !isError(a) && a != null { a; }
+    if !isError(values[name]) || (!isError(uninit[name]) && uninit[name] != null) {
+      if isError(a) { null; } else { a; };
+    }
     else if parent != null {
       let g1 = parent["_getAnnotation"];
       if !isError(g1) && g1 != null {
@@ -40,16 +43,12 @@ let Environment = (parent) -> {
     else { null; }
   };
   let doGet = (name) -> {
-    // Key exists (including explicit null) → return that value, do not fall through (fix: the old
-    // v != null condition made `let x = null` fall through to the outer scope).
+    // Declaration state wins over a previous value when a name is redeclared.
     let v = values[name];
-    if !isError(v) { v; }
-    // Note: probing a missing key yields an error value (error-as-value); must guard with isError before comparing to null
-    // (unguarded, `uninit[name] != null` hands the error value to != → delegates to the host to construct a new error).
-    else if !isError(uninit[name]) && uninit[name] != null {
-      // Declared but not initialized
+    if !isError(uninit[name]) && uninit[name] != null {
       { type: "Error", value: std.Error.raise("Uninitialized", "variable \"" + name + "\" is declared but not initialized", null), propagate: false };
     }
+    else if !isError(v) { v; }
     else if parent != null {
       // parent can be:
       // 1. A QL Environment object with _get method
@@ -78,6 +77,7 @@ let Environment = (parent) -> {
     let v = values[name];
     if !isError(v) {
       values[name] = value;
+      uninit[name] = null;
       true;
     } else if !isError(uninit[name]) && uninit[name] != null {
       // First assignment = initialization: set the value and clear the uninitialized marker
@@ -113,7 +113,7 @@ let GlobalEnvironment = (stdObj) -> {
     // std is returned as-is.
     get: (name) -> if name == "std" { stdObj } else { { type: "Error", value: std.Error.raise("UndefinedVariable", "Undefined variable: " + name, null), propagate: false } },
     define: (name, value) -> null,
-    assign: (name, value) -> null
+    assign: (name, value) -> if name == "std" { stdObj = value; true; } else { false; }
   };
   Environment(parentEnv);
 };

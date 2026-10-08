@@ -159,3 +159,9 @@ fn object_merge_does_not_copy_type_marker() {
     assert_eq!(run("let m = std.Object.merge(Number)({x: 1}); m.check = 42; m.check;"), "42");
     assert_eq!(run("let m = std.Object.merge({x: 1})(Number); m.check = 42; m.check;"), "42");
 }
+
+#[test]
+fn reassignment_checks_can_mutate_their_captured_environment() {
+    assert_eq!(run("let count = 0; let T = std.Type.make((v) -> { count = count + 1; true; }); let x: T = 1; x = 2; count;"), "2");
+    assert_eq!(run("let f = () -> { let count = 0; let T = std.Type.make((v) -> { count = count + 1; v > 0; }); let x: T = 1; x = -1; count == 2 && isError(x); }; f();"), "true");
+}

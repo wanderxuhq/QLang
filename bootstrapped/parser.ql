@@ -7,12 +7,40 @@ import ./stdlib.ql;
 
 let Parser = (tokens) -> {
   let current = 0;
+  // Return belongs to a lexical function body, not a block or module factory.
+  let insideFunction = false;
+  let setFunctionContext = (inside) -> { insideFunction = inside; };
+  let errors = []; let diagnostics = [];
+  let sourcePath = "<source>";
+  let setSourcePath = (path) -> {
+    if path != null && path != "" { sourcePath = path; };
+  };
+  let parseErrorAt = (message, token) -> {
+    let line = if isError(token.line) { 1; } else { token.line; };
+    let col = if isError(token.col) { 1; } else { token.col; };
+    let span = if isError(token.span) { {start: 0, end: 0}; } else { token.span; };
+    let endLine = if isError(token.endLine) { line; } else { token.endLine; };
+    let endCol = if isError(token.endCol) { col + span.end - span.start; } else { token.endCol; };
+    let diagnostic = {message: message, file: sourcePath, line: line, col: col, endLine: endLine, endCol: endCol, span: span};
+    diagnostics[diagnostics.length] = diagnostic;
+    let text = sourcePath + ":" + std.String.toString(line) + ":" + std.String.toString(col) + ": " + message;
+    errors[errors.length] = text;
+    { type: "Error", message: text, diagnostic: diagnostic };
+  };
+  let parseError = (message) -> parseErrorAt(message, peek());
+  let sourceChars = [];
+  let sourceText = "";
+  let setSource = (source) -> { sourceText = source; sourceChars = std.String.toChars(source); };
 
   let peek = () -> {
     if current < tokens.length {
       return tokens[current];
     } else {
-      return { kind: TokenKind.Eof };
+      if tokens.length > 0 {
+        let last = tokens[tokens.length - 1];
+        return { kind: TokenKind.Eof, line: last.endLine, col: last.endCol, span: {start: last.span.end, end: last.span.end} };
+      };
+      return { kind: TokenKind.Eof, line: 1, col: 1, span: {start: 0, end: 0} };
     };
   };
 
@@ -46,6 +74,34 @@ let Parser = (tokens) -> {
     return false;
   };
 
+  // Preserve semantic-node positions through grouping and syntax lowering.
+  // Token offsets and columns already count Unicode scalars, including CRLF.
+  let locateBetween = (node, first, last) -> {
+    node.location = {file: sourcePath, line: first.line, col: first.col,
+      endLine: last.endLine, endCol: last.endCol,
+      span: {start: first.span.start, end: last.span.end}};
+    node;
+  };
+  let locate = (node, first) -> {
+    let i = current - 1;
+    while i > 0 && tokens[i].kind == TokenKind.Newline { i = i - 1; };
+    let last = if i >= 0 { tokens[i]; } else { first; };
+    locateBetween(node, first, last);
+  };
+  let nodeStart = (node) -> {
+    let point = node.location;
+    if isError(point) { peek(); } else { point; };
+  };
+  let locateMissing = (node, first) -> {
+    if isError(node.location) { return locate(node, first); };
+    node;
+  };
+
+  let locatedParameter = (name, annotation, token) -> {
+    let last = if annotation == null { token; } else { nodeStart(annotation); };
+    locateBetween(Parameter(name, annotation), token, last);
+  };
+
   // Check if a token kind is a keyword
   let isKeyword = (kind) -> {
     if kind == TokenKind.Let { true }
@@ -72,7 +128,7 @@ let Parser = (tokens) -> {
     let statements = [];
     while !check(TokenKind.Eof) {
       skipNewlines();
-      statements[statements.length] = parseStatement();
+      if !check(TokenKind.Eof) { statements[statements.length] = parseStatement(); };
       skipNewlines();
       // Skip stray semicolons after statements (common after if/while blocks;
       // the host tolerates them and they produce no statement)
@@ -80,10 +136,17 @@ let Parser = (tokens) -> {
         advance();
       }
     }
-    return Program(statements);
+    let program = Program(statements);
+    if tokens.length > 0 { locateBetween(program, tokens[0], tokens[tokens.length - 1]); };
+    program.errors = errors; program.diagnostics = diagnostics;
+    return program;
   };
 
   let parseStatement = () -> {
+    skipNewlines(); let first = peek();
+    locateMissing(parseStatementInner(), first);
+  };
+  let parseStatementInner = () -> {
     skipNewlines();
     let token = peek();
 
@@ -102,10 +165,23 @@ let Parser = (tokens) -> {
     };
   };
 
+  let parseAnnotation = () -> {
+    let start = peek().span.start;
+    let ann = parseExpression();
+    let end = previous().span.end;
+    let text = "";
+    if end <= sourceChars.length {
+      let i = start;
+      while i < end { text = text + sourceChars[i]; i = i + 1; };
+    } else { text = "?"; };
+    ann.annotationText = text;
+    ann;
+  };
+
   let parseLetStatement = () -> {
     skipNewlines();
     advance(); // Skip 'let' keyword
-    // Now peek() should return the identifier (variable name)
+    if !check(TokenKind.Identifier) { return parseError("Expected variable name"); };
     let name = peek().value;
     advance(); // Skip the identifier
 
@@ -114,7 +190,7 @@ let Parser = (tokens) -> {
     let annotation = null;
     if check(TokenKind.Colon) {
       advance();
-      annotation = parseExpression();
+      annotation = parseAnnotation();
     }
 
     if check(TokenKind.Equal) {
@@ -129,19 +205,7 @@ let Parser = (tokens) -> {
       skipNewlines();
       return LetStmt(name, null, annotation);
     } else {
-      // Fault tolerance: skip unknown tokens until = or ;
-      while !check(TokenKind.Equal) && !check(TokenKind.Semicolon) && !check(TokenKind.Eof) {
-        advance();
-      }
-      if !check(TokenKind.Equal) {
-        return { type: "Error", message: "Expected '=' or ';'" };
-      } else {
-        advance();
-        let value = parseExpression();
-        if check(TokenKind.Semicolon) { advance(); }
-        skipNewlines();
-        return LetStmt(name, value, annotation);
-      };
+      return parseError("Expected '=' or ';' after declaration");
     };
   };
 
@@ -150,12 +214,12 @@ let Parser = (tokens) -> {
     advance();
     let condition = parseExpression();
     if !check(TokenKind.LeftBrace) {
-      return { type: "Error", message: "Expected '{'" };
+      return parseError("Expected '{'");
     } else {
       // Note: do NOT advance() — parseBlock expects to consume '{' itself
       let thenBranch = parseBlock();
 
-      let branches = [IfBranch(condition, thenBranch)];
+      let branches = [locate(IfBranch(condition, thenBranch), nodeStart(condition))];
       let elseBody = null;
 
       // Handle chained else if / else using a loop
@@ -171,17 +235,17 @@ let Parser = (tokens) -> {
             // This is an else if
             let elseIfCondition = parseExpression();
             if !check(TokenKind.LeftBrace) {
-              return { type: "Error", message: "Expected '{' after else if condition" };
+              return parseError("Expected '{' after else if condition");
             };
             // Do NOT advance() — parseBlock expects to consume '{' itself
             let elseIfBody = parseBlock();
-            branches[branches.length] = IfBranch(elseIfCondition, elseIfBody);
+            branches[branches.length] = locate(IfBranch(elseIfCondition, elseIfBody), nodeStart(elseIfCondition));
             // Continue the loop to check for more else if / else
           } else {
             // This is a plain else
             if check(TokenKind.LeftBrace) {
               elseBody = parseBlock();
-            };
+            } else { return parseError("Expected '{' after else"); };
             parsingElse = false;
           };
         };
@@ -196,7 +260,7 @@ let Parser = (tokens) -> {
     advance();
     let condition = parseExpression();
     if !check(TokenKind.LeftBrace) {
-      return { type: "Error", message: "Expected '{'" };
+      return parseError("Expected '{'");
     } else {
       // Do NOT advance() — parseBlock expects to consume '{' itself
       let body = parseBlock();
@@ -206,20 +270,34 @@ let Parser = (tokens) -> {
 
   let parseReturnStatement = () -> {
     skipNewlines();
-    advance();
+    let keyword = advance();
+    let invalidContext = null;
+    if !insideFunction {
+      invalidContext = parseErrorAt("return is only allowed inside a function", keyword);
+    };
+    // Consume the complete statement even on a scope error so parsing progresses.
     let value = parseExpression();
     if check(TokenKind.Semicolon) { advance(); }
     skipNewlines();
+    if invalidContext != null { return invalidContext; };
     return ReturnStmt(value);
   };
 
   let parseExportStatement = () -> {
     skipNewlines();
     advance();
+    let name = null;
+    if check(TokenKind.Let) {
+      advance();
+      if !check(TokenKind.Identifier) { return parseError("Expected export name"); };
+      name = advance().value;
+      if !check(TokenKind.Equal) { return parseError("Expected '=' in named export"); };
+      advance();
+    };
     let value = parseExpression();
     if check(TokenKind.Semicolon) { advance(); }
     skipNewlines();
-    return ExportStmt(value);
+    let result = ExportStmt(value); result.name = name; result;
   };
 
   let parseExpressionStatement = () -> {
@@ -233,13 +311,14 @@ let Parser = (tokens) -> {
   };
 
   let parseBlock = () -> {
-    skipNewlines();
+    skipNewlines(); let first = peek();
     if check(TokenKind.LeftBrace) {
       // Block with braces
       advance();
       let statements = [];
       while !check(TokenKind.RightBrace) && !check(TokenKind.Eof) {
-        statements[statements.length] = parseStatement();
+        skipNewlines();
+        if !check(TokenKind.RightBrace) && !check(TokenKind.Eof) { statements[statements.length] = parseStatement(); };
         skipNewlines();
         // Skip stray semicolons after statements (common after if/while blocks;
         // the host tolerates them and they produce no statement. Skip AFTER the
@@ -248,12 +327,12 @@ let Parser = (tokens) -> {
           advance();
         }
       }
-      if check(TokenKind.RightBrace) { advance(); }
-      return Block(statements);
+      if !matchToken([TokenKind.RightBrace]) { return parseError("Expected '}' after block"); };
+      return locate(Block(statements), first);
     } else {
       // Arrow function body without braces - parse single expression and wrap in block
       let expr = parseExpression();
-      return Block([expr]);
+      return locate(Block([expr]), first);
     }
   };
 
@@ -267,15 +346,23 @@ let Parser = (tokens) -> {
     let left = parseCoalesce();
 
     if matchToken([TokenKind.Equal]) {
-      let value = parseAssignment();
+      let assignmentToken = previous();
+      // Assignment is a statement, so its right side must be an expression.
+      let value = parseExpression();
+      if check(TokenKind.Equal) {
+        let error = parseErrorAt("Chained assignment is not allowed", peek());
+        // Consume the remaining chain without constructing nested Assign nodes.
+        while matchToken([TokenKind.Equal]) { parseExpression(); };
+        return error;
+      };
       if left.type == "Identifier" {
-        return AssignStmt(IdentifierExpr(left.name), value);
+        return AssignStmt(left, value);
       } else if left.type == "MemberAccess" {
         return AssignStmt(left, value);
       } else if left.type == "IndexAccess" {
         return AssignStmt(left, value);
       } else {
-        return { type: "Error", message: "Invalid assignment target" };
+        return parseErrorAt("Invalid assignment target", assignmentToken);
       }
     } else {
       return left;
@@ -287,7 +374,7 @@ let Parser = (tokens) -> {
     let left = parseOr();
     while matchToken([TokenKind.QuestionQuestion]) {
       let right = parseOr();
-      left = BinaryOpExpr("??", left, right);
+      left = locate(BinaryOpExpr("??", left, right), nodeStart(left));
     }
     return left;
   };
@@ -297,7 +384,7 @@ let Parser = (tokens) -> {
     let left = parseAnd();
     while matchToken([TokenKind.Or]) {
       let right = parseAnd();
-      left = BinaryOpExpr("||", left, right);
+      left = locate(BinaryOpExpr("||", left, right), nodeStart(left));
     }
     return left;
   };
@@ -307,7 +394,7 @@ let Parser = (tokens) -> {
     let left = parseBitwiseOr();
     while matchToken([TokenKind.And]) {
       let right = parseBitwiseOr();
-      left = BinaryOpExpr("&&", left, right);
+      left = locate(BinaryOpExpr("&&", left, right), nodeStart(left));
     }
     return left;
   };
@@ -317,7 +404,7 @@ let Parser = (tokens) -> {
     let left = parseBitwiseXor();
     while matchToken([TokenKind.BitwiseOr]) {
       let right = parseBitwiseXor();
-      left = BinaryOpExpr("|", left, right);
+      left = locate(BinaryOpExpr("|", left, right), nodeStart(left));
     }
     return left;
   };
@@ -327,7 +414,7 @@ let Parser = (tokens) -> {
     let left = parseBitwiseAnd();
     while matchToken([TokenKind.BitwiseXor]) {
       let right = parseBitwiseAnd();
-      left = BinaryOpExpr("^", left, right);
+      left = locate(BinaryOpExpr("^", left, right), nodeStart(left));
     }
     return left;
   };
@@ -337,7 +424,7 @@ let Parser = (tokens) -> {
     let left = parseEquality();
     while matchToken([TokenKind.BitwiseAnd]) {
       let right = parseEquality();
-      left = BinaryOpExpr("&", left, right);
+      left = locate(BinaryOpExpr("&", left, right), nodeStart(left));
     }
     return left;
   };
@@ -349,10 +436,10 @@ let Parser = (tokens) -> {
     while !done {
       if matchToken([TokenKind.EqualEqual]) {
         let right = parseComparison();
-        left = BinaryOpExpr("==", left, right);
+        left = locate(BinaryOpExpr("==", left, right), nodeStart(left));
       } else if matchToken([TokenKind.NotEqual]) {
         let right = parseComparison();
-        left = BinaryOpExpr("!=", left, right);
+        left = locate(BinaryOpExpr("!=", left, right), nodeStart(left));
       } else {
         done = true;
       }
@@ -367,16 +454,16 @@ let Parser = (tokens) -> {
     while !done {
       if matchToken([TokenKind.Less]) {
         let right = parseAddition();
-        left = BinaryOpExpr("<", left, right);
+        left = locate(BinaryOpExpr("<", left, right), nodeStart(left));
       } else if matchToken([TokenKind.LessEqual]) {
         let right = parseAddition();
-        left = BinaryOpExpr("<=", left, right);
+        left = locate(BinaryOpExpr("<=", left, right), nodeStart(left));
       } else if matchToken([TokenKind.Greater]) {
         let right = parseAddition();
-        left = BinaryOpExpr(">", left, right);
+        left = locate(BinaryOpExpr(">", left, right), nodeStart(left));
       } else if matchToken([TokenKind.GreaterEqual]) {
         let right = parseAddition();
-        left = BinaryOpExpr(">=", left, right);
+        left = locate(BinaryOpExpr(">=", left, right), nodeStart(left));
       } else {
         done = true;
       }
@@ -391,10 +478,10 @@ let Parser = (tokens) -> {
     while !done {
       if matchToken([TokenKind.Plus]) {
         let right = parseMultiplication();
-        left = BinaryOpExpr("+", left, right);
+        left = locate(BinaryOpExpr("+", left, right), nodeStart(left));
       } else if matchToken([TokenKind.Minus]) {
         let right = parseMultiplication();
-        left = BinaryOpExpr("-", left, right);
+        left = locate(BinaryOpExpr("-", left, right), nodeStart(left));
       } else {
         done = true;
       }
@@ -409,13 +496,13 @@ let Parser = (tokens) -> {
     while !done {
       if matchToken([TokenKind.Star]) {
         let right = parseUnary();
-        left = BinaryOpExpr("*", left, right);
+        left = locate(BinaryOpExpr("*", left, right), nodeStart(left));
       } else if matchToken([TokenKind.Slash]) {
         let right = parseUnary();
-        left = BinaryOpExpr("/", left, right);
+        left = locate(BinaryOpExpr("/", left, right), nodeStart(left));
       } else if matchToken([TokenKind.Percent]) {
         let right = parseUnary();
-        left = BinaryOpExpr("%", left, right);
+        left = locate(BinaryOpExpr("%", left, right), nodeStart(left));
       } else {
         done = true;
       }
@@ -424,13 +511,16 @@ let Parser = (tokens) -> {
   };
 
   let parseUnary = () -> {
-    skipNewlines();
+    skipNewlines(); let first = peek();
     if matchToken([TokenKind.Bang]) {
       let right = parseUnary();
-      return UnaryOpExpr("!", right);
+      return locate(UnaryOpExpr("!", right), first);
     } else if matchToken([TokenKind.Minus]) {
       let right = parseUnary();
-      return UnaryOpExpr("-", right);
+      return locate(UnaryOpExpr("-", right), first);
+    } else if matchToken([TokenKind.Plus]) {
+      let right = parseUnary();
+      return locate(UnaryOpExpr("+", right), first);
     } else {
       return parseCall();
     }
@@ -456,8 +546,8 @@ let Parser = (tokens) -> {
             }
           }
         }
-        if check(TokenKind.RightParen) { advance(); }
-        expr = CallExpr(expr, arguments);
+        if !matchToken([TokenKind.RightParen]) { return parseError("Expected ')' after arguments"); };
+        expr = locate(CallExpr(expr, arguments), nodeStart(expr));
       } else if matchToken([TokenKind.Dot]) {
         // Get the full field name (identifier after the dot)
         let name = "";
@@ -472,16 +562,16 @@ let Parser = (tokens) -> {
           advance();
         }
         if name != "" {
-          expr = MemberAccessExpr(expr, name);
+          expr = locate(MemberAccessExpr(expr, name), nodeStart(expr));
         } else {
-          done = true;
+          return parseError("Expected member name after '.'");
         }
       } else if matchToken([TokenKind.LeftBracket]) {
         let index = parseExpression();
-        if check(TokenKind.RightBracket) { advance(); }
-        expr = IndexAccessExpr(expr, index);
+        if !matchToken([TokenKind.RightBracket]) { return parseError("Expected ']' after index"); };
+        expr = locate(IndexAccessExpr(expr, index), nodeStart(expr));
       } else if matchToken([TokenKind.Question]) {
-        expr = UnaryOpExpr("?", expr);
+        expr = locate(UnaryOpExpr("?", expr), nodeStart(expr));
       } else {
         done = true;
       }
@@ -490,7 +580,21 @@ let Parser = (tokens) -> {
     return expr;
   };
 
+  // Every arrow spelling lowers to the same Function / Parameter / Block AST.
+  let parseFunctionBody = (params) -> {
+    // Parameters/annotations were parsed in the defining outer context.
+    let outerContext = insideFunction;
+    insideFunction = true;
+    let body = parseBlock();
+    insideFunction = outerContext;
+    FunctionExpr(params, body);
+  };
+
   let parsePrimary = () -> {
+    skipNewlines(); let first = peek();
+    locateMissing(parsePrimaryInner(), first);
+  };
+  let parsePrimaryInner = () -> {
     skipNewlines();
     let token = peek();
 
@@ -499,7 +603,27 @@ let Parser = (tokens) -> {
       return NumberExpr(token.value);
     } else if token.kind == TokenKind.String {
       advance();
-      return StringExpr(token.value);
+      if isError(token.parts) { return StringExpr(token.value); };
+      let parts = []; let i = 0;
+      while i < token.parts.length {
+        let part = token.parts[i];
+        if part.kind == "Literal" { parts[parts.length] = part; }
+        else {
+          let inner = Parser(part.tokens);
+          // Interpolation is evaluated in its enclosing lexical context.
+          inner.setFunctionContext(insideFunction);
+          inner.setSource(sourceText); inner.setSourcePath(sourcePath);
+          let expr = inner.parseExpression();
+          if inner.getErrors().length > 0 {
+            let diagnostic = inner.getDiagnostics()[0];
+            return parseErrorAt(diagnostic.message, diagnostic);
+          };
+          if !inner.check(TokenKind.Eof) { return parseErrorAt("Expected one interpolation expression", inner.peek()); };
+          parts[parts.length] = { kind: "Interpolation", expression: expr };
+        };
+        i = i + 1;
+      };
+      return { type: "String", value: "", parts: parts };
     } else if token.kind == TokenKind.True {
       advance();
       return BooleanExpr(true);
@@ -511,41 +635,41 @@ let Parser = (tokens) -> {
       return NullExpr();
     } else if token.kind == TokenKind.Identifier {
       advance();
+      if matchToken([TokenKind.Arrow]) {
+        return parseFunctionBody([locatedParameter(token.value, null, token)]);
+      };
       return IdentifierExpr(token.value);
     } else if token.kind == TokenKind.Import {
-      // import must be recognized BEFORE the isKeyword-as-identifier branch
-      // below, or every import parses as IdentifierExpr("import") and the
-      // statement silently becomes an expression
       advance();
-      if check(TokenKind.String) {
-        let path = previous().value;
-        if check(TokenKind.Semicolon) { advance(); }
-        return ImportExpr(path);
-      } else {
-        // Unquoted path (the boot sources' own convention: `import ./lib.ql`):
-        // collect Dot / Slash / Identifier segments until ; newline or EOF,
-        // mirroring the host parser's parse_import
-        let path = "";
-        while !check(TokenKind.Semicolon) && !check(TokenKind.Newline) && !check(TokenKind.Eof) {
-          let t = peek();
-          if t.kind == TokenKind.Dot {
-            path = path + ".";
-            advance();
-          } else if t.kind == TokenKind.Slash {
-            path = path + "/";
-            advance();
-          } else if t.kind == TokenKind.Identifier {
-            path = path + t.value;
-            advance();
-          } else {
-            // Unexpected token in path: consume and stop (matches host's error
-            // tolerance; the interpreter raises NotImplemented on the import)
-            advance();
-          };
-        }
-        if check(TokenKind.Semicolon) { advance(); }
-        return ImportExpr(path);
+      if matchToken([TokenKind.LeftParen]) {
+        let pathExpression = parseExpression()?;
+        if !matchToken([TokenKind.RightParen]) { return parseError("Expected ')' after dynamic import path"); };
+        return { type: "Import", pathExpression: pathExpression };
       };
+      if check(TokenKind.String) {
+        let pathToken = advance();
+        if !isError(pathToken.parts) { return parseErrorAt("Import path must be a literal string", pathToken); };
+        if pathToken.value == "" { return parseErrorAt("Empty import path", pathToken); };
+        return ImportExpr(pathToken.value);
+      };
+      let path = ""; let end = peek().span.start;
+      // Unquoted paths are contiguous tokens, so the next source line remains a statement.
+      let done = false;
+      while !done && !check(TokenKind.Eof) {
+        let t = peek();
+        if t.span.start != end { done = true; }
+        else if t.kind == TokenKind.Dot || t.kind == TokenKind.Slash || t.kind == TokenKind.Minus || t.kind == TokenKind.Identifier {
+          if t.kind == TokenKind.Dot { path = path + "."; }
+          else if t.kind == TokenKind.Slash { path = path + "/"; }
+          else if t.kind == TokenKind.Minus { path = path + "-"; }
+          else { path = path + t.value; };
+          end = t.span.end; advance();
+        } else { done = true; };
+      };
+      if path == "" { return parseError("Expected import path"); };
+      return ImportExpr(path);
+    } else if token.kind == TokenKind.If {
+      return parseIfStatement();
     } else if isKeyword(token.kind) {
       // Allow keywords as identifiers (for obj.key where key is a keyword)
       advance();
@@ -560,8 +684,7 @@ let Parser = (tokens) -> {
         if check(TokenKind.Arrow) {
           // () -> body - empty parameter function
           advance();
-          let body = parseBlock();
-          return FunctionExpr([], body);
+          return parseFunctionBody([]);
         } else {
           // Just empty parens
           return { type: "Null", value: null };
@@ -577,59 +700,38 @@ let Parser = (tokens) -> {
         let annotation = null;
         if check(TokenKind.Colon) {
           advance();
-          annotation = parseExpression();
+          annotation = parseAnnotation();
         }
 
         // With an annotation, force the parameter-list path (avoiding (x: T) being silently treated as grouping)
         if annotation != null || check(TokenKind.Comma) {
           // This is a parameter list: (a, b, ...) / (a: T, b: U, ...)
-          let params = [Parameter(potentialParam, annotation)];
-          if check(TokenKind.Comma) { advance(); }
-
-          while !check(TokenKind.RightParen) && !check(TokenKind.Eof) {
+          let params = [locatedParameter(potentialParam, annotation, firstToken)];
+          skipNewlines();
+          while matchToken([TokenKind.Comma]) {
             skipNewlines();
-            if check(TokenKind.Identifier) {
-              let paramName = peek().value;
-              advance();
+            if !check(TokenKind.RightParen) {
+              if !check(TokenKind.Identifier) { return parseError("Expected parameter name"); };
+              let paramToken = advance(); let paramName = paramToken.value;
               let ann = null;
-              if check(TokenKind.Colon) {
-                advance();
-                ann = parseExpression();
-              }
-              params[params.length] = Parameter(paramName, ann);
-            } else if check(TokenKind.Comma) {
-              advance();
-            } else {
-              // Unexpected token in params
+              if matchToken([TokenKind.Colon]) { ann = parseAnnotation(); };
+              params[params.length] = locatedParameter(paramName, ann, paramToken);
+              skipNewlines();
             };
-
-            if matchToken([TokenKind.Comma]) {
-              // continue
-            } else {
-              // check if done
-            };
-          }
-
-          if check(TokenKind.RightParen) { advance(); }
-
-          if check(TokenKind.Arrow) {
-            advance();
-            let body = parseBlock();
-            return FunctionExpr(params, body);
-          } else {
-            return { type: "Error", message: "Expected '->' after parameters" };
           };
+          if !matchToken([TokenKind.RightParen]) { return parseError("Expected ')' after parameters"); };
+          if !matchToken([TokenKind.Arrow]) { return parseError("Expected '->' after parameters"); };
+          return parseFunctionBody(params);
         } else if check(TokenKind.RightParen) {
           // Just (name) - could be grouping or single param function
           advance();
           if check(TokenKind.Arrow) {
             // (name) -> body
             advance();
-            let body = parseBlock();
-            return FunctionExpr([Parameter(potentialParam, null)], body);
+            return parseFunctionBody([locatedParameter(potentialParam, null, firstToken)]);
           } else {
             // Grouped expression: (name)
-            return IdentifierExpr(potentialParam);
+            return locateBetween(IdentifierExpr(potentialParam), firstToken, firstToken);
           };
         } else {
           // (name ...) is neither a parameter list nor (name): rewind the consumed
@@ -639,16 +741,11 @@ let Parser = (tokens) -> {
           skipNewlines();
           let expr = parseExpression();
           skipNewlines();
-          if check(TokenKind.RightParen) { advance(); }
+          if !matchToken([TokenKind.RightParen]) { return parseError("Expected ')' after expression"); };
           if check(TokenKind.Arrow) {
-            // (expr) -> body - single-parameter function (when the expression is an identifier)
             advance();
-            let params = [];
-            if expr.type == "Identifier" {
-              params[0] = Parameter(expr.name, null);
-            };
-            let body = parseBlock();
-            return FunctionExpr(params, body);
+            if expr.type != "Identifier" { return parseError("Expected parameter name before '->'"); };
+            return parseFunctionBody([locatedParameter(expr.name, null, nodeStart(expr))]);
           };
           return expr;
         };
@@ -657,17 +754,11 @@ let Parser = (tokens) -> {
         skipNewlines();
         let expr = parseExpression();
         skipNewlines();
-        if check(TokenKind.RightParen) { advance(); }
+        if !matchToken([TokenKind.RightParen]) { return parseError("Expected ')' after expression"); };
         if check(TokenKind.Arrow) {
-          // (expr) -> body - single param function
           advance();
-          // Convert the expression to a parameter name (not ideal but works for simple cases)
-          let params = [];
-          if expr.type == "Identifier" {
-            params[0] = Parameter(expr.name, null);
-          };
-          let body = parseBlock();
-          return FunctionExpr(params, body);
+          if expr.type != "Identifier" { return parseError("Expected parameter name before '->'"); };
+          return parseFunctionBody([locatedParameter(expr.name, null, nodeStart(expr))]);
         };
         return expr;
       }
@@ -687,49 +778,41 @@ let Parser = (tokens) -> {
           }
         }
       }
-      if check(TokenKind.RightBracket) { advance(); }
+      if !matchToken([TokenKind.RightBracket]) { return parseError("Expected ']' after array"); };
       return ArrayExpr(elements);
     } else if token.kind == TokenKind.LeftBrace {
       advance();
       let fields = [];
-      if !check(TokenKind.RightBrace) {
-        let fieldDone = false;
-        while !fieldDone {
-          skipNewlines();
-          // Parse field name (should be an identifier)
-          if check(TokenKind.Identifier) {
-            let name = peek().value;
-            advance();
-            // Expect : or = sign
-            if check(TokenKind.Colon) { advance(); }
-            else if check(TokenKind.Equal) { advance(); }
-            let value = parseExpression();
-            skipNewlines();
-            fields[fields.length] = ObjectField(name, value);
-          } else {
-            // Not an identifier, might be end of object
-          };
-
-          if matchToken([TokenKind.Comma]) {
-            // continue parsing fields
-          } else {
-            fieldDone = true;
-          }
-        }
-      }
-      if check(TokenKind.RightBrace) { advance(); }
+      while !check(TokenKind.RightBrace) && !check(TokenKind.Eof) {
+        let key = peek();
+        if key.kind != TokenKind.Identifier && key.kind != TokenKind.String && key.kind != TokenKind.Number && !isKeyword(key.kind) {
+          advance(); return parseErrorAt("Expected object key", key);
+        };
+        if !isError(key.parts) { advance(); return parseErrorAt("Object keys must be literal strings", key); };
+        advance();
+        let name = key.value;
+        if key.kind == TokenKind.Number { name = std.Number.toString(name); };
+        let value = null;
+        if matchToken([TokenKind.Colon]) { value = parseExpression(); }
+        else if key.kind == TokenKind.Identifier && (check(TokenKind.Comma) || check(TokenKind.RightBrace)) { value = locateBetween(IdentifierExpr(name), key, key); }
+        else { return parseError("Expected ':' after object key"); };
+        fields[fields.length] = locate(ObjectField(name, value), key);
+        if check(TokenKind.Eof) { return parseError("Expected '}'"); };
+        if !matchToken([TokenKind.Comma]) && !check(TokenKind.RightBrace) { return parseError("Expected ',' in object"); };
+      };
+      if !matchToken([TokenKind.RightBrace]) { return parseError("Expected '}'"); };
       return ObjectExpr(fields);
     } else if token.kind == TokenKind.Arrow {
       advance();
-      let body = parseBlock();
-      return FunctionExpr([], body);
+      return parseFunctionBody([]);
     } else {
       advance();
-      return { type: "Error", message: "Unexpected token" };
+      if token.kind == TokenKind.Error { return parseErrorAt(token.value, token); };
+      return parseErrorAt("Unexpected token: " + token.kind, token);
     }
   };
 
-  return { parse: parse, peek: peek, previous: previous, advance: advance, check: check, parseExpression: parseExpression };
+  return { parse: parse, getErrors: () -> errors, getDiagnostics: () -> diagnostics, setSource: setSource, setSourcePath: setSourcePath, setFunctionContext: setFunctionContext, peek: peek, previous: previous, advance: advance, check: check, parseExpression: parseExpression };
 };
 
 export Parser;

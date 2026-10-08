@@ -78,7 +78,8 @@ pub struct Interpreter {
     recursion_depth: usize,
     /// Source text of the program currently being executed; used by `line_col`
     /// to convert byte offsets into 1-based (line, col) positions (Task 5 uses it).
-    current_source: String,
+    current_source: Rc<str>,
+    loading_files: Rc<RefCell<Vec<std::path::PathBuf>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -103,7 +104,8 @@ impl Interpreter {
             call_stack: Vec::new(),
             exports: HashMap::new(),
             recursion_depth: 0,
-            current_source: String::new(),
+            current_source: Rc::from(""),
+            loading_files: Rc::new(RefCell::new(Vec::new())),
         }
     }
 
@@ -121,15 +123,24 @@ impl Interpreter {
 
     /// Run a source file
     pub fn run_file(&mut self, path: &Path) -> Result<Value, RuntimeError> {
-        let source = fs::read_to_string(path)
+        let path = fs::canonicalize(path).map_err(|e| RuntimeError::IoError(e.to_string()))?;
+        if self.loading_files.borrow().contains(&path) {
+            return Err(RuntimeError::Custom(format!("cyclic import: {}", path.display())));
+        }
+        if self.loading_files.borrow().len() >= 128 {
+            return Err(RuntimeError::Custom("module nesting limit exceeded".into()));
+        }
+        let source = fs::read_to_string(&path)
             .map_err(|e| RuntimeError::IoError(e.to_string()))?;
-
-        self.run_source(&source, path.to_string_lossy().to_string())
+        self.loading_files.borrow_mut().push(path.clone());
+        let result = self.run_source(&source, path.to_string_lossy().to_string());
+        self.loading_files.borrow_mut().pop();
+        result
     }
 
     /// Run source code
     pub fn run_source(&mut self, source: &str, path: String) -> Result<Value, RuntimeError> {
-        self.current_source = source.to_string();
+        self.current_source = Rc::from(source);
 
         let tokens = Lexer::new(source).tokenize()
             .map_err(|e| RuntimeError::NotImplemented(format!("{:?}", e)))?;
@@ -476,6 +487,8 @@ impl Interpreter {
                     parameters: Rc::clone(&func.parameters),
                     body: Rc::clone(&func.body),
                     closure: Rc::clone(env),
+                    source_path: self.call_stack.last().map(|f| f.path.to_string()).unwrap_or_default(),
+                    source: Rc::clone(&self.current_source),
                     param_types: Rc::new(param_types),
                     param_keys: Rc::new(func.parameters.iter().map(|p| Rc::from(p.name.as_str())).collect()),
                 })))
@@ -550,8 +563,9 @@ impl Interpreter {
                     // `?` propagation: an Error operand becomes the internal UserError signal,
                     // which bubbles up to the enclosing function-call boundary (or the top level)
                     UnaryOp::Propagate => {
-                        let value = self.eval_expression(&unary.operand, env)?;
-                        match value {
+                        // All unary operators share the operand evaluated above.
+                        // Evaluating it again here repeats calls and side effects.
+                        match operand {
                             Value::Error(e) => Err(RuntimeError::UserError(e)),
                             other => Ok(other),
                         }
@@ -768,10 +782,11 @@ impl Interpreter {
                 }
 
                 self.call_stack.push(CallFrame {
-                    path: Cow::Borrowed("unknown"),
+                    path: Cow::Owned(func.source_path.clone()),
                     position: span.start,
                 });
 
+                let caller_source = std::mem::replace(&mut self.current_source, Rc::clone(&func.source));
                 // Use match so recursion_depth / call_stack are restored correctly on errors
                 let result = match self.run_block(&func.body, &call_env) {
                     Ok(flow) => Ok(match flow {
@@ -784,6 +799,7 @@ impl Interpreter {
                     Err(other) => Err(other),
                 };
 
+                self.current_source = caller_source;
                 self.recursion_depth -= 1;
                 self.call_stack.pop();
                 result
@@ -875,7 +891,10 @@ impl Interpreter {
     /// Assign to a target
     fn assign_value(&mut self, target: &AssignTarget, value: Value, env: &EnvRef) -> Result<(), RuntimeError> {
         if target.accessors.is_empty() {
-            let value = match env.borrow().get_annotation(&target.name) {
+            // A check is user code and can assign into this same environment.
+            // Drop the RefCell borrow before invoking it (the metadata is cloned).
+            let annotation = env.borrow().get_annotation(&target.name);
+            let value = match annotation {
                 Some((ty, text)) => self.check_annotation(value, ty, &text, None)?,
                 None => value,
             };
@@ -923,7 +942,9 @@ impl Interpreter {
         let import_path = base_path.join(path);
 
         let mut import_interpreter = Interpreter::new();
-        import_interpreter.run_file(&import_path)?;
+        import_interpreter.loading_files = Rc::clone(&self.loading_files);
+        let result = import_interpreter.run_file(&import_path)?;
+        if matches!(result, Value::Error(_)) { return Ok(result); }
 
         // Merge exports into current environment
         for (name, value) in &import_interpreter.exports {

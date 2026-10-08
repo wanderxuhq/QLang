@@ -1,0 +1,1 @@
+PASS function return scope (37 assertions, 6 valid / 9 scope-rejected + bare-return grammar)

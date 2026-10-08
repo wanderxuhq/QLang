@@ -109,6 +109,20 @@ pub fn register_builtins(env: &EnvRef) {
 fn create_std_object() -> Value {
     let mut fields = HashMap::new();
 
+    // Internal bootstrap ABI, mirrored by the QLang runtime. Invoke the normal
+    // dispatcher so native arity and Error policy are not duplicated here.
+    fields.insert("__callNative".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
+        name: "<native call bridge>".to_string(),
+        arity: Some(2),
+        accepts_errors: true,
+        func: Box::new(|ctx, args| {
+            let arguments = match &args[1] {
+                Value::Array(values) => values.borrow().clone(),
+                _ => return Ok(native_error("TypeMismatch", "native call bridge expects Array arguments".to_string())),
+            };
+            ctx.call(args[0].clone(), arguments, Default::default())
+        }),
+    })));
     fields.insert("Math".to_string(), create_math_module());
     fields.insert("JSON".to_string(), create_json_module());
     fields.insert("Array".to_string(), create_array_module());
@@ -233,11 +247,11 @@ fn create_math_module() -> Value {
         arity: None,
         accepts_errors: false,
         func: Box::new(|_ctx, args| {
-            let mut max_val = std::f64::MIN;
+            let mut max_val = f64::NEG_INFINITY;
             for arg in args {
                 match arg {
                     Value::Number(n) => {
-                        if n > max_val {
+                        if n.is_nan() || n > max_val || (n == 0.0 && max_val == 0.0 && !n.is_sign_negative()) {
                             max_val = n;
                         }
                     }
@@ -256,11 +270,11 @@ fn create_math_module() -> Value {
         arity: None,
         accepts_errors: false,
         func: Box::new(|_ctx, args| {
-            let mut min_val = std::f64::MAX;
+            let mut min_val = f64::INFINITY;
             for arg in args {
                 match arg {
                     Value::Number(n) => {
-                        if n < min_val {
+                        if n.is_nan() || n < min_val || (n == 0.0 && min_val == 0.0 && n.is_sign_negative()) {
                             min_val = n;
                         }
                     }
@@ -336,7 +350,10 @@ fn create_json_module() -> Value {
         accepts_errors: false,
         func: Box::new(|_ctx, args| {
             match args.first() {
-                Some(value) => Ok(Value::String(json_stringify(value))),
+                Some(value) => Ok(match json_stringify(value, 0) {
+                    Ok(text) => Value::String(text),
+                    Err(()) => native_error("TypeMismatch", "JSON.stringify nesting too deep".to_string()),
+                }),
                 _ => Ok(Value::String("null".to_string())),
             }
         }),
@@ -359,11 +376,12 @@ fn create_json_module() -> Value {
 }
 
 /// Convert a QLang value to a JSON string
-fn json_stringify(value: &Value) -> String {
-    match value {
+fn json_stringify(value: &Value, depth: usize) -> Result<String, ()> {
+    if depth > 128 { return Err(()); }
+    Ok(match value {
         Value::Void => "null".to_string(),
         Value::Boolean(b) => b.to_string(),
-        Value::Number(n) => n.to_string(),
+        Value::Number(n) => if n.is_finite() { n.to_string() } else { "null".to_string() },
         Value::String(s) => {
             let mut escaped = String::new();
             for c in s.chars() {
@@ -373,6 +391,7 @@ fn json_stringify(value: &Value) -> String {
                     '\n' => escaped.push_str("\\n"),
                     '\r' => escaped.push_str("\\r"),
                     '\t' => escaped.push_str("\\t"),
+                    '\u{0000}'..='\u{001f}' => escaped.push_str(&format!("\\u{:04x}", c as u32)),
                     _ => escaped.push(c),
                 }
             }
@@ -380,235 +399,186 @@ fn json_stringify(value: &Value) -> String {
         }
         Value::Array(arr) => {
             let elements: Vec<String> = arr.borrow().iter()
-                .map(json_stringify)
-                .collect();
+                .map(|v| json_stringify(v, depth + 1))
+                .collect::<Result<Vec<_>, ()>>()?;
             format!("[{}]", elements.join(","))
         }
         Value::Object(obj) => {
             let pairs: Vec<String> = obj.borrow().fields.iter()
-                .map(|(k, v)| format!("{}:{}", json_stringify(&Value::String(k.clone())), json_stringify(v)))
-                .collect();
+                .map(|(k, v)| Ok(format!("{}:{}", json_stringify(&Value::String(k.clone()), depth + 1)?, json_stringify(v, depth + 1)?)))
+                .collect::<Result<Vec<_>, ()>>()?;
             format!("{{{}}}", pairs.join(","))
         }
         _ => "null".to_string(),
-    }
+    })
 }
 
-/// Parse a JSON string into a QLang value
+/// Parse JSON with a byte cursor that advances only over ASCII syntax or whole
+/// UTF-8 characters. Malformed input is a language error value, never a panic.
 fn json_parse(s: &str) -> Result<Value, RuntimeError> {
-    let trimmed = s.trim();
-    if trimmed.is_empty() {
-        return Ok(Value::Void);
+    let mut parser = JsonParser { source: s, pos: 0 };
+    let value = parser.value(0);
+    parser.whitespace();
+    Ok(match value {
+        Some(value) if parser.pos == s.len() => value,
+        _ => type_mismatch_error("JSON.parse", s.to_string(), "valid JSON".to_string()),
+    })
+}
+
+struct JsonParser<'a> {
+    source: &'a str,
+    pos: usize,
+}
+
+impl JsonParser<'_> {
+    fn peek(&self) -> Option<u8> {
+        self.source.as_bytes().get(self.pos).copied()
     }
 
-    if trimmed.starts_with('{') {
-        json_parse_object(trimmed)
-    } else if trimmed.starts_with('[') {
-        json_parse_array(trimmed)
-    } else if trimmed.starts_with('"') {
-        json_parse_string(trimmed)
-    } else if trimmed == "null" {
-        Ok(Value::Void)
-    } else if trimmed == "true" {
-        Ok(Value::Boolean(true))
-    } else if trimmed == "false" {
-        Ok(Value::Boolean(false))
-    } else {
-        if let Ok(n) = trimmed.parse::<f64>() {
-            Ok(Value::Number(n))
+    fn consume(&mut self, byte: u8) -> bool {
+        if self.peek() == Some(byte) {
+            self.pos += 1;
+            true
         } else {
-            Ok(type_mismatch_error("JSON.parse", trimmed.to_string(), "valid JSON".to_string()))
+            false
         }
     }
-}
 
-fn json_parse_object(s: &str) -> Result<Value, RuntimeError> {
-    let content = &s[1..s.len()-1].trim();
-    if content.is_empty() {
-        return Ok(Value::Object(Rc::new(RefCell::new(ObjectValue::new()))));
+    fn whitespace(&mut self) {
+        while matches!(self.peek(), Some(b' ' | b'\n' | b'\r' | b'\t')) {
+            self.pos += 1;
+        }
     }
 
-    let mut object = ObjectValue::new();
-    let mut current = String::new();
-    let mut in_string = false;
-    let mut depth: i32 = 0;
-
-    for (i, c) in content.char_indices() {
-        match c {
-            '"' => {
-                if !in_string {
-                    in_string = true;
-                } else if content[i..].starts_with("\"\"") {
-                    // Escaped quote or empty string
-                    current.push('"');
-                } else {
-                    in_string = false;
+    fn value(&mut self, depth: usize) -> Option<Value> {
+        // Bound recursive descent for untrusted input, including nested arrays.
+        if depth > 128 {
+            return None;
+        }
+        self.whitespace();
+        match self.peek()? {
+            b'"' => self.string().map(Value::String),
+            b'{' => {
+                self.pos += 1;
+                let mut object = ObjectValue::new();
+                self.whitespace();
+                if !self.consume(b'}') {
+                    loop {
+                        self.whitespace();
+                        let key = self.string()?;
+                        self.whitespace();
+                        if !self.consume(b':') { return None; }
+                        object.insert(key, self.value(depth + 1)?);
+                        self.whitespace();
+                        if self.consume(b'}') { break; }
+                        if !self.consume(b',') { return None; }
+                    }
                 }
-                current.push(c);
+                Some(Value::Object(Rc::new(RefCell::new(object))))
             }
-            '{' | '[' => {
-                current.push(c);
-                if !in_string {
-                    depth += 1;
+            b'[' => {
+                self.pos += 1;
+                let mut values = Vec::new();
+                self.whitespace();
+                if !self.consume(b']') {
+                    loop {
+                        values.push(self.value(depth + 1)?);
+                        self.whitespace();
+                        if self.consume(b']') { break; }
+                        if !self.consume(b',') { return None; }
+                    }
                 }
+                Some(Value::Array(Rc::new(RefCell::new(values))))
             }
-            '}' | ']' => {
-                current.push(c);
-                if !in_string && depth > 0 {
-                    depth -= 1;
-                }
-            }
-            ',' if !in_string && depth == 0 => {
-                if let Some((key, value)) = parse_json_pair(&current) {
-                    object.insert(key, value);
-                }
-                current.clear();
-            }
-            _ => current.push(c),
+            b'n' => self.literal("null", Value::Void),
+            b't' => self.literal("true", Value::Boolean(true)),
+            b'f' => self.literal("false", Value::Boolean(false)),
+            b'-' | b'0'..=b'9' => self.number(),
+            _ => None,
         }
     }
 
-    if !current.is_empty() {
-        if let Some((key, value)) = parse_json_pair(&current) {
-            object.insert(key, value);
-        }
-    }
-
-    Ok(Value::Object(Rc::new(RefCell::new(object))))
-}
-
-fn parse_json_pair(s: &str) -> Option<(String, Value)> {
-    // Find the colon that's outside of quotes
-    let mut in_quote = false;
-    let mut colon_idx = None;
-
-    for (i, c) in s.char_indices() {
-        if c == '"' {
-            in_quote = !in_quote;
-        } else if c == ':' && !in_quote {
-            colon_idx = Some(i);
-            break;
-        }
-    }
-
-    let colon_idx = colon_idx?;
-    let key_str = s[..colon_idx].trim();
-    let raw_value_str = s[colon_idx+1..].trim();
-
-    // If value starts with quote, find the closing quote (accounting for escapes)
-    let value_str = if raw_value_str.starts_with('"') {
-        let mut i = 1;
-        while i < raw_value_str.len() {
-            let c = raw_value_str.chars().nth(i).unwrap();
-            if c == '\\' && i + 1 < raw_value_str.len() {
-                // Skip escaped character
-                i += 2;
-            } else if c == '"' {
-                // Found closing quote
-                i += 1;
-                break;
-            } else {
-                i += 1;
-            }
-        }
-        raw_value_str[..i].trim()
-    } else {
-        raw_value_str
-    };
-
-    // Key might be quoted like "name" or unquoted like name
-    let key = json_parse_string(key_str).ok()?;
-    if let Value::String(k) = key {
-        let value = json_parse(value_str).ok()?;
-        Some((k, value))
-    } else {
-        None
-    }
-}
-
-fn json_parse_array(s: &str) -> Result<Value, RuntimeError> {
-    let content = &s[1..s.len()-1].trim();
-    if content.is_empty() {
-        return Ok(Value::Array(Rc::new(RefCell::new(vec![]))));
-    }
-
-    let mut elements = Vec::new();
-    let mut current = String::new();
-    let mut in_string = false;
-    let mut depth: i32 = 0;
-
-    for (i, c) in content.char_indices() {
-        match c {
-            '"' => {
-                if !in_string || content[i..].starts_with("\"\"") {
-                    in_string = !in_string;
-                } else {
-                    current.push(c);
-                }
-            }
-            '{' | '[' if !in_string => {
-                current.push(c);
-                depth += 1;
-            }
-            '}' | ']' if !in_string => {
-                current.push(c);
-                depth = depth.saturating_sub(1);
-            }
-            ',' if !in_string && depth == 0 => {
-                if let Ok(value) = json_parse(&current) {
-                    elements.push(value);
-                }
-                current.clear();
-            }
-            _ => current.push(c),
-        }
-    }
-
-    if !current.is_empty() {
-        if let Ok(value) = json_parse(&current) {
-            elements.push(value);
-        }
-    }
-
-    Ok(Value::Array(Rc::new(RefCell::new(elements))))
-}
-
-fn json_parse_string(s: &str) -> Result<Value, RuntimeError> {
-    let content = if s.starts_with('"') && s.ends_with('"') {
-        // Normal quoted string
-        &s[1..s.len()-1]
-    } else {
-        // Unquoted string (e.g., key without quotes in object)
-        s
-    };
-
-    let mut result = String::new();
-    let mut i = 0;
-
-    while i < content.len() {
-        let c = content.chars().nth(i).unwrap();
-        if c == '\\' && i + 1 < content.len() {
-            let next = content.chars().nth(i + 1).unwrap();
-            match next {
-                '"' => result.push('"'),
-                '\\' => result.push('\\'),
-                'n' => result.push('\n'),
-                'r' => result.push('\r'),
-                't' => result.push('\t'),
-                '/' => result.push('/'),
-                _ => result.push(next),
-            }
-            i += 2;
-        } else if c == '"' {
-            // End of quoted string (unescaped quote)
-            break;
+    fn literal(&mut self, text: &str, value: Value) -> Option<Value> {
+        if self.source[self.pos..].starts_with(text) {
+            self.pos += text.len();
+            Some(value)
         } else {
-            result.push(c);
-            i += 1;
+            None
         }
     }
 
-    Ok(Value::String(result))
+    fn number(&mut self) -> Option<Value> {
+        let start = self.pos;
+        self.consume(b'-');
+        if !self.consume(b'0') {
+            if !matches!(self.peek(), Some(b'1'..=b'9')) { return None; }
+            while matches!(self.peek(), Some(b'0'..=b'9')) { self.pos += 1; }
+        }
+        if self.consume(b'.') {
+            if !matches!(self.peek(), Some(b'0'..=b'9')) { return None; }
+            while matches!(self.peek(), Some(b'0'..=b'9')) { self.pos += 1; }
+        }
+        if self.consume(b'e') || self.consume(b'E') {
+            if !self.consume(b'+') { self.consume(b'-'); }
+            if !matches!(self.peek(), Some(b'0'..=b'9')) { return None; }
+            while matches!(self.peek(), Some(b'0'..=b'9')) { self.pos += 1; }
+        }
+        self.source[start..self.pos].parse::<f64>().ok().map(Value::Number)
+    }
+
+    fn hex_quad(&mut self) -> Option<u32> {
+        let mut value = 0;
+        for _ in 0..4 {
+            let digit = self.peek()?;
+            // Check ASCII before advancing; never leave pos inside a UTF-8 char.
+            let n = match digit {
+                b'0'..=b'9' => digit - b'0',
+                b'a'..=b'f' => digit - b'a' + 10,
+                b'A'..=b'F' => digit - b'A' + 10,
+                _ => return None,
+            };
+            self.pos += 1;
+            value = value * 16 + u32::from(n);
+        }
+        Some(value)
+    }
+
+    fn string(&mut self) -> Option<String> {
+        if !self.consume(b'"') { return None; }
+        let mut result = String::new();
+        loop {
+            let c = self.source[self.pos..].chars().next()?;
+            self.pos += c.len_utf8();
+            match c {
+                '"' => return Some(result),
+                '\\' => {
+                    let escape = self.source[self.pos..].chars().next()?;
+                    self.pos += escape.len_utf8();
+                    match escape {
+                        '"' | '\\' | '/' => result.push(escape),
+                        'b' => result.push('\u{0008}'),
+                        'f' => result.push('\u{000c}'),
+                        'n' => result.push('\n'),
+                        'r' => result.push('\r'),
+                        't' => result.push('\t'),
+                        'u' => {
+                            let mut code = self.hex_quad()?;
+                            if (0xd800..=0xdbff).contains(&code) {
+                                if !self.consume(b'\\') || !self.consume(b'u') { return None; }
+                                let low = self.hex_quad()?;
+                                if !(0xdc00..=0xdfff).contains(&low) { return None; }
+                                code = 0x10000 + ((code - 0xd800) << 10) + low - 0xdc00;
+                            }
+                            result.push(char::from_u32(code)?);
+                        }
+                        _ => return None,
+                    }
+                }
+                '\u{0000}'..='\u{001f}' => return None,
+                _ => result.push(c),
+            }
+        }
+    }
 }
 
 /// Create the std.Array module
@@ -1258,6 +1228,56 @@ fn create_string_module() -> Value {
         }),
     })));
 
+    // Unicode scalar indexing, using the same index rules as String.at.
+    fields.insert("codePointAt".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
+        name: "String.codePointAt".to_string(),
+        arity: Some(1),
+        accepts_errors: false,
+        func: Box::new(|_ctx, args| {
+            match args.first() {
+                Some(Value::String(s)) => {
+                    let s = s.clone();
+                    Ok(Value::NativeFunction(Rc::new(NativeFunction {
+                        name: "String.codePointAt<curried>".to_string(),
+                        arity: Some(1),
+                        accepts_errors: false,
+                        func: Box::new(move |_ctx, args| {
+                            match args.first() {
+                                Some(Value::Number(n)) => {
+                                    let len = s.chars().count();
+                                    match normalize_index(*n, len) {
+                                        Ok(i) => Ok(Value::Number(s.chars().nth(i).unwrap() as u32 as f64)),
+                                        Err(bad) => Ok(native_error("IndexOutOfBounds", format!("index {} out of bounds for length {}", bad, len))),
+                                    }
+                                }
+                                _ => Ok(type_mismatch_error("String.codePointAt", args.first().map(|v| v.type_name().to_string()).unwrap_or("none".to_string()), "Number".to_string())),
+                            }
+                        }),
+                    })))
+                }
+                _ => Ok(type_mismatch_error("String.codePointAt", args.first().map(|v| v.type_name().to_string()).unwrap_or("none".to_string()), "String".to_string())),
+            }
+        }),
+    })));
+
+    // Inverse of codePointAt: build a String from one Unicode scalar value.
+    fields.insert("fromCodePoint".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
+        name: "String.fromCodePoint".to_string(),
+        arity: Some(1),
+        accepts_errors: false,
+        func: Box::new(|_ctx, args| {
+            match args.first() {
+                Some(Value::Number(n)) => {
+                    match char::from_u32(*n as u32) {
+                        Some(c) if n.fract() == 0.0 && *n >= 0.0 && *n <= 0x10FFFF as f64 => Ok(Value::String(c.to_string())),
+                        _ => Ok(native_error("RangeError", "String.fromCodePoint expects a Unicode scalar value".to_string())),
+                    }
+                }
+                _ => Ok(type_mismatch_error("String.fromCodePoint", args.first().map(|v| v.type_name().to_string()).unwrap_or("none".to_string()), "Number".to_string())),
+            }
+        }),
+    })));
+
     // std.String.at(s, idx) - Unicode-safe char access that raises IndexOutOfBounds
     // on out-of-range indices (negative indices wrap, like string indexing). Used by
     // the bootstrapped interpreter to mirror the host's strict index semantics.
@@ -1282,6 +1302,21 @@ fn create_string_module() -> Value {
     })));
 
     Value::Object(Rc::new(RefCell::new(ObjectValue { fields, order: Vec::new() })))
+}
+
+/// Mirrors the AOT `ql_number_bits` intrinsic: sign<<63 | exponent<<52 | mantissa.
+fn host_number_bits(mantissa: f64, exponent: f64, negative: bool) -> f64 {
+    let m = (mantissa as i64 as u64) & 0x000F_FFFF_FFFF_FFFF;
+    let e = (exponent as i64 as u64) << 52;
+    let s = (negative as u64) << 63;
+    f64::from_bits(m | e | s)
+}
+
+/// Mirrors the AOT `__math_scale`: m * 2^e with staged subnormal/overflow handling.
+fn host_ldexp(m: f64, e: f64) -> f64 {
+    if e > 1023.0 { return (m * host_number_bits(0.0, e, false)) * host_number_bits(0.0, 2046.0, false); }
+    if e < -1022.0 { return (m * host_number_bits(0.0, e + 1074.0 + 1023.0, false)) * host_number_bits(1.0, 0.0, false); }
+    m * host_number_bits(0.0, e + 1023.0, false)
 }
 
 /// Create the std.Number module
@@ -1338,6 +1373,58 @@ fn create_number_module() -> Value {
                     }
                 }
                 _ => Ok(Value::Number(std::f64::NAN)),
+            }
+        }),
+    })));
+
+    // std.Number.frexp(x) -> [mantissa, exponent] with x = mantissa * 2^exponent
+    // and the mantissa in [1,2). Representation-only mechanism matching the AOT
+    // runtime; every Math algorithm that uses it lives in the shared library.
+    fields.insert("frexp".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
+        name: "Number.frexp".to_string(),
+        arity: Some(1),
+        accepts_errors: false,
+        func: Box::new(|_ctx, args| {
+            match args.first() {
+                Some(Value::Number(x)) => {
+                    let x = *x;
+                    if x == 0.0 || !x.is_finite() {
+                        return Ok(Value::Array(Rc::new(RefCell::new(vec![Value::Number(x), Value::Number(0.0)]))));
+                    }
+                    let mut m = x.abs();
+                    let mut e = 0i32;
+                    while m >= 2.0 { m /= 2.0; e += 1; }
+                    while m < 1.0 { m *= 2.0; e -= 1; }
+                    if x < 0.0 { m = -m; }
+                    Ok(Value::Array(Rc::new(RefCell::new(vec![Value::Number(m), Value::Number(e as f64)]))))
+                }
+                _ => Ok(type_mismatch_error("Number.frexp", args.first().map(|v| v.type_name().to_string()).unwrap_or("none".to_string()), "Number".to_string())),
+            }
+        }),
+    })));
+
+    // std.Number.ldexp(m)(e) -> m * 2^e, staged to avoid premature over/underflow.
+    fields.insert("ldexp".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
+        name: "Number.ldexp".to_string(),
+        arity: Some(1),
+        accepts_errors: false,
+        func: Box::new(|_ctx, args| {
+            match args.first() {
+                Some(Value::Number(m)) => {
+                    let m = *m;
+                    Ok(Value::NativeFunction(Rc::new(NativeFunction {
+                        name: "Number.ldexp<curried>".to_string(),
+                        arity: Some(1),
+                        accepts_errors: false,
+                        func: Box::new(move |_ctx, args| {
+                            match args.first() {
+                                Some(Value::Number(e)) => Ok(Value::Number(host_ldexp(m, *e))),
+                                _ => Ok(type_mismatch_error("Number.ldexp", args.first().map(|v| v.type_name().to_string()).unwrap_or("none".to_string()), "Number".to_string())),
+                            }
+                        }),
+                    })))
+                }
+                _ => Ok(type_mismatch_error("Number.ldexp", args.first().map(|v| v.type_name().to_string()).unwrap_or("none".to_string()), "Number".to_string())),
             }
         }),
     })));
@@ -1575,6 +1662,18 @@ fn create_error_module() -> Value {
 fn create_fs_module() -> Value {
     let mut fields = HashMap::new();
 
+    // Compile-time and interpreter module loaders share canonical path identity.
+    fields.insert("canonicalPath".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
+        name: "fs.canonicalPath".to_string(), arity: Some(1), accepts_errors: false,
+        func: Box::new(|_ctx, args| match args.first() {
+            Some(Value::String(path)) => match std::fs::canonicalize(path) {
+                Ok(path) => Ok(Value::String(path.to_string_lossy().into_owned())),
+                Err(e) => Ok(native_error("IOError", format!("cannot resolve {}: {}", path, e))),
+            },
+            _ => Ok(native_error("TypeMismatch", "path must be a string".into())),
+        }),
+    })));
+
     // std.fs.readFileText(path)
     fields.insert("readFileText".to_string(), Value::NativeFunction(Rc::new(NativeFunction {
         name: "fs.readFileText".to_string(),
@@ -1585,10 +1684,10 @@ fn create_fs_module() -> Value {
                 Some(Value::String(path)) => {
                     match std::fs::read_to_string(path) {
                         Ok(content) => Ok(Value::String(content)),
-                        Err(e) => Ok(Value::String(format!("Error reading file: {}", e))),
+                        Err(e) => Ok(native_error("IOError", format!("cannot read {}: {}", path, e))),
                     }
                 }
-                _ => Ok(Value::String("Error: path must be a string".to_string())),
+                _ => Ok(native_error("TypeMismatch", "path must be a string".into())),
             }
         }),
     })));

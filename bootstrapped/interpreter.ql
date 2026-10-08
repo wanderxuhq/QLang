@@ -12,9 +12,85 @@
 import ./ast.ql;
 import ./environment.ql;
 import ./stdlib.ql;
+import ./modules.ql;
+import ./library.ql;
+import ./native_values.ql;
+
+// Immutable library AST/closures are shared. Every user module receives fresh
+// public namespace tables; library closures capture a private bootstrap scope.
+let libraryProgram = null;
+let libraryExports = null;
 
 let Interpreter = () -> {
-  let globalEnv = GlobalEnvironment(std);
+  // Retained bootstrap hosts without this capability keep their existing Error
+  // representation. Native QLang hosts provide scoped diagnostic provenance.
+  let diagnostics = std.__diagnostics;
+  let hasDiagnostics = !isError(diagnostics);
+  let nativeHost = std.__extensions;
+  let nativeBridge = null;
+  let sourcePoint = (node) -> { if isError(node.location) { null; } else { node.location; }; };
+  // User modules own their namespace tables. Keep the interpreter's std
+  // private so user augmentation cannot rewrite its formatting or file APIs.
+  // Type is a protected canonical type value; retain its identity.
+  let userStd = {}; let moduleKeys = std.Object.keys(std); let mi = 0;
+  while mi < moduleKeys.length {
+    let key = moduleKeys[mi]; let value = std[key];
+    if key != "Type" && typeTag(value) == "Object" {
+      let copy = {}; let keys = std.Object.keys(value); let i = 0;
+      while i < keys.length { copy[keys[i]] = value[keys[i]]; i = i + 1; };
+      value = copy;
+    };
+    // The embedding source context is not a user diagnostic-control API.
+    if key != "__diagnostics" && key != "__extensions" { userStd[key] = value; }; mi = mi + 1;
+  };
+  let globalEnv = GlobalEnvironment(userStd);
+  // Each module has a lexical args binding backed by the shared process array.
+  // Rebinding/shadowing args does not replace the process arguments for imports.
+  let processArguments = {type: "Array", value: []};
+  let shareArguments = (values) -> {
+    processArguments = values; globalEnv._define("args", values); null;
+  };
+  let setArguments = (values) -> {
+    if typeTag(values) != "Array" { return std.Error.raise("TypeMismatch", "interpreter arguments must be an Array of Strings", null); };
+    let wrapped = []; let i = 0;
+    while i < values.length {
+      if typeTag(values[i]) != "String" { return std.Error.raise("TypeMismatch", "interpreter arguments must be Strings", null); };
+      wrapped[wrapped.length] = {type: "String", value: values[i]}; i = i + 1;
+    };
+    shareArguments({type: "Array", value: wrapped});
+  };
+  shareArguments(processArguments);
+  let currentPath = "";
+  let libraryInitError = null;
+  let loadingModules = {};
+  let moduleExports = {};
+  let setModuleContext = (path, loading) -> { currentPath = path; loadingModules = loading; };
+  let importModule = (node, env) -> {
+    if !isError(node.pathExpression) {
+      let path = evaluate(node.pathExpression, env);
+      if isExiting(path) { return path; };
+      if nativeBridge == null {
+        return {type: "Error", value: std.Error.raise("NativeExtensionUnavailable", "this interpreter has no native extension bridge", null), propagate: false};
+      };
+      let origin = if isError(node.origin) { currentPath; } else { node.origin; };
+      return nativeBridge.load(path, origin, processArguments);
+    };
+    let path = modulePath(currentPath, node.path);
+    if isError(path) { return { type: "Error", value: path, propagate: true }; };
+    if !isError(loadingModules[path]) && loadingModules[path] == true {
+      return { type: "Error", value: std.Error.raise("ImportCycle", "cyclic import: " + path, null), propagate: true };
+    };
+    let source = std.fs.readFileText(path);
+    if isError(source) { return { type: "Error", value: source, propagate: true }; };
+    let program = parseModule(source, path);
+    if isError(program) { return { type: "Error", value: program, propagate: true }; };
+    let module = Interpreter(); module.setModuleContext(path, loadingModules); module._shareArguments(processArguments); module._shareNativeBridge(nativeBridge);
+    let result = module.runProgram(program);
+    if isErrorVal(result.value) { return { type: "Error", value: result.value.value, propagate: false }; };
+    let values = module.getExports(); let keys = std.Object.keys(values); let i = 0;
+    while i < keys.length { env._define(keys[i], values[keys[i]]); i = i + 1; };
+    { type: "Object", value: values };
+  };
 
   // Expose the host's diagnostic natives to user code (the error channel needs
   // Error()/isError(); the isDiag exemption list covers print/println/Error/
@@ -69,6 +145,7 @@ let Interpreter = () -> {
     else if value.type == "Boolean" { value.value == true }
     else if value.type == "Number" { value.value != 0 }
     else if value.type == "String" { value.value != "" }
+    else if value.type == "Array" { value.value.length != 0 }
     else { true };
   };
 
@@ -79,6 +156,30 @@ let Interpreter = () -> {
   // which keeps leaked raw errors flowing like wrappers).
   let isWrapped = (v) -> {
     v != null && !isError(v.type);
+  };
+
+  let wrapJSON = (raw) -> {
+    let tag = typeTag(raw);
+    if tag == "Array" {
+      let a = [];
+      let i = 0;
+      while i < raw.length {
+        a[a.length] = wrapJSON(raw[i]);
+        i = i + 1;
+      };
+      return { type: "Array", value: a, length: a.length };
+    };
+    if tag == "Object" {
+      let o = {};
+      let keys = std.Object.keys(raw);
+      let i = 0;
+      while i < keys.length {
+        o[keys[i]] = wrapJSON(raw[keys[i]]);
+        i = i + 1;
+      };
+      return { type: "Object", value: o };
+    };
+    { type: tag, value: raw };
   };
 
   let isErrorVal = (v) -> {
@@ -92,6 +193,20 @@ let Interpreter = () -> {
     // left-to-right short-circuit, predicates capture nothing — truth-table
     // identical for every input, only host dispatches drop (2/call × 54,107).
     v != null && !isError(v.type) && v.type == "Error" && v.propagate == true;
+  };
+
+  // An If expression can execute a Return statement in the enclosing function.
+  // Carry that completion through parent expressions without touching its value.
+  let returnMarker = {};
+  let isReturning = (v) -> {
+    v != null && !isError(v.type) && v.type == "Return" && !isError(v.marker) && v.marker == returnMarker;
+  };
+  let isExiting = (v) -> {
+    isReturning(v) || isPropagating(v);
+  };
+  let expressionExit = (v) -> {
+    if isReturning(v) { { flow: "Return", value: v.value }; }
+    else { { flow: "Propagate", value: v }; };
   };
 
   // ---- Task 11: annotation-checking semantics ----
@@ -130,11 +245,10 @@ let Interpreter = () -> {
     };
   };
 
-  // TypeCheck message (same as the host's check_annotation; the boot has no source span, so the
-  // annotation text is "?"). Note: the error construction must be inlined in the host-layer code
+  // TypeCheck messages retain the annotation source captured by the parser. Note: the error construction must be inlined in the host-layer code
   // (Let/Assign branches) calling std.Error.raise directly — cause is a bare error value; passing
   // it through a boot user-function argument would be rejected by the call path's error-value-argument check (observed: makeTypeCheckError produces TypeMismatch).
-  let typeCheckMsg = (typeName) -> "value of type \"" + typeName + "\" does not match the annotated type \"?\"";
+  let typeCheckMsg = (typeName, text) -> "value of type \"" + typeName + "\" does not match the annotated type \"" + text + "\"";
 
   // Internal check path: calls the type value's check function, exempting error-value arguments
   // (corresponds to the host's exempt_error_args in call_function_inner; user calls are not exempt).
@@ -154,8 +268,15 @@ let Interpreter = () -> {
   };
 
   let runProgram = (program) -> {
+    if libraryInitError != null { return { flow: "Propagate", value: libraryInitError }; };
+    if !isError(program.errors) && program.errors.length > 0 {
+      return { flow: "Propagate", value: { type: "Error", value: std.Error.raise("ParseError", program.errors[0], null), propagate: true } };
+    };
     let env = globalEnv;
-    return runStatements(program.statements, env);
+    loadingModules[currentPath] = true;
+    let result = runStatements(program.statements, env);
+    loadingModules[currentPath] = false;
+    result;
   };
 
   let runStatements = (statements, env) -> {
@@ -169,39 +290,49 @@ let Interpreter = () -> {
       if result.flow == "Propagate" {
         return result;
       }
-      lastValue = result.value;
+      // Declarations, assignments, loops and untaken ifs do not produce a value.
+      if result.flow == "Value" { lastValue = result.value; };
       i = i + 1;
     }
     return { flow: "None", value: lastValue };
   };
 
   let runStatement = (stmt, env) -> {
+    let previous = null;
+    if hasDiagnostics { previous = diagnostics.enter(sourcePoint(stmt)); };
+    let result = runStatementInner(stmt, env);
+    if hasDiagnostics { diagnostics.leave(previous); };
+    result;
+  };
+  let runStatementInner = (stmt, env) -> {
     if stmt.type == "Let" {
+      let annVal = null;
+      let annText = "?";
+      if stmt.annotation != null {
+        annVal = evaluate(stmt.annotation, env);
+        if isExiting(annVal) { return expressionExit(annVal); };
+        annVal = normalizeAnnotation(annVal);
+        if !isError(stmt.annotation.annotationText) { annText = stmt.annotation.annotationText; };
+      };
       if stmt.value != null {
         let val = evaluate(stmt.value, env);
-        if isPropagating(val) {
-          return { flow: "Propagate", value: val };
+        if isExiting(val) {
+          return expressionExit(val);
         }
         if stmt.annotation != null {
-          // Boot order: evaluate value first (198), then the annotation (204), then check; passing → bind with annotation.
-          // Note: the host order is the reverse — annotation first (interpreter.rs:235-241), then value;
-          // observable only when the annotation expression has side effects; the spec does not fix the order, keep as-is.
-          let annVal = normalizeAnnotation(evaluate(stmt.annotation, env));
-          if isPropagating(annVal) {
-            return { flow: "Propagate", value: annVal };
-          }
           let ck = checkValue(annVal, val, env);
           if isErrorVal(ck) {
             // The check itself errored (annotation not a type value / check raised an error): bind that error value (same as the host)
-            env._defineAnnotated(stmt.name, ck, { ty: annVal, text: "?" });
+            env._defineAnnotated(stmt.name, ck, { ty: annVal, text: annText });
           } else if isTruthy(ck) {
-            env._defineAnnotated(stmt.name, val, { ty: annVal, text: "?" });
+            env._defineAnnotated(stmt.name, val, { ty: annVal, text: annText });
           } else {
             // Check failed → TypeCheck error value (cause = the original value if it is an error), bound with the annotation
             // (the error construction is inlined at the host layer: cause is a bare error value; a boot function argument would be rejected)
-            let typeName = if val != null && !isError(val.type) { val.type; } else { "?"; };
+            let typeName = if val == null { "Null"; } else if !isError(val.type) { val.type; } else { typeTag(val); };
+            if typeName == "Type" { typeName = "Object"; };
             let cause = if isErrorVal(val) { val.value; } else { null; };
-            env._defineAnnotated(stmt.name, { type: "Error", value: std.Error.raise("TypeCheck", typeCheckMsg(typeName), cause), propagate: false }, { ty: annVal, text: "?" });
+            env._defineAnnotated(stmt.name, { type: "Error", value: std.Error.raise("TypeCheck", typeCheckMsg(typeName, annText), cause), propagate: false }, { ty: annVal, text: annText });
           };
         } else {
           env._define(stmt.name, val);
@@ -210,16 +341,12 @@ let Interpreter = () -> {
       } else {
         // Declaration without initializer: let x; / let x: T;
         if stmt.annotation != null {
-          let annVal = normalizeAnnotation(evaluate(stmt.annotation, env));
-          if isPropagating(annVal) {
-            return { flow: "Propagate", value: annVal };
-          }
           if !isTypeValue(annVal) {
             // Annotation invalid → bind a TypeCheck error value (consistent with the host's None branch,
             // interpreter.rs:254-258: define binding, annotation not kept)
             env._define(stmt.name, { type: "Error", value: std.Error.raise("TypeCheck", "type annotation is not a type value", null), propagate: false });
           } else {
-            env._defineUninit(stmt.name, { ty: annVal, text: "?" });
+            env._defineUninit(stmt.name, { ty: annVal, text: annText });
           };
         } else {
           env._defineUninit(stmt.name, null);
@@ -228,12 +355,13 @@ let Interpreter = () -> {
       };
     } else if stmt.type == "Assign" {
       let val = evaluate(stmt.value, env);
-      if isPropagating(val) {
-        return { flow: "Propagate", value: val };
+      if isExiting(val) {
+        return expressionExit(val);
       }
       let res = assignValue(stmt.target, val, env);
+      if isReturning(res) { return expressionExit(res); };
       if res != null && isErrorVal(res) {
-        // Protected-member write: propagates through the boot error channel (reported at the top level; Custom exception on the host side)
+        // Failed assignments propagate through the interpreter error channel.
         return { flow: "Propagate", value: res };
       }
       return { flow: "None", value: { type: "Null", value: null } };
@@ -243,29 +371,26 @@ let Interpreter = () -> {
       return runWhileStatement(stmt, env);
     } else if stmt.type == "Return" {
       let val = evaluate(stmt.value, env);
-      if isPropagating(val) {
-        return { flow: "Propagate", value: val };
+      if isExiting(val) {
+        return expressionExit(val);
       }
       return { flow: "Return", value: val };
     } else if stmt.type == "Export" {
       let val = evaluate(stmt.value, env);
-      if isPropagating(val) {
-        return { flow: "Propagate", value: val };
-      }
-      return { flow: "None", value: val };
-    } else if stmt.type == "Import" {
-      // The bootstrapped interpreter cannot load modules: nested-code imports
-      // used to be silently ignored, leaving imported names undefined — calls
-      // then returned Null/Void results with no diagnostic (self-hosting gap:
-      // the boot parser cannot even parse its own sources). Fail loudly so the
-      // boundary is explicit instead of corrupting results.
-      { flow: "Propagate", value: { type: "Error", value: std.Error.raise("NotImplemented", "import is not supported by the bootstrapped interpreter: " + stmt.path, null), propagate: true } };
+      if isExiting(val) { return expressionExit(val); };
+      if stmt.name != null { moduleExports[stmt.name] = val; }
+      else if stmt.value.type == "Identifier" { moduleExports[stmt.value.name] = val; }
+      else if stmt.value.type == "Object" {
+        let keys = std.Object.keys(val.value); let i = 0;
+        while i < keys.length { moduleExports[keys[i]] = val.value[keys[i]]; i = i + 1; };
+      };
+      return { flow: "None", value: { type: "Null", value: null } };
     } else {
       let val = evaluate(stmt, env);
-      if isPropagating(val) {
-        return { flow: "Propagate", value: val };
+      if isExiting(val) {
+        return expressionExit(val);
       }
-      return { flow: "None", value: val };
+      return { flow: "Value", value: val };
     };
   };
 
@@ -274,17 +399,21 @@ let Interpreter = () -> {
     while i < stmt.branches.length {
       let branch = stmt.branches[i];
       let condition = evaluate(branch.condition, env);
-      if isPropagating(condition) {
-        return { flow: "Propagate", value: condition };
+      if isExiting(condition) {
+        return expressionExit(condition);
       }
       if isTruthy(condition) {
-        return runStatements(branch.body.statements, env);
+        let result = runStatements(branch.body.statements, Environment(env));
+        if result.flow == "None" { result.flow = "Value"; };
+        return result;
       }
       i = i + 1;
     }
 
     if stmt.elseBody != null {
-      return runStatements(stmt.elseBody.statements, env);
+      let result = runStatements(stmt.elseBody.statements, Environment(env));
+      if result.flow == "None" { result.flow = "Value"; };
+      return result;
     }
 
     return { flow: "None", value: { type: "Null", value: null } };
@@ -294,13 +423,13 @@ let Interpreter = () -> {
     let done = false;
     while !done {
       let condition = evaluate(stmt.condition, env);
-      if isPropagating(condition) {
-        return { flow: "Propagate", value: condition };
+      if isExiting(condition) {
+        return expressionExit(condition);
       }
       if !isTruthy(condition) {
         done = true;
       } else {
-        let result = runStatements(stmt.body.statements, env);
+        let result = runStatements(stmt.body.statements, Environment(env));
         if result.flow == "Return" {
           return result;
         }
@@ -315,140 +444,148 @@ let Interpreter = () -> {
   // Returns null (success) or an error wrapper (protected-member write → propagate: true,
   // propagated to the top level through the Assign branch's error channel).
   let assignValue = (target, value, env) -> {
+    let previous = null;
+    if hasDiagnostics { previous = diagnostics.enter(sourcePoint(target)); };
+    let result = assignValueInner(target, value, env);
+    if hasDiagnostics { diagnostics.leave(previous); };
+    result;
+  };
+  let assignValueInner = (target, value, env) -> {
     if target.type == "Identifier" {
       // Task 11: reassignment check — when the binding has an annotation, check again before assigning (getAnnotation walks the chain)
       let ann = env._getAnnotation(target.name);
+      let assigned = false;
       if ann != null {
         let ck = checkValue(ann.ty, value, env);
         if isErrorVal(ck) {
-          env._assign(target.name, ck);
+          assigned = env._assign(target.name, ck);
         } else if isTruthy(ck) {
-          env._assign(target.name, value);
+          assigned = env._assign(target.name, value);
         } else {
-          let typeName = if value != null && !isError(value.type) { value.type; } else { "?"; };
+          let typeName = if value == null { "Null"; } else if !isError(value.type) { value.type; } else { typeTag(value); };
+            if typeName == "Type" { typeName = "Object"; };
           let cause = if isErrorVal(value) { value.value; } else { null; };
-          env._assign(target.name, { type: "Error", value: std.Error.raise("TypeCheck", typeCheckMsg(typeName), cause), propagate: false });
+          assigned = env._assign(target.name, { type: "Error", value: std.Error.raise("TypeCheck", typeCheckMsg(typeName, ann.text), cause), propagate: false });
         };
       } else {
-        env._assign(target.name, value);
+        assigned = env._assign(target.name, value);
+      };
+      if assigned != true {
+        return { type: "Error", value: std.Error.raise("UndefinedVariable", "Undefined variable: " + target.name, null), propagate: true };
       };
       null;
-    } else if target.type == "MemberAccess" {
+    } else if target.type == "MemberAccess" || target.type == "IndexAccess" {
       let obj = evaluate(target.object, env);
-      if obj != null {
-        let t = obj["type"];
-        if isError(t) { t = null; }
-        if t == "Object" || t == "Type" {
-          // AST field name is target.field (MemberAccessExpr(object, field))
-          // Wrapped-object write: the inner value may be a protected built-in constant — wrapped by the
-          // call path's typeTag (e.g. std.Type.of(42) produces {type:"Type", value: Number}); obj.value is
-          // the shared bare constant; writing it directly bypasses the protection (the host aborts writes to constant objects).
-          if isProtectedType(obj.value) && isProtectedField(target.field) {
-            protectedWriteError(target.field);
-          } else {
-            obj.value[target.field] = value;
-            null;
-          };
-        } else if t == null {
-          if isProtectedType(obj) && isProtectedField(target.field) {
-            // Protected-member write: check/raise/of/make of a built-in type object (bare constant)
-            protectedWriteError(target.field);
-          } else {
-            // Raw host object field write (std modules/type constants): perform the write like the host —
-            // the old behavior silently dropped it (T11 review observation ③, difftest t26 depends on this path).
-            obj[target.field] = value;
-            null;
-          };
-        } else {
-          null;
+      if isReturning(obj) || isErrorVal(obj) { return obj; };
+      let tag = typeTag(obj);
+      let receiver = obj;
+      if isWrapped(obj) { tag = obj.type; receiver = obj.value; };
+      let key = null;
+      if target.type == "MemberAccess" {
+        key = target.field;
+        if tag != "Object" && tag != "Type" {
+          return { type: "Error", value: std.Error.raise("NotAnObject", "Not an object", null), propagate: true };
         };
-      };
-    } else if target.type == "IndexAccess" {
-      let arr = evaluate(target.object, env);
-      let index = evaluate(target.index, env);
-      if arr != null {
-        let t = arr["type"];
-        if isError(t) { t = null; }
-        if t == "Array" {
-          if index != null {
-            if index.type == "Number" {
-              let idx = getNumberValue(index);
-              if idx < 0 {
-                idx = arr.value.length + idx;
-              }
-              if idx >= 0 {
-                if idx <= arr.value.length {
-                  // idx == length appends via the host interpreter (arr[arr.length] = x semantics)
-                  arr.value[idx] = value;
-                }
-              }
-            }
-          }
-          null;
-        } else if t == "Object" || t == "Type" {
-          // JS semantics: obj[key] = value; the "Type" tag is included (wrapped built-in constants,
-          // e.g. std.Type.of(42) products) — same as MemberAccess: re-check the inner value for protected
-          // members before writing to avoid bypassing; the host aborts writes to constant objects, so they must not be silently dropped.
-          if index != null {
-            if !isError(index.type) && index.type == "String" {
-              if isProtectedType(arr.value) && isProtectedField(index.value) {
-                protectedWriteError(index.value);
-              } else {
-                arr.value[index.value] = value;
-                null;
-              };
-            } else if !isError(index.type) && index.type == "Number" {
-              // JS semantics: obj[0] = x === obj["0"] = x; numeric key stringified
-              // to match the host's Object+Number index handling (sparse tapes).
-              let k = std.Number.toString(index.value);
-              if isProtectedType(arr.value) && isProtectedField(k) {
-                protectedWriteError(k);
-              } else {
-                arr.value[k] = value;
-                null;
-              };
-            } else if isError(index.type) && std.Type.of(index) == String {
-              // RAW host string key (e.g. std.Object.keys(obj)[i]): same rule
-              // as the wrapped form — write the raw field table directly.
-              if isProtectedType(arr.value) && isProtectedField(index) {
-                protectedWriteError(index);
-              } else {
-                arr.value[index] = value;
-                null;
-              };
-            } else {
-              null;
-            };
-          } else {
-            null;
+      } else {
+        let index = evaluate(target.index, env);
+        if isReturning(index) || isErrorVal(index) { return index; };
+        let indexTag = typeTag(index);
+        key = index;
+        if isWrapped(index) { indexTag = index.type; key = index.value; };
+        if tag == "Array" && indexTag == "Number" {
+          let len = receiver.length;
+          if !std.Number.isFinite(key) || key < -len || key > len || key % 1 != 0 {
+            return { type: "Error", value: std.Error.raise("IndexOutOfBounds", "Index out of bounds", null), propagate: true };
           };
-        } else if t == null {
-          if arr != null && index != null && !isError(index.type) && index.type == "String" && isProtectedType(arr) && isProtectedField(index.value) {
-            // Protected write in the form obj["check"] = x (same rule as the field syntax)
-            protectedWriteError(index.value);
-          } else if arr != null && index != null && !isError(index.type) && index.type == "String" {
-            // Raw host object key write (same rule as MemberAccess): obj[key] = value
-            arr[index.value] = value;
-            null;
-          } else {
-            null;
-          };
-        } else {
-          null;
+          if key < 0 { key = len + key; };
+          receiver[key] = value;
+          return null;
         };
+        if (tag != "Object" && tag != "Type") || (indexTag != "String" && indexTag != "Number") {
+          return { type: "Error", value: std.Error.raise("CannotIndex", "Cannot index", null), propagate: true };
+        };
+        if indexTag == "Number" { key = std.Number.toString(key); };
       };
+      if isProtectedType(receiver) && isProtectedField(key) { return protectedWriteError(key); };
+      receiver[key] = value;
+      null;
     }
   };
 
+  let interpolationText = (v) -> {
+    if v == null { return "null"; };
+    if !isWrapped(v) { return std.String.toString(v); };
+    if v.type == "Function" {
+      if !isError(v.extensionFunction) { return "${v.extensionFunction}"; };
+      if !isError(v.boundArgs) { return "<native fn <curried>>"; };
+      return "<function>";
+    };
+    if v.type == "Error" { return std.Error.toString(v.value); };
+    if v.type == "Array" {
+      let text = "["; let i = 0;
+      while i < v.value.length {
+        if i > 0 { text = text + ", "; };
+        text = text + interpolationText(v.value[i]); i = i + 1;
+      };
+      return text + "]";
+    };
+    if v.type == "Object" || v.type == "Type" {
+      let text = "{"; let keys = std.Object.keys(v.value); let i = 0;
+      while i < keys.length {
+        if i > 0 { text = text + ", "; };
+        let key = keys[i]; text = text + key + ": " + interpolationText(v.value[key]); i = i + 1;
+      };
+      return text + "}";
+    };
+    std.String.toString(v.value);
+  };
+
   let evaluate = (expr, env) -> {
+    let point = sourcePoint(expr); let previous = null;
+    if hasDiagnostics { previous = diagnostics.enter(point); };
+    let result = evaluateInner(expr, env);
+    // Native container elements and namespace fields may contain raw values.
+    // Normalize scalar/Array expression results before ordinary language use,
+    // so indexing, length, truthiness and type checks share literal semantics.
+    // Keep raw host callables and canonical type/namespace tables unchanged.
+    if result != null && !isWrapped(result) {
+      let tag = typeTag(result);
+      if tag == "Number" || tag == "String" || tag == "Boolean" || tag == "Array" {
+        result = {type: tag, value: result};
+      };
+    };
+    if hasDiagnostics {
+      if isErrorVal(result) {
+        let traced = diagnostics.error(result.value, point, expr.type == "Call" || expr.type == "Import");
+        result = {type: "Error", value: traced, propagate: result.propagate};
+      };
+      diagnostics.leave(previous);
+    };
+    result;
+  };
+  let evaluateInner = (expr, env) -> {
     if expr.type == "Number" {
       { type: "Number", value: expr.value };
     } else if expr.type == "String" {
-      { type: "String", value: expr.value };
+      if isError(expr.parts) { return { type: "String", value: expr.value }; };
+      let text = ""; let i = 0;
+      while i < expr.parts.length {
+        let part = expr.parts[i];
+        if part.kind == "Literal" { text = text + part.value; }
+        else {
+          let value = evaluate(part.expression, env);
+          if isExiting(value) { return value; };
+          text = text + interpolationText(value);
+        };
+        i = i + 1;
+      };
+      { type: "String", value: text };
     } else if expr.type == "Boolean" {
       { type: "Boolean", value: expr.value };
     } else if expr.type == "Null" {
       { type: "Null", value: null };
+    } else if expr.type == "Import" {
+      importModule(expr, env);
     } else if expr.type == "Identifier" {
       env._get(expr.name);
     } else if expr.type == "Array" {
@@ -456,7 +593,7 @@ let Interpreter = () -> {
       let i = 0;
       while i < expr.elements.length {
         let v = evaluate(expr.elements[i], env);
-        if isPropagating(v) { return v; }
+        if isExiting(v) { return v; }
         pushArray(elements, v);
         i = i + 1;
       }
@@ -467,11 +604,15 @@ let Interpreter = () -> {
       while i < expr.fields.length {
         let field = expr.fields[i];
         let v = evaluate(field.value, env);
-        if isPropagating(v) { return v; }
+        if isExiting(v) { return v; }
         fields[field.name] = v;
         i = i + 1;
       }
       { type: "Object", value: fields };
+    } else if expr.type == "If" {
+      let result = runIfStatement(expr, env);
+      if result.flow == "Return" { { type: "Return", marker: returnMarker, value: result.value }; }
+      else { result.value; };
     } else if expr.type == "Function" {
       let capturedEnv = env;
       let p = expr.parameters;
@@ -484,22 +625,23 @@ let Interpreter = () -> {
         let pa = expr.parameters[i].annotation;
         if pa != null {
           let annVal = evaluate(pa, env);
-          if isPropagating(annVal) { return annVal; }
-          paramTypes[paramTypes.length] = { ty: normalizeAnnotation(annVal), text: "?" };
+          if isExiting(annVal) { return annVal; }
+          let text = if isError(pa.annotationText) { "?"; } else { pa.annotationText; };
+          paramTypes[paramTypes.length] = { ty: normalizeAnnotation(annVal), text: text };
         } else {
           paramTypes[paramTypes.length] = null;
         }
         i = i + 1;
       }
-      { type: "Function", params: p, body: b, env: capturedEnv, paramTypes: paramTypes };
+      { type: "Function", params: p, body: b, env: capturedEnv, path: currentPath, moduleExports: moduleExports, paramTypes: paramTypes };
     } else if expr.type == "Call" {
       let func = evaluate(expr.callee, env);
-      if isPropagating(func) { return func; }
+      if isExiting(func) { return func; }
       let args = [];
       let i = 0;
       while i < expr.arguments.length {
         let a = evaluate(expr.arguments[i], env);
-        if isPropagating(a) { return a; }
+        if isExiting(a) { return a; }
         pushArray(args, a);
         i = i + 1;
       }
@@ -508,12 +650,12 @@ let Interpreter = () -> {
       callFunction(func, args, env);
     } else if expr.type == "BinaryOp" {
       let left = evaluate(expr.left, env);
-      if isPropagating(left) { return left; }
+      if isExiting(left) { return left; }
       if expr.operator == "??" {
         // ?? fallback: an Error left operand is replaced by the right operand
         if isErrorVal(left) {
           let right = evaluate(expr.right, env);
-          if isPropagating(right) { return right; }
+          if isExiting(right) { return right; }
           right;
         } else {
           left;
@@ -531,7 +673,7 @@ let Interpreter = () -> {
         } else if expr.operator == "&&" {
           if isTruthy(left) {
             let right = evaluate(expr.right, env);
-            if isPropagating(right) { return right; }
+            if isExiting(right) { return right; }
             right;
           } else {
             left;
@@ -541,17 +683,18 @@ let Interpreter = () -> {
             left;
           } else {
             let right = evaluate(expr.right, env);
-            if isPropagating(right) { return right; }
+            if isExiting(right) { return right; }
             right;
           };
         };
       } else {
         let right = evaluate(expr.right, env);
-        if isPropagating(right) { return right; }
+        if isExiting(right) { return right; }
         evalBinaryOp(expr.operator, left, right);
       };
     } else if expr.type == "UnaryOp" {
       let val = evaluate(expr.operand, env);
+      if isExiting(val) { return val; };
       if expr.operator == "?" {
         // ? propagation: an Error operand becomes a propagate-marked wrapper
         if isErrorVal(val) {
@@ -564,7 +707,7 @@ let Interpreter = () -> {
       };
     } else if expr.type == "MemberAccess" {
       let obj = evaluate(expr.object, env);
-      if isPropagating(obj) { return obj; }
+      if isExiting(obj) { return obj; }
       let fieldName = expr.field;
       if obj != null {
         // Normalize the probe: raw host values probe as error values, which
@@ -578,53 +721,43 @@ let Interpreter = () -> {
           // value); missing fields yield UndefinedField error values (host
           // semantics), wrapped here so the error keeps flowing as a value.
           let fieldValue = obj.value[fieldName];
-          if !isError(fieldValue) && fieldValue != null {
-            fieldValue;
+          if isError(fieldValue) {
+            { type: "Error", value: fieldValue, propagate: false };
+          } else if fieldValue == null {
+            { type: "Null", value: null };
           } else {
-            { type: "Error", value: std.Object.field(obj.value, fieldName), propagate: false };
+            fieldValue;
           };
         } else if t == "Array" {
           if fieldName == "length" {
             { type: "Number", value: obj.value.length };
-          } else if fieldName == "type" {
-            "Array";
-          } else if fieldName == "value" {
-            obj.value;
+          } else if fieldName == "add" || fieldName == "remove" {
+            { type: "Function", boundArray: obj.value, boundMethod: fieldName };
           } else {
-            { type: "Null", value: null };
+            { type: "Error", value: std.Error.raise("UndefinedField", "Undefined field", null), propagate: false };
           }
         } else if t == "String" {
           if fieldName == "length" {
             // Char count (host "str".length counts chars, Unicode-safe)
             { type: "Number", value: obj.value.length };
-          } else if fieldName == "type" {
-            "String";
           } else {
-            { type: "Null", value: null };
+            { type: "Error", value: std.Error.raise("NotAnObject", "Not an object", null), propagate: false };
           }
-        } else if t == "Number" {
-          if fieldName == "type" {
-            "Number";
-          } else {
-            { type: "Null", value: null };
-          }
-        } else if t == "Boolean" {
-          if fieldName == "type" {
-            "Boolean";
-          } else {
-            { type: "Null", value: null };
-          }
+        } else if t == "Number" || t == "Boolean" || t == "Null" {
+          { type: "Error", value: std.Error.raise("NotAnObject", "Not an object", null), propagate: false };
         } else if t == "Function" {
-          if fieldName == "type" {
-            "Function";
-          } else if fieldName == "params" {
-            obj.params;
-          } else if fieldName == "body" {
-            obj.body;
-          } else if fieldName == "env" {
-            obj.env;
+          if fieldName == "name" && !isError(obj.extensionFunction) {
+            let name = obj.extensionFunction.name;
+            if isError(name) { {type: "Error", value: name, propagate: false}; }
+            else { {type: "String", value: name}; };
+          } else if fieldName == "name" && !isError(obj.boundArray) {
+            let name = "Array." + obj.boundMethod;
+            { type: "String", value: name };
+          } else if fieldName == "name" && !isError(obj.boundArgs) {
+            { type: "String", value: "<curried>" };
           } else {
-            { type: "Null", value: null };
+            // Function records are an implementation detail, not user objects.
+            { type: "Error", value: std.Error.raise("NotAnObject", "Not an object", null), propagate: false };
           }
         } else if t == "Error" {
           // Error read zone (matches host error_read_zone): err.type → kind,
@@ -639,121 +772,119 @@ let Interpreter = () -> {
             // wrap with the string tag via typeTag (stdlib.ql helper)
             { type: typeTag(rv), value: rv };
           };
+        } else if typeTag(obj) == "Function" {
+          // Native functions are not Objects. The host's dotted .name access
+          // exposes their existing metadata; computed object indexing does not.
+          let member = if fieldName == "name" { obj.name; }
+            else { std.Error.raise("NotAnObject", "Not an object", null); };
+          if isError(member) {
+            { type: "Error", value: member, propagate: false };
+          } else {
+            { type: "String", value: member };
+          };
         } else {
           // Raw host object (std modules, etc.): fetch the field directly
           let fieldValue = obj[fieldName];
-          if !isError(fieldValue) && fieldValue != null {
-            fieldValue;
+          if isError(fieldValue) {
+            { type: "Error", value: fieldValue, propagate: false };
+          } else if fieldValue == null {
+            { type: "Null", value: null };
           } else {
-            { type: "Error", value: std.Object.field(obj, fieldName), propagate: false };
+            fieldValue;
           };
         }
       } else {
-        { type: "Null", value: null };
+        { type: "Error", value: std.Error.raise("NotAnObject", "Not an object", null), propagate: false };
       }
     } else if expr.type == "IndexAccess" {
       let arr = evaluate(expr.object, env);
-      if isPropagating(arr) { return arr; }
+      if isExiting(arr) { return arr; }
       let index = evaluate(expr.index, env);
-      if isPropagating(index) { return index; }
+      if isExiting(index) { return index; }
       if arr != null {
         let t = arr["type"];
         if isError(t) { t = null; }
-        if t == "Array" {
-          if index != null {
-            if index.type == "Number" {
-              let idx = getNumberValue(index);
-              if idx < 0 {
-                idx = arr.value.length + idx;
-              }
-              if idx >= 0 {
-                if idx < arr.value.length {
-                  arr.value[idx];
-                } else {
-                  // Out-of-bounds: std.Array.at now returns an error VALUE
-                  // (host error-as-value), which we wrap and propagate
-                  { type: "Error", value: std.Array.at(arr.value, idx), propagate: false };
-                }
-              } else {
-                // Negative out-of-range (idx < 0 after wrapping): pass an
-                // equivalent out-of-range positive index (len) so Array.at
-                // reports the same index as the host's get_index
-                { type: "Error", value: std.Array.at(arr.value, arr.value.length), propagate: false };
-              }
-            }
-          }
-        } else if t == "String" {
-          // String indexing: matches the host (Unicode-safe, out of bounds → error value)
-          if index != null {
-            if index.type == "Number" {
-              let idx = getNumberValue(index);
-              let s = arr.value;
-              let len = s.length;   // host char count (this file runs in the host interpreter)
-              if idx < 0 {
-                idx = len + idx;
-              }
-              if idx >= 0 && idx < len {
-                { type: "String", value: s[idx] };
-              } else {
-                // Out-of-bounds (incl. negative OOB): std.String.at returns an
-                // error value; pass len so the reported index matches the host
-                { type: "Error", value: std.String.at(s, if idx < 0 { len } else { idx }), propagate: false };
-              }
-            }
-          }
+        if t == "Array" || t == "String" {
+          let key = index; let keyType = typeTag(index);
+          if isWrapped(index) { key = index.value; keyType = index.type; };
+          if t == "Array" && keyType == "Error" { return index; };
+          if keyType != "Number" {
+            let kind = if t == "Array" { "CannotIndex"; } else { "TypeMismatch"; };
+            return { type: "Error", value: std.Error.raise(kind, t + " index must be a Number", null), propagate: false };
+          };
+          let size = arr.value.length;
+          if key != key || key - key != 0 || key < -size || key >= size || key % 1 != 0 {
+            return { type: "Error", value: std.Error.raise("IndexOutOfBounds", "Index out of bounds", null), propagate: false };
+          };
+          if key < 0 { key = size + key; };
+          let value = arr.value[key];
+          if isError(value) {
+            { type: "Error", value: value, propagate: false };
+          } else if t == "String" {
+            { type: "String", value: value };
+          } else {
+            // Array elements already carry the interpreter's value wrappers.
+            value;
+          };
         } else if t == "Object" || t == "Type" {
-          // JS semantics: obj[key] missing → UndefinedField error value (host)
-          if index != null {
-            // Guard first: a RAW host string probes .type as an error value,
-            // and error == "X" poisons into a new error (truthy in boot `if`),
-            // so without !isError the wrapped branch would swallow raw keys.
-            if !isError(index.type) && index.type == "String" {
-              let v = arr.value[index.value];
-              if !isError(v) && v != null {
-                v;
-              } else {
-                { type: "Error", value: std.Object.field(arr.value, index.value), propagate: false };
-              };
-            } else if !isError(index.type) && index.type == "Number" {
-              // JS semantics: obj[0] === obj["0"]; numeric key stringified to
-              // match the host's Object+Number index handling (sparse tapes).
-              let k = std.Number.toString(index.value);
-              let v = arr.value[k];
-              if !isError(v) && v != null {
-                v;
-              } else {
-                { type: "Error", value: std.Object.field(arr.value, k), propagate: false };
-              };
-            } else if isError(index.type) && std.Type.of(index) == String {
-              // RAW host string key (e.g. std.Object.keys(obj)[i]): the host
-              // native returns unwrapped strings, which probe .type as an error
-              // value. Match host obj[rawKey] semantics by reading the field
-              // directly (arr.value is the raw field table).
-              let v = arr.value[index];
-              if !isError(v) && v != null {
-                v;
-              } else {
-                { type: "Error", value: std.Object.field(arr.value, index), propagate: false };
-              };
-            }
-          }
+          let key = index; let keyType = typeTag(index);
+          if isWrapped(index) { key = index.value; keyType = index.type; };
+          if keyType == "Error" { return index; };
+          if keyType != "String" && keyType != "Number" {
+            return { type: "Error", value: std.Error.raise("CannotIndex", "object key must be a String or Number", null), propagate: false };
+          };
+          // The host index operation owns numeric-key conversion. Preserve
+          // stored Error/Null values without passing them through a helper.
+          let value = arr.value[key];
+          if isError(value) {
+            { type: "Error", value: value, propagate: false };
+          } else if value == null {
+            { type: "Null", value: null };
+          } else {
+            value;
+          };
         } else if t == "Error" {
           // Error read zone via index access too (err["message"] works like err.message)
-          if index != null {
-            let rv = arr.value[index.value];
-            if isError(rv) {
-              { type: "Error", value: rv, propagate: false };
-            } else if rv == null {
-              { type: "Null", value: null };
-            } else {
-              { type: typeTag(rv), value: rv };
-            };
+          let key = index; let keyType = typeTag(index);
+          if isWrapped(index) { key = index.value; keyType = index.type; };
+          if keyType != "String" {
+            return { type: "Error", value: std.Error.raise("CannotIndex", "Cannot index", null), propagate: false };
+          };
+          let rv = arr.value[key];
+          if isError(rv) {
+            { type: "Error", value: rv, propagate: false };
+          } else if rv == null {
+            { type: "Null", value: null };
+          } else {
+            { type: typeTag(rv), value: rv };
+          };
+        } else if t == null && (typeTag(arr) == "Object" || typeTag(arr) == "Type") {
+          // Canonical type values and standard-library namespaces are raw host
+          // tables, unlike interpreted object literals. Computed field access
+          // must reach the same table as dotted access without exposing the
+          // internal fields of Function or scalar wrapper records.
+          let key = index; let keyType = typeTag(index);
+          if isWrapped(index) { key = index.value; keyType = index.type; };
+          if keyType == "Error" { return index; };
+          if keyType != "String" && keyType != "Number" {
+            return { type: "Error", value: std.Error.raise("CannotIndex", "object key must be a String or Number", null), propagate: false };
+          };
+          // The host's ordinary index operation owns numeric-key conversion.
+          // Do not pass a stored Error through an ordinary helper call.
+          let value = arr[key];
+          if isError(value) {
+            { type: "Error", value: value, propagate: false };
+          } else if value == null {
+            { type: "Null", value: null };
+          } else {
+            // Existing wrappers and raw host callables retain their identity.
+            value;
           };
         } else {
-          { type: "Null", value: null };
+          { type: "Error", value: std.Error.raise("CannotIndex", "Cannot index", null), propagate: false };
         }
       } else {
-        { type: "Null", value: null };
+        { type: "Error", value: std.Error.raise("CannotIndex", "Cannot index", null), propagate: false };
       }
     } else {
       { type: "Null", value: null };
@@ -820,8 +951,8 @@ let Interpreter = () -> {
 
   let evalBinaryOp = (op, left, right) -> {
     // propagate short-circuit: a `?`-marked error passes straight through (no operation, no new error constructed)
-    if isPropagating(left) { return left; }
-    if isPropagating(right) { return right; }
+    if isExiting(left) { return left; }
+    if isExiting(right) { return right; }
     // The operation itself errors: error operand → delegate to the host to construct a new error (with cause), message matches the host
     // Step B: isErrorVal inlined (isWrapped body inlined too) — same probes, -2 dispatches per check
     if left != null && !isError(left.type) && left.type == "Error" { return evalDelegated(op, left, right); }
@@ -838,10 +969,17 @@ let Interpreter = () -> {
   };
 
   let evalUnaryOp = (op, value) -> {
-    if isPropagating(value) { return value; }
-    if op == "-" {
+    if isExiting(value) { return value; }
+    if op == "+" {
+      if value != null && !isError(value.type) && value.type == "Number" { return value; };
+      let wrapped = isWrapped(value);
+      let name = if wrapped { value.type; }
+        else if isTypeValue(value) { "Type"; } else { typeTag(value); };
+      let cause = null; if wrapped && name == "Error" { cause = value.value; };
+      { type: "Error", value: std.Error.raise("TypeMismatch", "cannot apply unary plus to " + name + " and Number", cause), propagate: false };
+    } else if op == "-" {
       if value != null && !isError(value.type) && value.type == "Number" {
-        { type: "Number", value: 0 - getNumberValue(value) };
+        { type: "Number", value: -getNumberValue(value) };
       } else {
         // Non-Number (or Error): the host's unary negation produces the same
         // TypeMismatch error value (with cause for error operands)
@@ -878,6 +1016,26 @@ let Interpreter = () -> {
       if ft == "Error" {
         // Calling an error value: NotCallable (matches the host)
         { type: "Error", value: std.Error.raise("NotCallable", "Not callable: Error", null), propagate: false };
+      } else if ft == "Function" && !isError(func.extensionFunction) {
+        nativeBridge.call(func.extensionFunction, args, exemptErrorArgs);
+      } else if ft == "Function" && !isError(func.boundArray) {
+        let methodName = "Array." + func.boundMethod;
+        let j = 0;
+        while j < args.length {
+          if args[j] != null && isErrorVal(args[j]) {
+            return { type: "Error", value: std.Error.raise("TypeMismatch", "attempt to pass error value as argument to " + methodName, args[j].value), propagate: false };
+          };
+          j = j + 1;
+        };
+        if args.length != 1 {
+          return { type: "Error", value: std.Error.raise("ArityMismatch", "Arity mismatch: expected 1 arguments, got " + std.Number.toString(args.length), null), propagate: false };
+        };
+        let method = func.boundMethod;
+        if method == "add" { func.boundArray[func.boundArray.length] = args[0]; return { type: "Null", value: null }; };
+        let index = args[0];
+        if isWrapped(index) { index = index.value; };
+        func.boundArray.remove(index);
+        { type: "Null", value: null };
       } else if ft == "Function" {
         // ---- user function ----
         // Unified parameter view: the curried record carries allParams/boundArgs (the full parameter
@@ -910,13 +1068,19 @@ let Interpreter = () -> {
         if !exemptErrorArgs {
           let i = 0;
           while i < allArgs.length {
-            if allArgs[i] != null && isErrorVal(allArgs[i]) { argErr = allArgs[i]; }
+            if argErr == null && allArgs[i] != null && isErrorVal(allArgs[i]) { argErr = allArgs[i]; }
             i = i + 1;
           }
           if argErr != null {
-            return { type: "Error", value: std.Error.raise("TypeMismatch", "attempt to pass error value as argument", argErr.value), propagate: false };
+            let message = "attempt to pass error value as argument";
+            if prevBound != null { message = message + " to <curried>"; };
+            return { type: "Error", value: std.Error.raise("TypeMismatch", message, argErr.value), propagate: false };
           }
         }
+        // Host partials are native functions with exact remaining arity.
+        if prevBound != null && args.length != func.params.length {
+          return { type: "Error", value: std.Error.raise("ArityMismatch", "Arity mismatch: expected " + std.Number.toString(func.params.length) + " arguments, got " + std.Number.toString(args.length), null), propagate: false };
+        };
         if allArgs.length < allParams.length {
           // Partial application: matches the host — insufficient args return
           // a curried function. The host does not check annotations at partial-application time (all are checked at completion);
@@ -936,7 +1100,7 @@ let Interpreter = () -> {
             remaining[remaining.length] = allParams[r];
             r = r + 1;
           }
-          { type: "Function", params: remaining, body: func.body, env: partialEnv, allParams: allParams, boundArgs: allArgs, paramTypes: func.paramTypes };
+          { type: "Function", params: remaining, body: func.body, env: partialEnv, path: func.path, moduleExports: func.moduleExports, allParams: allParams, boundArgs: allArgs, paramTypes: func.paramTypes };
         } else if allArgs.length != allParams.length {
           // Too many arguments: host ArityMismatch error value (the boot's old behavior silently dropped excess arguments)
           { type: "Error", value: std.Error.raise("ArityMismatch", "Arity mismatch: expected " + std.Number.toString(allParams.length) + " arguments, got " + std.Number.toString(allArgs.length), null), propagate: false };
@@ -953,7 +1117,7 @@ let Interpreter = () -> {
                 return ck;
               }
               if !isTruthy(ck) {
-                return { type: "Error", value: std.Error.raise("TypeCheck", "argument " + std.Number.toString(p + 1) + " does not match the annotated type \"?\"", null), propagate: false };
+                return { type: "Error", value: std.Error.raise("TypeCheck", "argument " + std.Number.toString(p + 1) + " does not match the annotated type \"" + ann.text + "\"", null), propagate: false };
               }
             }
             p = p + 1;
@@ -969,14 +1133,17 @@ let Interpreter = () -> {
             // Annotated binding (host define_annotated): parameters reassigned inside the function body are re-checked too
             let ann2 = func.paramTypes[i];
             if ann2 != null {
-              localEnv._defineAnnotated(allParams[i].name, allArgs[i], { ty: ann2.ty, text: "?" });
+              localEnv._defineAnnotated(allParams[i].name, allArgs[i], { ty: ann2.ty, text: ann2.text });
             } else {
               localEnv._define(allParams[i].name, allArgs[i]);
             }
             i = i + 1;
           }
           depth = depth + 1;
+          let callerPath = currentPath; currentPath = func.path;
+          let callerExports = moduleExports; moduleExports = func.moduleExports;
           let result = runStatements(func.body.statements, localEnv);
+          moduleExports = callerExports; currentPath = callerPath;
           depth = depth - 1;
           // `?` inside the function body: the error becomes the function's
           // return value (propagation STOPS at the boundary, matching the host)
@@ -987,10 +1154,10 @@ let Interpreter = () -> {
           result.value;
         };
       } else if ft == null {
-        // ---- host native (Rust stdlib) or host QLang function (stdlib.ql) ----
+        // ---- hosting-runtime native or QLang function (stdlib.ql) ----
         // Distinguish by func.name: natives expose a name string, QLang
         // functions probe as an error value.
-        // Host natives receive UNWRAPPED raw args (the Rust std expects raw
+        // Host natives receive UNWRAPPED raw args (the native std expects raw
         // values); host QLang functions (the boot's type library: the
         // constants' checks, std.Type.of/check/make, Array/Object constructors,
         // Error.raise) receive boot WRAPPERS — their bodies test v.type on the
@@ -1004,7 +1171,7 @@ let Interpreter = () -> {
         // error WRAPPER and decide via v.type == "Error" the same way.
         let isNative = func != null && !isError(func.name);
         let isDiag = func == println || func == print || func == Error || func == isError || func == std.Error.raise || func == std.Error.toString || func == std.Type.of || func == Error.raise || func == Number.check || func == String.check || func == Boolean.check || func == Null.check || func == AnyArray.check || func == AnyObject.check || func == Function.check || func == Any.check || func == Never.check || func == Error.check || func == Type.check;
-        if !isDiag && !exemptErrorArgs {
+        if !isDiag && (isNative || !exemptErrorArgs) {
           let j = 0;
           while j < args.length {
             if args[j] != null && isErrorVal(args[j]) {
@@ -1014,6 +1181,24 @@ let Interpreter = () -> {
             j = j + 1;
           }
         }
+        // The host QLang functions exposed by the boot stdlib are unary
+        // native bridges (type predicates/constructors and helper methods),
+        // not user functions eligible for implicit partial application.
+        if !isNative && Function.check(func) && args.length != 1 {
+          return { type: "Error", value: std.Error.raise("ArityMismatch", "Arity mismatch: expected 1 arguments, got " + std.Number.toString(args.length), null), propagate: false };
+        };
+        // Interpreted functions are Object-shaped records in the host. They
+        // must not pass Object API validation merely because of that encoding.
+        // Preserve dispatch order: check this only at the target's exact arity.
+        if isNative {
+          let name = func.name;
+          let objectUnary = name == "Object.keys" || name == "Object.values" || name == "Object.merge" || name == "Object.merge<curried>" || name == "Object.hasOwn" || name == "Object.get";
+          if (objectUnary && args.length == 1) || (name == "Object.field" && args.length == 2) {
+            if isWrapped(args[0]) && args[0].type == "Function" {
+              return { type: "Error", value: std.Error.raise("TypeMismatch", name + " expects Object", null), propagate: false };
+            };
+          };
+        };
         // Unwrap args: Null-tagged wrappers always become raw null (null
         // travels unwrapped in the boot); host natives additionally unwrap the
         // other scalar/array/error tags. Wrapped objects, functions and type
@@ -1056,12 +1241,15 @@ let Interpreter = () -> {
           }
           i = i + 1;
         }
-        // Args are spread positionally (func(a) / func(a, b)); never pass the array as a whole
-        let raw = if rawArgs.length == 1 { func(rawArgs[0]); }
-        else if rawArgs.length == 2 { func(rawArgs[0], rawArgs[1]); }
-        else if rawArgs.length == 3 { func(rawArgs[0], rawArgs[1], rawArgs[2]); }
-        else if rawArgs.length == 4 { func(rawArgs[0], rawArgs[1], rawArgs[2], rawArgs[3]); }
-        else { func(rawArgs); };
+        // Keep arguments positional at every arity. The hosting runtime's
+        // ordinary dispatcher owns arity, Error policy and partial metadata.
+        // QLang type-library helpers have already passed the unary bridge check.
+        let raw = std.__callNative(func, rawArgs);
+        // These projections return a value already stored inside an interpreted
+        // Object. Preserve its wrapper (and function/Error identity) exactly.
+        if isNative && (func.name == "Object.get<curried>" || func == std.Object.field) && !isError(raw) && isWrapped(raw) {
+          return raw;
+        };
         // Note: the isError check must come BEFORE `raw == null` — comparing
         // an error operand with == yields an error value, which is truthy and
         // would wrongly take the null branch.
@@ -1070,6 +1258,8 @@ let Interpreter = () -> {
           { type: "Error", value: raw, propagate: false };
         } else if raw == null {
           { type: "Null", value: null };
+        } else if isNative && func.name == "JSON.parse" {
+          wrapJSON(raw);
         } else {
           // Wrapper tag is the STRING type name from typeTag (stdlib.ql);
           // std.Type.of now returns type VALUES, which cannot serve as tags
@@ -1101,7 +1291,51 @@ let Interpreter = () -> {
   // std.Object.entries; re-injected on every Interpreter() call (the last interpreter wins, consistent with the running checks).
   std.__bootCall = (f, v) -> callFunctionInner(f, [v], globalEnv, true);
 
-  { runProgram: runProgram, evaluate: evaluate, globalEnv: globalEnv };
+  if !isError(nativeHost) {
+    nativeBridge = NativeValues(nativeHost, nativeTypes, (func, args, exempt) -> callFunctionInner(func, args, globalEnv, exempt));
+  };
+
+  if libraryProgram == null { libraryProgram = parseStandardLibrary(); };
+  if isError(libraryProgram) {
+    libraryInitError = { type: "Error", value: libraryProgram, propagate: true };
+  } else {
+    if libraryExports == null {
+      let privateEnv = Environment(null);
+      privateEnv._define("Number", Number); privateEnv._define("String", String);
+      privateEnv._define("Boolean", Boolean); privateEnv._define("Null", Null);
+      privateEnv._define("AnyArray", AnyArray); privateEnv._define("AnyObject", AnyObject); privateEnv._define("isError", isError);
+      // Separate tables from userStd: user writes cannot replace library helpers.
+      let base = {}; let names = std.Object.keys(std); let i = 0;
+      while i < names.length {
+        let name = names[i]; let value = std[name];
+        if name != "Type" && typeTag(value) == "Object" {
+          let copy = {}; let keys = std.Object.keys(value); let j = 0;
+          while j < keys.length { copy[keys[j]] = value[keys[j]]; j = j + 1; };
+          value = copy;
+        };
+        base[name] = value; i = i + 1;
+      };
+      let savedPath = currentPath; currentPath = "<standard-library>";
+      let factory = evaluate(libraryProgram.statements[0].value, privateEnv);
+      let result = callFunction(factory, [base], privateEnv);
+      currentPath = savedPath;
+      if isErrorVal(result) { libraryInitError = result; }
+      else { libraryExports = result; };
+    };
+    if libraryExports != null {
+      let modules = libraryExports.value; let names = std.Object.keys(modules); let i = 0;
+      while i < names.length {
+        let name = names[i]; let fields = modules[name].value;
+        let target = userStd[name];
+        if isError(target) { target = {}; userStd[name] = target; };
+        let keys = std.Object.keys(fields); let j = 0;
+        while j < keys.length { target[keys[j]] = fields[keys[j]]; j = j + 1; };
+        i = i + 1;
+      };
+    };
+  };
+
+  { runProgram: runProgram, evaluate: evaluate, globalEnv: globalEnv, setModuleContext: setModuleContext, setArguments: setArguments, _shareArguments: shareArguments, _shareNativeBridge: (bridge) -> { nativeBridge = bridge; }, getExports: () -> moduleExports };
 };
 
 export Interpreter;

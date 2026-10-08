@@ -1,0 +1,12 @@
+let moduleNumber = Number;
+let moduleString = String;
+let replacement = {check: (v) -> false};
+Number = replacement;
+String = replacement;
+AnyArray = replacement;
+isError = (v) -> false;
+println("module binding output");
+let repeated = std.String.repeat("x")(3);
+let selected = std.Array.get([7])(0);
+let trimmed = std.String.trim(" x ");
+export {moduleNumber, moduleString, repeated, selected, trimmed};

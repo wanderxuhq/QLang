@@ -1,0 +1,24 @@
+// Fixed expectations exercise QLang sugar through both AST consumers.
+let bare = x -> x + 1;
+let parens = (x) -> x + 1;
+println(bare(2));
+println(parens(2));
+println((x -> x * 2)(4));
+let curry = x -> y -> x + y;
+println(curry(10)(7));
+let captured = curry(20);
+println(captured(5));
+let apply = (f, value) -> f(value);
+println(apply(x -> x * 3, 4));
+let block = x -> { if x < 0 { return 0; }; x + 2; };
+println(block(-1));
+println(block(5));
+let zero = -> 9;
+println(zero());
+let annotated = (x: Number) -> x + 1;
+println(annotated(5));
+println(annotated("bad").type);
+let sum = (a, b) -> a + b;
+println(sum(4)(6));
+let factorial = n -> if n <= 1 { 1; } else { n * factorial(n - 1); };
+println(factorial(5));

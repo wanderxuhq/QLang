@@ -1,0 +1,10 @@
+import ./static_helper.ql;
+let count = 0;
+let bump = () -> { count = count + 1; count; };
+let add = (a: Number, b: Number) -> a + b;
+let make = (base) -> (n) -> base + n;
+let mutate = (o, a) -> { o.value = 9; a[0] = 7; o; };
+let apply = (f, value) -> f(value);
+let annotated = (T) -> (x: T) -> x;
+let later = () -> { export let late = 19; };
+export {answer: helper, label: "插件 😀", bump, add, make, mutate, apply, annotated, later, numberType: Number, nullType: Null, errorType: Error, error: Error.raise("exported")};

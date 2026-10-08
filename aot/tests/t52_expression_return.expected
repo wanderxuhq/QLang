@@ -1,0 +1,10 @@
+initializer=7,hits=0
+array=7,hits=0
+argument=7,hits=0
+arithmetic=7,hits=0
+unary=7,hits=0
+condition=false,hits=0
+receiver=true,hits=0,stored=0
+index=true,hits=0,stored=0
+index-expression=0,hits=0,stored=0
+nested=13,outerHits=1

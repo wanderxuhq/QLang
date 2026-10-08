@@ -6,3 +6,4 @@ target/
 .claude/
 .superpowers/
 design-archive/
+.commandcode/

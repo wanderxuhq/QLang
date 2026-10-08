@@ -1,0 +1,14 @@
+let count = 0;
+let check = (ok, label) -> { count = count + 1; if !ok { println("FAIL " + label); }; };
+let api = std.__extensions;
+let callback = api.callback((values, exempt) -> { {values: values, exempt: exempt}; }, null);
+let result = callback(2, 3, 4);
+check(result.values.length == 3 && result.values[2] == 4 && !result.exempt, "argument list forwarded");
+check(callback.name.type == "NotAnObject", "ordinary callback metadata hidden");
+check("${callback}" == "<function>", "ordinary callback interpolation");
+let e = Error.raise("input");
+let result2 = api.call(callback, [e], true);
+check(result2.exempt && result2.values[0].message == "input", "Error and predicate exemption forwarded");
+let named = api.callback((values, exempt) -> values.length, "<curried>");
+check(named.name == "<curried>" && named(1, 2) == 2, "partial metadata forwarded");
+println("native callback ABI checks: " + std.String.toString(count));

@@ -52,9 +52,8 @@ impl Parser {
     /// - `tokens`: the token sequence output by the lexer
     /// - `source`: the original source code
     pub fn new(tokens: Vec<Token>, source: String) -> Self {
-        // Ensure the token sequence ends with EOF: the normal tokenize() path already appends EOF,
-        // but the token list produced by string interpolation (see Lexer::collect_interpolation_tokens)
-        // does not append EOF. Without EOF, peek() would panic with an out-of-bounds access when going past the end.
+        // Keep externally supplied token streams safe as well as lexer output:
+        // peek() requires a terminal EOF, even for an empty expression stream.
         let tokens = match tokens.last() {
             Some(t) if t.kind == TokenKind::Eof => tokens,
             _ => {
@@ -535,7 +534,15 @@ impl Parser {
             } else if self.match_token(&TokenKind::Dot) {
                 // Member access
                 // Parse the field name
-                let field = self.expect_identifier()?;
+                let field = if let Some(name) = TokenKind::keyword_to_str(&self.peek().kind) {
+                    // A keyword after a dot is a property name, just as it is
+                    // before a colon in an object literal.
+                    let name = name.to_string();
+                    self.advance();
+                    name
+                } else {
+                    self.expect_identifier()?
+                };
                 // Compute the span
                 let span = Span::new(expr.span().start, self.previous().span.end);
                 // Create a MemberAccessExpr
@@ -761,7 +768,12 @@ impl Parser {
                     // Create a new parser for the interpolation content
                     let mut parser = Parser::new(tokens.clone(), self.source.clone());
                     // Parse it into an expression
+                    parser.skip_newlines();
                     let expr = parser.parse_expression()?;
+                    parser.skip_newlines();
+                    if !parser.is_at_end() {
+                        return Err(ParseError::UnexpectedToken(parser.peek().clone()));
+                    }
                     // Wrap it as an Interpolation
                     Ok(StringPart::Interpolation(Box::new(expr)))
                 }
@@ -1133,7 +1145,9 @@ impl Parser {
                 // Only single-part strings are supported (no interpolation)
                 if parts.len() == 1 {
                     if let crate::token::StringPart::Literal(s) = &parts[0] {
-                        s.clone()
+                        let path = s.clone();
+                        self.advance();
+                        path
                     } else {
                         return Err(ParseError::ExpectedImportPath(self.current_span()));
                     }
@@ -1183,8 +1197,7 @@ impl Parser {
             }
         };
 
-        // Consume the path token
-        self.advance();
+        if path.is_empty() { return Err(ParseError::ExpectedImportPath(self.current_span())); }
         let end = self.previous().span.end;
 
         // Create the import expression

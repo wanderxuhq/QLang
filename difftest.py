@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Differential testing: run the same QLang source through the Rust host
-interpreter, the bootstrapped interpreter, and (as an independent reference)
-Node.js/V8; results must be identical.
+"""Compatibility testing across the core QLang interpreter, the retained Rust
+interpreter and Node.js/V8 for their overlapping behavior.
 
-The host and boot implementations are not independent (boot runs on the host),
-so a third reference is needed to validate the host itself. QLang semantics are
-JS-flavored, so for the overlapping subset the same program runs under V8.
+The QLang implementation is the core. Neither Rust nor JavaScript defines the
+language contract: differences need investigation against the intended semantics.
+This suite is supplementary to explicit AST and expected-output contract tests.
+The core currently runs on the Rust bootstrap runner, so this comparison alone
+cannot establish independence from Rust.
 
 Safe cases (neither side errors or crashes) run in one batch per process; risky
 cases (either side may error or crash) run in isolated processes, capturing
@@ -25,7 +26,7 @@ import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
-CARGO = ["cargo", "run", "--quiet", "--"]
+CARGO = [os.environ["QLANG"]] if os.environ.get("QLANG") else ["cargo", "run", "--quiet", "--"]
 BOOT_IMPORT = "import ./bootstrapped/main.ql;"
 
 # Banner lines printed by the bootstrapped runSource (host-side println); filtered out for diffing
@@ -501,32 +502,65 @@ RISKY_CASES = [
     ("p2", "let t = std.Type.of(42); t.check = 42;"),
 ]
 
-# Native AOT whitelist (Task 9, M2): cids whose source compiles through qlangc +
-# runtime.ql to an ELF whose output matches the host. Controller pre-verified every
-# case native==host. Excluded from the brief's 59: c03 (10/4 non-integer — __itoa
-# truncates 2.5 to 2, host prints 2.5), c11/c12/c13 (bitwise has no native lowering
-# — falls through emitBinaryOp's comparison else-chain to fcmp oge → renders BOOL),
-# c25/c26/c27 (if-expression in call-argument position — emitExpr has no If branch
-# → null), m07 (variable string concat → fadd divergence), and m01-m04/m08/m09
-# (boot .add/.remove are no-ops → not host/boot green; see NATIVE_ONLY_CASES).
-NATIVE_CASES = [
-    # M1 regression (numeric/control/short-circuit/closure) — c25/c26/c27 excluded
-    # (if-expr in call-arg unhandled), c03 non-integer, c11/c12/c13 bitwise-unlowered
+# JSON/Unicode surface, with independent JS translations below.
+JSON_CASES = [('j01', 'std.JSON.stringify([1, "a,b", true, null]);'),
+ ('j02', 'std.JSON.parse("{\\"a\\":[1,2]}").a[1];'),
+ ('j03', 'std.JSON.stringify(std.JSON.parse("3.14"));'),
+ ('j04', 'std.JSON.parse("\\"\\\\ud83d\\\\ude00\\"");'),
+ ('j05', 'std.JSON.stringify("é😀");'),
+ ('j06', 'std.JSON.parse("{\\"a\\":1,\\"a\\":2}").a;'),
+ ('j07', 'std.String.codePointAt("é😀")(-1);'),
+ ('j08', '"é😀".length;'),
+ ('j09', '"é😀"[-1];'),
+ ('j10', 'std.JSON.parse("{\\"type\\":\\"Number\\",\\"value\\":[2]}").value[0];'),
+ ('j11', 'isError(std.JSON.parse("[1,]"));'),
+ ('j12', 'std.JSON.stringify(std.JSON.parse("9007199254740993"));')]
+SAFE_CASES += JSON_CASES
+
+# Calls exercise argument order, value-based dispatch and closure identity.
+CALL_CASES = [
+    ("k01", "let f = (a, b) -> a + b; let g = f(3); g(4) + g(5);"),
+    ("k02", "(42)().type;"),
+    ("k03", "let n = 0; let tick = () -> { n = n + 1; 1; }; let f = (a, b) -> 0; let r = f(1 / 0, tick()); n;"),
+    ("k04", "let f = () -> 1; let g = () -> 1; f == f && f != g;"),
+    ("k05", "let a = []; let add = a.add; add(9); a[0];"),
+    ("k06", "std.String.length().type;"),
+    ("k07", "let f = (a, b, c) -> a + b + c; f(1)(2).type;"),
+    ("k08", 'let f = (a, b) -> 0; let e = std.Error.raise("First", "", null); let x = std.Error.raise("Second", "", null); f(e, x).cause.type;'),
+]
+SAFE_CASES += CALL_CASES
+SAFE_CASES += [("k09", "let n = 0; let T = std.Type.make((v) -> { n = n + 1; true; }); let x: T = 1; x = 2; n;")]
+
+BINDING_CASES = [
+    ("b01", 'let log = ""; let t = () -> { log = log + "T"; Number; }; let v = () -> { log = log + "V"; 1; }; let x: t() = v(); x = 2; log;'),
+    ("b02", 'let x = 1; let x; x.type;'),
+    ("b03", 'let x: Number = 1; let f = () -> { let x; x = "free"; x; }; f();'),
+    ("b04", 'let T = Number; let f = (x: T) -> x; T = String; f(4);'),
+    ("b05", 'let f = (x: Number, x) -> { x = "free"; x; }; f(1, 2);'),
+]
+SAFE_CASES += BINDING_CASES
+
+# Native AOT whitelist: compare compiled results against the host. This is
+# intentionally a subset of the language; full compatibility is not implied.
+# M3 adds if expressions, fractional output, bitwise operations and dynamic
+# concatenation, function calls and bound array methods.
+NATIVE_CASES = [cid for cid, _ in JSON_CASES + CALL_CASES + BINDING_CASES] + [
+    "k09", "u1", "u3", "u4", "u8", "u12", "u21", "u23", "u26", "u28",
+    "t31", "t34", "t36", "t44", "t49", "t50", "t55",
+    # M3: fractional output, bitwise operations, if expressions, dynamic concat.
+    "c03", "c11", "c12", "c13", "c25", "c26", "c27", "m07",
+    # M1 regression (numeric/control/short-circuit/closure)
     "c01", "c02", "c04", "c05", "c06", "c07", "c08", "c09", "c10",
     "c20", "c22", "c23", "c24", "c28", "c29", "c30", "c31", "c35",
     "c42", "c43", "c44", "c45", "c46", "c47", "c48", "c54",
     # M2 surface: strings/arrays/objects (integer domain)
     "c14", "c15", "c16", "c36", "c37", "c38", "c39", "c41", "c49", "c50",
     "c51", "c52", "c53", "c56",
-    # M2 new (host/boot green, native==host) — m07 excluded per brief (variable
-    # concat fadd divergence)
+    # M2 cases shared by host and boot
     "m05", "m06", "m10", "m11", "m12",
 ]
 
-# m-cases using .add/.remove: boot implements them as no-ops → host/boot diverge,
-# so they cannot enter SAFE_CASES/NODE_CASES. Native == host (verified), so they get
-# their own NATIVE-only column with a host probe for ground truth.
-NATIVE_ONLY_CASES = ["m01", "m02", "m03", "m04", "m08", "m09"]
+# Array instance methods now share the HOST/BOOT/NATIVE gate.
 NATIVE_ONLY_SRC = {
     "m01": "let a = [1, 2]; a.add(3); a.length;",
     "m02": "let a = [1, 2]; a.add(3); a[2];",
@@ -535,6 +569,10 @@ NATIVE_ONLY_SRC = {
     "m08": "let a = []; a.add(1); a.add(2); a.length;",
     "m09": "let a = [1]; a.remove(0); a.length;",
 }
+SAFE_CASES += list(NATIVE_ONLY_SRC.items())
+NATIVE_CASES += list(NATIVE_ONLY_SRC)
+NATIVE_ONLY_CASES = []
+
 
 # Node.js reference cases: (cid, js_src). js_src is a faithful JavaScript translation
 # of the QLang case; None means the QLang source is valid JS verbatim. Translation
@@ -607,6 +645,21 @@ NODE_CASES = [
 
 
 
+NODE_CASES += [('j01', 'JSON.stringify([1, "a,b", true, null]);'),
+ ('j02', 'JSON.parse("{\\"a\\":[1,2]}").a[1];'),
+ ('j03', 'JSON.stringify(JSON.parse("3.14"));'),
+ ('j04', 'JSON.parse("\\"\\\\ud83d\\\\ude00\\"");'),
+ ('j05', 'JSON.stringify("é😀");'),
+ ('j06', 'JSON.parse("{\\"a\\":1,\\"a\\":2}").a;'),
+ ('j07', 'Array.from("é😀").at(-1).codePointAt(0);'),
+ ('j08', 'Array.from("é😀").length;'),
+ ('j09', 'Array.from("é😀").at(-1);'),
+ ('j10', 'JSON.parse("{\\"type\\":\\"Number\\",\\"value\\":[2]}").value[0];'),
+ ('j11',
+  'let invalid = false; try { JSON.parse("[1,]"); } catch (_) { invalid = true; }; invalid;'),
+ ('j12', 'JSON.stringify(JSON.parse("9007199254740993"));')]
+
+
 def host_disp():
     """Host-side disp: compares std.Type.of(v) against the type-value constants
     (Type.of no longer returns strings — type-system Task 3). The fallback
@@ -677,6 +730,16 @@ def last_expr(source):
     return parts[-1]
 
 
+NODE_CASES += [
+    ("m01", "let a = [1, 2]; a.push(3); a.length;"),
+    ("m02", "let a = [1, 2]; a.push(3); a[2];"),
+    ("m03", "let a = [1, 2, 3]; a.splice(0, 1); a.length;"),
+    ("m04", "let a = [1, 2, 3]; a.splice(1, 1); a[0] + a[1];"),
+    ("m08", "let a = []; a.push(1); a.push(2); a.length;"),
+    ("m09", "let a = [1]; a.splice(0, 1); a.length;"),
+]
+
+
 def write_host_suite(path, cases):
     lines = [host_disp()]
     for cid, src in cases:
@@ -743,8 +806,8 @@ def write_native_one(path, cid, src):
         f.write('print("\\n");\n')
 
 
-def host_ground_truth(cid, src):
-    """Host ground truth for NATIVE_ONLY cases. hres[cid] doesn't exist (not in
+def host_compatibility_output(cid, src):
+    """Rust compatibility output for NATIVE_ONLY cases. hres[cid] doesn't exist (not in
     SAFE_CASES) and the native .ql uses __print which host no-ops, so probe host
     directly with the host_disp harness (same shape as write_host_one)."""
     hp = os.path.join(ROOT, "_df_" + cid + "_h.ql")
@@ -922,41 +985,49 @@ def main():
                 bres[cid] = run(bp)
             node_check(cid, hres[cid], bres[cid], nr, divergences)
 
-    # ---- NATIVE cases (M2 whitelist): compile .ql -> ELF, run, compare to host ----
+    # ---- NATIVE cases (M2 whitelist): compile .ql -> ELF, run, check Rust compatibility ----
     # _df_native_*.ql land in ROOT so the cleanup glob below sweeps them; the .bin
     # files must NOT land in the repo root, so they go in a scratch dir.
     print("=== NATIVE cases (M2 whitelist) ===")
     import tempfile
-    nc_dir = tempfile.mkdtemp(prefix="_df_native_")
-    nc_fail = 0
-    for cid in NATIVE_CASES + NATIVE_ONLY_CASES:
-        if cid in NATIVE_ONLY_SRC:
+    from concurrent.futures import ThreadPoolExecutor
+
+    def check_native(cid):
+        if cid in NATIVE_ONLY_CASES:
             src = NATIVE_ONLY_SRC[cid]
-            hval = host_ground_truth(cid, src)
+            hval = host_compatibility_output(cid, src)
         else:
             src = dict(SAFE_CASES)[cid]
             hval = norm_err(hres[cid][1][0], cid)
         ql = os.path.join(tmp, "_df_native_%s.ql" % cid)
         binp = os.path.join(nc_dir, "_df_native_%s.bin" % cid)
         write_native_one(ql, cid, src)
-        r = subprocess.run(CARGO + ["--compile", ql, "-o", binp],
-                           cwd=ROOT, capture_output=True, text=True)
-        if r.returncode != 0:
-            print("NATIVE COMPILE-FAIL %s: %s" % (cid, r.stderr.strip()))
-            nc_fail = 1
-            continue
-        runr = subprocess.run([binp], capture_output=True, text=True)
-        if runr.returncode != 0:
-            print("NATIVE RUN-FAIL %s (rc=%s): %s" % (cid, runr.returncode, runr.stderr.strip()))
-            nc_fail = 1
-            continue
-        line = [l for l in runr.stdout.splitlines() if l.startswith(cid + "=")]
-        nval = norm_err(line[0].split("=", 1)[1]) if line else "ERR"
+        try:
+            r = subprocess.run(CARGO + ["--compile", ql, "-o", binp],
+                               cwd=ROOT, capture_output=True, text=True, timeout=180)
+            if r.returncode != 0:
+                return False, "NATIVE COMPILE-FAIL %s: %s" % (cid, r.stderr.strip())
+            runr = subprocess.run([binp], capture_output=True, text=True, timeout=60)
+            if runr.returncode != 0:
+                return False, "NATIVE RUN-FAIL %s (rc=%s): %s" % (cid, runr.returncode, runr.stderr.strip())
+        except subprocess.TimeoutExpired:
+            return False, "NATIVE TIMEOUT %s" % cid
+        lines = [line for line in runr.stdout.splitlines() if line.startswith(cid + "=")]
+        if len(lines) != 1:
+            return False, "NATIVE OUTPUT-FAIL %s: missing or duplicate result" % cid
+        nval = norm_err(lines[0].split("=", 1)[1])
         if nval == hval:
-            print("NATIVE PASS %s" % cid)
-        else:
-            print("NATIVE FAIL %s: native=%r host=%r" % (cid, nval, hval))
-            nc_fail = 1
+            return True, "NATIVE PASS %s" % cid
+        return False, "NATIVE FAIL %s: native=%r host=%r" % (cid, nval, hval)
+
+    nc_fail = 0
+    jobs = max(1, int(os.environ.get("QLANG_TEST_JOBS", "1")))
+    with tempfile.TemporaryDirectory(prefix="_df_native_") as nc_dir:
+        with ThreadPoolExecutor(max_workers=jobs) as pool:
+            for passed, message in pool.map(check_native, NATIVE_CASES + NATIVE_ONLY_CASES):
+                print(message)
+                if not passed:
+                    nc_fail = 1
     if nc_fail:
         divergences.append("NATIVE")
     print("=== NATIVE done ===")
