@@ -382,6 +382,19 @@ semantic, parse and runtime diagnostics plus complete core/selfhost gates.
 The later numeric-key repair also passed all six final integration gates. Earlier public-field experiments must not be
 published unchanged. See [source-diagnostics.md](source-diagnostics.md).
 
+## Line endings: keep core.autocrlf off (2026-10-09)
+
+This checkout had `core.autocrlf=true`, so a `git checkout` rewrote the sources to
+CRLF. The library bundle embeds the module *characters* — its newlines are escaped
+inside the generated string literal — so a CRLF working tree makes
+`stdlib/build_bundle.ql --check` report a stale bundle even though the committed
+bundle is correct, and it silently changes the source text the compiler parses
+(positions and embedded literals). Fix: `git config core.autocrlf false`, then
+re-materialize the working files from the index (`git checkout-index -f -a`, or
+copy every `git ls-files` entry from `git cat-file blob :<path>`), after which
+`--check` verifies. Fixtures may still use CRLF deliberately — the packager tests
+cover mixed newlines — only the sources that feed the bundle need LF.
+
 ## Compiler emission scaling: measurements and one fix (2026-10-08)
 
 The user un-deferred compiler scalability work. Clean measurements (native
