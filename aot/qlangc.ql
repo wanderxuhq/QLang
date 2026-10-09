@@ -809,6 +809,13 @@ let emitLetStmt = (node) -> {
   };
   let slot = defineSlot(node.name);
   curScope.active[node.name] = true;
+  // Remember which bindings carry a runtime annotation: an unannotated slot's
+  // type/text are zero, so a later plain store is equivalent to the
+  // __check_binding diamond and the diamond can be dropped.
+  if annotated {
+    if isError(curScope.annotated) { curScope.annotated = {}; };
+    curScope.annotated[node.name] = true;
+  };
   let off = emitBindingPtr({ depth: 0, slot: slot });
   if annotated && node.value == null {
     // A declaration validates its annotation but does not check an absent value.
@@ -835,7 +842,9 @@ let emitStoreByName = (name, expression, target) -> {
   let off = emitResolvedBindingPtr(hit, name);
   // A same-body write target is a direct slot pointer: the frontend guarantees
   // the binding exists, so the absent-pointer check is dead.
-  if !inRuntime && !(hit.depth == 0 && (isError(hit.scope.optional) || isError(hit.scope.optional[name]))) {
+  let sameBody = hit.depth == 0 && (isError(hit.scope.optional) || isError(hit.scope.optional[name]));
+  let unannotated = sameBody && (isError(hit.scope.annotated) || isError(hit.scope.annotated[name]));
+  if !inRuntime && !sameBody {
     let absent = temp(); let bad = lbl(); let good = lbl();
     line("  " + absent + " = icmp eq ptr " + off + ", null");
     line("  br i1 " + absent + ", label %" + bad + ", label %" + good);
@@ -845,7 +854,9 @@ let emitStoreByName = (name, expression, target) -> {
     emitPropagateError(error); line("  br label %" + good);
     line(good + ":"); curLbl = good;
   };
-  if inRuntime { line("  store %ql_value " + value + ", ptr " + off); return null; };
+  // Unannotated same-body target: the slot's type/text are zero, so the plain
+  // store is exactly what the diamond's `plain` branch would do.
+  if inRuntime || unannotated { line("  store %ql_value " + value + ", ptr " + off); return null; };
   let ap = temp(); let ty = temp(); let has = temp();
   line("  " + ap + " = getelementptr i8, ptr " + off + ", i64 16");
   line("  " + ty + " = load %ql_value, ptr " + ap);

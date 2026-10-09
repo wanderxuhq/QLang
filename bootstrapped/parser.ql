@@ -162,8 +162,13 @@ let Parser = (tokens) -> {
     while i < keys.length { out[keys[i]] = m[keys[i]]; i = i + 1; };
     out;
   };
-  let daState = (declared, initialized) -> { { declared: declared, initialized: initialized, terminated: false }; };
-  let daCopyState = (st) -> { { declared: daCopyMap(st.declared), initialized: daCopyMap(st.initialized), terminated: st.terminated }; };
+  let daState = (declared, initialized) -> { { declared: declared, initialized: initialized, arities: {}, terminated: false }; };
+  let daCopyState = (st) -> { { declared: daCopyMap(st.declared), initialized: daCopyMap(st.initialized), arities: daCopyMap(st.arities), terminated: st.terminated }; };
+  // -1 means "bound, but its arity is not statically known any more".
+  let daSetArity = (st, name, value) -> {
+    if value != null && value.type == "Function" { st.arities[name] = value.parameters.length; }
+    else { st.arities[name] = -1; };
+  };
   let daEscaped = (range) -> {
     let escaped = {};
     let i = 0;
@@ -197,9 +202,23 @@ let Parser = (tokens) -> {
       // is written (not read), and a member/index target reads its receivers.
       daCheckExpr(node.value, st, escaped);
       if node.target.type == "Identifier" {
+        daSetArity(st, node.target.name, node.value);
         if !isError(st.declared[node.target.name]) { st.initialized[node.target.name] = true; };
       } else { daCheckExpr(node.target, st, escaped); };
       return null;
+    };
+    if node.type == "Call" {
+      // A call to a statically known local function with more arguments than it
+      // has parameters can never succeed: the runtime would report ArityMismatch.
+      // Fewer arguments are partial application and stay legal, as do dynamic
+      // callees and non-identifier callees.
+      if node.callee.type == "Identifier" {
+        let arity = st.arities[node.callee.name];
+        if !isError(arity) && arity >= 0 && node.arguments.length > arity {
+          daError(node, "Arity mismatch: expected " + std.String.toString(arity) + " arguments, got " + std.String.toString(node.arguments.length));
+        };
+      };
+      // fall through to the generic child walk below
     };
     // Recurse into every child node (expressions, containers, blocks embedded in
     // expressions) so reads anywhere in an expression are checked.
@@ -222,6 +241,7 @@ let Parser = (tokens) -> {
   };
   let checkStatement = (node, st, escaped) -> {
     if node.type == "Let" {
+      daSetArity(st, node.name, node.value);
       if node.value != null { daCheckExpr(node.value, st, escaped); st.declared[node.name] = true; st.initialized[node.name] = true; }
       else { st.declared[node.name] = true; st.initialized[node.name] = false; };
       null;
@@ -231,7 +251,8 @@ let Parser = (tokens) -> {
         // Assigning only initializes a binding that this body declared with let.
         // An outer/module binding stays outside this body's analysis (its reads
         // are deferred, and an assignment to an undeclared name is a separate
-        // frontend error).
+        // frontend error). The target's statically known arity is refreshed.
+        daSetArity(st, node.target.name, node.value);
         if !isError(st.declared[node.target.name]) { st.initialized[node.target.name] = true; };
       } else { daCheckExpr(node.target, st, escaped); };
       null;
@@ -263,6 +284,21 @@ let Parser = (tokens) -> {
         n = n + 1;
       };
       st.initialized = merged;
+      // An arity survives the join only if every live path agrees on it.
+      let mergedArity = {};
+      let anames = std.Object.keys(st.arities); let an = 0;
+      while an < anames.length {
+        let name = anames[an]; let keep = st.arities[name];
+        let k = 0;
+        while k < alive.length {
+          let v = alive[k].arities[name];
+          if isError(v) || v != keep { keep = -1; };
+          k = k + 1;
+        };
+        mergedArity[name] = keep;
+        an = an + 1;
+      };
+      st.arities = mergedArity;
       if !any { st.terminated = true; };
       null;
     } else if node.type == "While" {

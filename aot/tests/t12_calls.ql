@@ -6,7 +6,8 @@ println(calls);
 println(partial(5));
 println(partial(6));
 println(f()(7, 8));
-println(f(1, 2, 3).type);
+// Excess arguments to a statically known local function are now a frontend
+// error (see bootstrapped/tests/diagnostics.ql), so this case no longer runs.
 println(partial().type);
 println(partial(1, 2).type);
 println(calls);

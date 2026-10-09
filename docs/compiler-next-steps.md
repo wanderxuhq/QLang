@@ -422,6 +422,21 @@ diagnostic fixture. `tests/uninitialized.rs` runs the retained Rust host, which
 still reports the runtime value — a recorded discrepancy in
 [retained-rust-issues.md](retained-rust-issues.md).
 
+Extensions (same day):
+
+- The same pass tracks a statically known local function's arity (refreshed on
+  reassignment, merged conservatively across branches), so a call to it with
+  **more** arguments than it declares is a frontend error
+  (`Arity mismatch: expected N arguments, got M`). Fewer arguments stay legal
+  (partial application), member/unknown callees keep the runtime check, and
+  variadic runtime natives such as `Math.max` are unaffected. t12's excess-argument
+  case moved to the diagnostic fixture (36 invalid now).
+- Emitter: a binding declared without a type annotation stores zero type/text, so
+  the `__check_binding` diamond on reassignment always takes its plain branch.
+  `emitLetStmt` records annotated bindings in `curScope.annotated` and
+  `emitStoreByName` emits a plain store for the rest. One `x = x + 1` went from
+  174 to 108 IR lines and 1000 statements from 24.5 to 21.0 MB.
+
 ## Line endings: keep core.autocrlf off (2026-10-09)
 
 This checkout had `core.autocrlf=true`, so a `git checkout` rewrote the sources to
