@@ -92,17 +92,20 @@ println(Error.raise.name);
         print('PASS dynamic import at function definition path', flush=True)
 
         cases = [
-            ('uninitialized', 'let x; x;', b'Uninitialized'),
-            ('propagate', 'let x; x?; println("UNREACHABLE");', b'Uninitialized'),
+            # Reading a not-definitely-initialized binding is a frontend error now.
+            ('uninitialized', 'let x; x;', b'reading uninitialized variable: x'),
+            ('propagate', 'let x; x?; println("UNREACHABLE");', b'reading uninitialized variable: x'),
             ('undeclared', 'missing;', b'UndefinedVariable'),
             ('assign-undeclared', 'missing = 1; println("UNREACHABLE");', b'UndefinedVariable'),
             ('assign-hidden', 'if true { let x = 1; }; x = 2; println("UNREACHABLE");', b'UndefinedVariable'),
             ('assign-member', 'missing.field = 1; println("UNREACHABLE");', b'UndefinedVariable'),
             ('assign-index', 'missing[0] = 1; println("UNREACHABLE");', b'UndefinedVariable'),
-            ('assign-uninitialized-member', 'let x; x.field = 1; println("UNREACHABLE");', b'Uninitialized'),
-            ('assign-uninitialized-index', 'let x; x[0] = 1; println("UNREACHABLE");', b'Uninitialized'),
+            ('assign-uninitialized-member', 'let x; x.field = 1; println("UNREACHABLE");', b'reading uninitialized variable: x'),
+            ('assign-uninitialized-index', 'let x; x[0] = 1; println("UNREACHABLE");', b'reading uninitialized variable: x'),
             ('parse', 'let f = (1) -> 2; println("UNREACHABLE");', b'ParseError'),
             ('error', 'Error.raise("intentional");', b'Error: intentional'),
+            # `??` does not make a read of a not-yet-initialized binding legal.
+            ('coalesce-uninitialized', 'let x; x ?? null;', b'reading uninitialized variable: x'),
             ('read', None, b'IOError'),
         ]
         for name, text, kind in cases:
@@ -116,7 +119,7 @@ println(Error.raise.name);
             output = result.stdout.split(b'Interpreting...\n')[-1]
             assert b'UNREACHABLE\n' not in output, (name, output)
             print('PASS native interpreter error:', name, flush=True)
-        for text in ['let x; x = null; x;', 'let x; x ?? null;', 'println(Null.check(null));']:
+        for text in ['let x; x = null; x;', 'println(Null.check(null));']:
             source = work / 'success.ql'; source.write_text(text)
             body(execute(interpreter, source))
         print('PASS initialized null and handled errors', flush=True)
