@@ -1,6 +1,6 @@
-let checks = 0;
+let checks = 0; let zero = 0; let three = 3;
 let check = (ok, label) -> { checks = checks + 1; if !ok { println("FAIL " + label); }; };
-let direct = 1 / 0;
+let direct = 1 / zero;
 check(direct.line == 3 && direct.col == 14, "division coordinates");
 check(isError(direct.file) && direct.file.type == "UndefinedField", "no public file field");
 check(isError(direct.trace) && direct.trace.type == "UndefinedField", "no public trace field");
@@ -27,7 +27,7 @@ check(reassigned.type == "TypeCheck" && reassigned.line == 25 && reassigned.col 
 // An uninitialized read is now a frontend error, not a runtime value; the
 // frontend diagnostic fixture covers it. Lines kept so later source positions
 // below stay stable.
-let index = [1][3];
+let index = [1][three];
 check(index.type == "IndexOutOfBounds" && index.line == 30 && index.col == 13, "index source");
 let field = ({}).missing;
 check(field.type == "UndefinedField" && field.line == 32 && field.col == 14, "field source");

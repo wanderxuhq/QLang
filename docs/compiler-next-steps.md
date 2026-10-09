@@ -436,6 +436,46 @@ Extensions (same day):
   `emitLetStmt` records annotated bindings in `curScope.annotated` and
   `emitStoreByName` emits a plain store for the rest. One `x = x + 1` went from
   174 to 108 IR lines and 1000 statements from 24.5 to 21.0 MB.
+- Constant failures the frontend can prove are errors as well: division or modulo
+  by a literal zero (`division by zero`) and an integer literal index outside an
+  array literal (`index out of range: N`, positive or negative). The right operand
+  of `&&`/`||` is exempt everywhere, since it may never be evaluated —
+  `false && 1 / 0` stays legal and is pinned as a valid case. Two further
+  candidates were deliberately *not* added: member access on a scalar literal
+  (string literals do have members — `"ab".length` is true — so those tables
+  belong to the runtime, not a frontend mirror) and a literal initializer that
+  contradicts its annotation (the annotation is an arbitrary expression evaluated
+  at run time; judging it statically needs a type-value notion the frontend does
+  not have). Fixtures that used `1 / 0` to *obtain* a runtime error value now
+  divide by a variable zero, preserving their source-position assertions
+  (t38, t40, native_source_bridge, t6, v1_shortcircuit).
+
+## Statements end at `;` (2026-10-09)
+
+Settled after working through a line-start/line-end continuation scheme: **a
+statement ends only at `;`** (or at the `}` of a block-like statement). A newline
+never ends one, so parsing is greedy and every source has exactly one parse — there
+is no continuation ambiguity left to resolve. The earlier experiment for that
+ambiguity (rejecting no-effect expression statements, and a statement whose first
+token can both continue the previous line and start a statement, i.e. `-`, `+`,
+`(`, `[`) was reverted as unnecessary complexity.
+
+- Every value-producing statement needs `;`: declarations, assignments, `return`,
+  `export`, and any expression statement — **except a block's tail statement,
+  where it may be omitted (like Rust) or written; both mean the same thing.**
+  Operationally the rule is: a missing `;` is an error unless the next significant
+  token is `}` or end of input. A missing one is reported at the offending token
+  (`expected ';' after declaration` / `after statement` / `after return` /
+  `after export`).
+- `if`, `while` and bare blocks end at their `}`; a following `;` is an empty
+  statement, which is why `if c { … };` stays valid.
+- A standalone expression statement is legal (`xxx;`, `xxx.yyy[zzz];`, `[1, 2];`),
+  which is what allows a chain to continue over the following lines. Before this
+  rule, `let a = 1 let b = 2;` and `{ x y }` were silently accepted (statements
+  without a separator), which is exactly the hole it closes.
+- The corpus is already `;`-terminated, so the rule costs no source changes.
+  Still kept from the same session: definite assignment, the static arity check,
+  literal division by zero, and literal array-index bounds.
 
 ## Line endings: keep core.autocrlf off (2026-10-09)
 

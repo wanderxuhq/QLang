@@ -1,5 +1,5 @@
 // Fixed language contracts, shared by direct AOT and the QLang interpreter.
-let checks = 0;
+let checks = 0; let zero = 0;
 let check = (ok, name) -> {
   if !ok { println("FAIL " + name); };
   checks = checks + 1;
@@ -38,7 +38,7 @@ check(parse("1e308") % 3 == 2, "huge remainder");
 check(std.JSON.stringify(-4 % 2) == "-0", "remainder signed zero");
 check(3 % inf == 3, "infinite divisor");
 check(std.Number.isNaN(inf % 3), "infinite dividend");
-check((1 % 0).type == "DivisionByZero", "zero divisor");
+check((1 % zero).type == "DivisionByZero", "zero divisor");
 check((nan | 0) == 0, "NaN bit conversion");
 check((inf & 1) == 1, "positive saturation");
 check((-inf & 1) == 0, "negative saturation");

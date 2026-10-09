@@ -1,6 +1,6 @@
 // A declaration establishes a binding, never a null value. Reading it before
 // initialization is now a frontend error (see bootstrapped/tests/diagnostics.ql).
-let pending = null;
+let pending = null; let zero = 0;
 println(Null.check(pending));
 println(std.Type.of(pending) == Null);
 pending = 7;
@@ -47,7 +47,7 @@ println(errorValue.type);
 let mismatch: Number = error;
 println(mismatch.type);
 println(mismatch.cause.type);
-let Broken = std.Type.make((v) -> 1 / 0);
+let Broken = std.Type.make((v) -> 1 / zero);
 let broken: Broken = 1;
 println(broken.type);
 let AlwaysFalse = std.Type.make((v) -> []);

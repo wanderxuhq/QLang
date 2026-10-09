@@ -11,7 +11,7 @@ println(first.bump == second.bump);
 box.value = 8;
 println(second.box.value);
 println(first.box.value);
-import ./modules/nested/math.ql
+import ./modules/nested/math.ql;
 println(twice(21));
 println(get());
 println(answer);

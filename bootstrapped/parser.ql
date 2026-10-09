@@ -123,6 +123,14 @@ let Parser = (tokens) -> {
       advance();
     }
   };
+  // A missing ';' is allowed only where the statement ends its block: the next
+  // significant token is '}' or end of input. That is the Rust-like tail
+  // exemption; anywhere else a statement must be terminated by ';'.
+  let endsStatement = () -> {
+    skipNewlines();
+    let token = peek();
+    token.kind == TokenKind.RightBrace || token.kind == TokenKind.Eof;
+  };
 
   // ---- Definite assignment (frontend, shared by both engines) ----------------
   // QLang requires a binding to be initialized before it is read. A read of a
@@ -169,6 +177,13 @@ let Parser = (tokens) -> {
     if value != null && value.type == "Function" { st.arities[name] = value.parameters.length; }
     else { st.arities[name] = -1; };
   };
+  // The numeric value of a literal, including a negated literal, or null.
+  let daLiteralNumber = (node) -> {
+    if isError(node) || node == null { return null; };
+    if node.type == "Number" { return node.value; };
+    if node.type == "UnaryOp" && node.operator == "-" && node.operand.type == "Number" { return -node.operand.value; };
+    null;
+  };
   let daEscaped = (range) -> {
     let escaped = {};
     let i = 0;
@@ -207,6 +222,24 @@ let Parser = (tokens) -> {
       } else { daCheckExpr(node.target, st, escaped); };
       return null;
     };
+    if node.type == "BinaryOp" {
+      // Division or modulo by a literal zero always produces DivisionByZero.
+      let divisor = daLiteralNumber(node.right);
+      if (node.operator == "/" || node.operator == "%") && divisor != null && divisor == 0 {
+        daError(node, "division by zero");
+      };
+    };
+    if node.type == "IndexAccess" {
+      // An array literal's length is known statically: an integer literal index
+      // outside it always produces IndexOutOfBounds. Non-integer literal indices
+      // are left to the runtime (their failure kind differs).
+      if node.object.type == "Array" {
+        let at = daLiteralNumber(node.index);
+        if at != null && at % 1 == 0 && (at < 0 || at >= node.object.elements.length) {
+          daError(node, "index out of range: " + std.String.toString(at));
+        };
+      };
+    };
     if node.type == "Call" {
       // A call to a statically known local function with more arguments than it
       // has parameters can never succeed: the runtime would report ArityMismatch.
@@ -226,8 +259,13 @@ let Parser = (tokens) -> {
     let i = 0;
     while i < keys.length {
       let v = node[keys[i]];
-      if isNode(v) { daCheckExpr(v, st, escaped); }
-      else if AnyArray.check(v) { let j = 0; while j < v.length { if isNode(v[j]) { daCheckExpr(v[j], st, escaped); }; j = j + 1; }; };
+      // The right operand of && and || may never be evaluated, so nothing there
+      // is guaranteed to happen: no definite-assignment or constant-failure check.
+      let shortCircuited = node.type == "BinaryOp" && keys[i] == "right" && (node.operator == "&&" || node.operator == "||");
+      if !shortCircuited {
+        if isNode(v) { daCheckExpr(v, st, escaped); }
+        else if AnyArray.check(v) { let j = 0; while j < v.length { if isNode(v[j]) { daCheckExpr(v[j], st, escaped); }; j = j + 1; }; };
+      };
       i = i + 1;
     };
     null;
@@ -404,7 +442,7 @@ let Parser = (tokens) -> {
     if check(TokenKind.Equal) {
       advance(); // Skip '='
       let value = parseExpression();
-      if check(TokenKind.Semicolon) { advance(); }
+      if check(TokenKind.Semicolon) { advance(); } else if !endsStatement() { parseErrorAt("expected ';' after declaration", peek()); };
       skipNewlines();
       return LetStmt(name, value, annotation);
     } else if check(TokenKind.Semicolon) {
@@ -485,7 +523,7 @@ let Parser = (tokens) -> {
     };
     // Consume the complete statement even on a scope error so parsing progresses.
     let value = parseExpression();
-    if check(TokenKind.Semicolon) { advance(); }
+    if check(TokenKind.Semicolon) { advance(); } else if !endsStatement() { parseErrorAt("expected ';' after return", peek()); };
     skipNewlines();
     if invalidContext != null { return invalidContext; };
     return ReturnStmt(value);
@@ -503,7 +541,7 @@ let Parser = (tokens) -> {
       advance();
     };
     let value = parseExpression();
-    if check(TokenKind.Semicolon) { advance(); }
+    if check(TokenKind.Semicolon) { advance(); } else if !endsStatement() { parseErrorAt("expected ';' after export", peek()); };
     skipNewlines();
     let result = ExportStmt(value); result.name = name; result;
   };
@@ -511,9 +549,11 @@ let Parser = (tokens) -> {
   let parseExpressionStatement = () -> {
     skipNewlines();
     // Assignment is only recognized in expression-statement position (the
-    // assignment operator is not a binary operator in the expression grammar)
+    // assignment operator is not a binary operator in the expression grammar).
+    // A statement ends only at ';', so a newline never ends one: that is what
+    // makes continuation across lines unambiguous.
     let expr = parseAssignment();
-    if check(TokenKind.Semicolon) { advance(); }
+    if check(TokenKind.Semicolon) { advance(); } else if !endsStatement() { parseErrorAt("expected ';' after statement", peek()); };
     skipNewlines();
     return expr;
   };

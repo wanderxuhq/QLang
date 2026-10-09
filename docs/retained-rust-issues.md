@@ -39,12 +39,42 @@ metadata rules. No library-name exception is added to the LLVM dispatcher.
 The retained direct Rust namespace is not automatically replaced by the QLang
 bundle; the Rust-hosted QLang core loads the shared library itself.
 
+## A newline before `-`, `+`, `(` or `[`
+
+The two parsers disagree on a newline that *precedes* an operator which also has a
+prefix form. `let c = a` ⏎ `- 1` compiles and prints 1 with the QLang compiler (the
+`-` continues the expression, so `c = a - 1`) and prints 2 with the retained Rust
+host (the newline ends the expression and `- 1` is an expression statement of its
+own). Both readings are valid programs, so this is genuine ambiguity in the source
+grammar, not a missing feature: a leading `-`, `+`, `(`, `[` can either continue the
+previous expression or begin a new statement, and the two engines pick differently.
+A leading `&&`, `||`, `*`, `/`, `==` cannot start a statement, so the continuation
+reading is the only one there and the host merely reports a parse error (entry
+above).
+
+Measured: `;` is the statement separator in *both* parsers and newlines are
+otherwise skipped — `let a = 1 let b = 2;` is accepted by either engine. What
+differs is only the expression/path continuation loop: the Rust parser refuses to
+cross a newline there (`src/parser.rs`), so it behaves like Go's end-of-line
+semicolon insertion (the operator must end the line to continue), while the QLang
+parser has no newline token and continues, like JavaScript's ASI (which inserts a
+semicolon only where parsing would otherwise fail). Settling it needs one rule
+keyed on the previous line's last token; until then, sources that feed both engines
+keep a newline away from `-`, `+`, `(`, `[`, and a semicolon is written where a
+statement could otherwise continue.
+
 ## Newline after a binary operator
 
-The retained Rust parser rejects a newline after `||` in an `if` condition
-(`UnexpectedToken(Newline)`), while the QLang parser accepts it. This surfaced
-while bootstrapping the numeric lexer. The source condition was kept on one
-line so the retained bootstrap path still works; Rust was not changed.
+The retained Rust parser rejects a newline after a binary operator — `||` in an
+`if` condition (`UnexpectedToken(Newline)`), or `&&` in a `let` initializer
+(`UnexpectedToken(And)`). QLang's lexer emits newlines as statement separators
+(`src/lexer.rs`), and the Rust expression parser's operator continuation loop
+refuses to cross one (`src/parser.rs`), so the right operand is read as a new
+statement. The QLang parser has no newline token, so it accepts the same source:
+verified by compiling the split form with the native compiler (`stage1 --emit-llvm`)
+while the host rejects it. Sources that feed the bootstrap path are kept on one
+line; Rust was not changed. Newlines *are* skipped inside argument lists, so a
+long call can still be wrapped after a comma.
 
 - Computed `import (expression)` is now parsed by the QLang parser for native
   extension loading. The retained Rust parser/loader does not implement this
