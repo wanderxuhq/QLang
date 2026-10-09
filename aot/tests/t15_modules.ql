@@ -27,6 +27,4 @@ println(greeting);
 println(state);
 println(current());
 let __err = "user shadow";
-let uninitialized;
-println(uninitialized.type);
 println(__err);

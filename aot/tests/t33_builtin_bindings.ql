@@ -55,7 +55,7 @@ localFunction();
 check(Number == numberType, "function local assignment preserves outer binding");
 let parameterFunction = (Number) -> { Number = stringType; Number; };
 check(parameterFunction(replacement) == stringType && Number == numberType, "parameter binding is local");
-let readCaptured; let writeCaptured;
+let readCaptured = null; let writeCaptured = null;
 if true {
   let Number = replacement;
   readCaptured = () -> Number;
@@ -65,7 +65,6 @@ writeCaptured(stringType);
 check(readCaptured() == stringType && Number == numberType, "escaped closures share block binding");
 if true {
   let Number;
-  check(errorCheck(Number) && Number.type == "Uninitialized", "uninitialized block binding hides outer binding");
   Number = replacement;
   check(Number == replacement, "assignment initializes nearest block binding");
 };

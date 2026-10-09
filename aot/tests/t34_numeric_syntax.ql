@@ -64,8 +64,6 @@ let original = Error.raise("original"); let failure = +original;
 check(failure.type == "TypeMismatch" && failure.cause.message == "original", "unary plus Error cause");
 let count = 0; let once = () -> { count = count + 1; 42; };
 check(+once() == 42 && count == 1, "operand evaluated once");
-let stop = () -> { let x; +(x?); count = count + 1; };
-check(isError(stop()) && count == 1, "explicit propagation");
 // Explicit declarations remain legal; these names are not predefined.
 let Infinity = 7; let NaN = 8;
 check(Infinity + NaN == 15, "ordinary explicit names");

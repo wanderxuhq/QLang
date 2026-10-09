@@ -755,6 +755,11 @@ let emitIdentifier = (node) -> {
     let off = emitBindingPtr(hit); let value = temp(); line("  " + value + " = load %ql_value, ptr " + off); return value;
   };
   let off = emitResolvedBindingPtr(hit, node.name);
+  // A same-body read of a non-optional binding is guaranteed by the frontend's
+  // definite-assignment check to exist and be initialized, so the null check and
+  // the ql_empty check (with their cold diagnostic paths) are dead code.
+  let sameBody = hit.depth == 0 && (isError(hit.scope.optional) || isError(hit.scope.optional[node.name]));
+  if sameBody { let direct = temp(); line("  " + direct + " = load %ql_value, ptr " + off); return direct; };
   let absent = temp(); let missing = lbl(); let found = lbl(); let done = lbl();
   line("  " + absent + " = icmp eq ptr " + off + ", null");
   line("  br i1 " + absent + ", label %" + missing + ", label %" + found);
@@ -828,7 +833,9 @@ let emitStoreByName = (name, expression, target) -> {
   if hit == null { addCompileError(target, "assignment to undeclared name: " + name); return null; };
   let value = emitExpr(expression);
   let off = emitResolvedBindingPtr(hit, name);
-  if !inRuntime {
+  // A same-body write target is a direct slot pointer: the frontend guarantees
+  // the binding exists, so the absent-pointer check is dead.
+  if !inRuntime && !(hit.depth == 0 && (isError(hit.scope.optional) || isError(hit.scope.optional[name]))) {
     let absent = temp(); let bad = lbl(); let good = lbl();
     line("  " + absent + " = icmp eq ptr " + off + ", null");
     line("  br i1 " + absent + ", label %" + bad + ", label %" + good);

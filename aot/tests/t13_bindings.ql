@@ -1,20 +1,16 @@
-// A declaration establishes a binding, never a null value.
-let pending;
-println(isError(pending));
-println(pending.type);
-println(Null.check(pending));
-pending = null;
+// A declaration establishes a binding, never a null value. Reading it before
+// initialization is now a frontend error (see bootstrapped/tests/diagnostics.ql).
+let pending = null;
 println(Null.check(pending));
 println(std.Type.of(pending) == Null);
 pending = 7;
 println(pending);
-let pending;
-println(pending.type);
-pending = "ready";
-println(pending);
+let pending2 = 0;
+println(pending2);
+pending2 = "ready";
+println(pending2);
 
-let nullable: Null;
-println(nullable.type);
+let nullable: Null = null;
 nullable = null;
 println(Null.check(nullable));
 nullable = 1;
@@ -30,7 +26,6 @@ println(number.message);
 number = 42;
 println(number);
 let invalid: 42;
-println(invalid.type);
 invalid = "no annotation retained";
 println(invalid);
 let invalidNull: null = 2;
@@ -117,8 +112,8 @@ if true {
   println(outer.type);
 };
 println(outer);
-let get;
-let set;
+let get = null;
+let set = null;
 if true {
   let local: Number;
   get = () -> local;
@@ -134,8 +129,8 @@ let odd;
 even = (n: Number) -> { if n == 0 { true; } else { odd(n - 1); }; };
 odd = (n: Number) -> { if n == 0 { false; } else { even(n - 1); }; };
 println(even(8));
-let deferredRead = () -> { let empty; empty?; 99; };
-println(deferredRead().type);
+// An uninitialized local read is now a frontend error, including inside a
+// function body; the frontend diagnostic fixture covers it.
 let slots = [];
 let i = 0;
 while i < 3 { let slot: Number; slot = i; slots[i] = () -> slot; i = i + 1; };
@@ -177,11 +172,11 @@ let arrayMismatch: Number = [];
 println(arrayMismatch.message);
 
 // Executed empty branches clear the previous statement value; a skipped branch keeps it.
-let clearedThen = () -> { let x; x; if true { let y = 2; }; };
-let clearedElse = () -> { let x; x; if false { 1; } else {}; };
-let kept = () -> { let x; x; if false { 1; }; };
+let clearedThen = () -> { let x = 0; x; if true { let y = 2; }; };
+let clearedElse = () -> { let x = 0; x; if false { 1; } else {}; };
+let kept = () -> { let x = 0; x; if false { 1; }; };
 println(isError(clearedThen()));
 println(isError(clearedElse()));
 println(kept().type);
-let keptAcrossStatements = () -> { let x; x; let y; y = 1; while false { 3; }; };
+let keptAcrossStatements = () -> { let x = 0; x; let y = 1; y = 1; while false { 3; }; };
 println(keptAcrossStatements().type);

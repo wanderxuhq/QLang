@@ -1,8 +1,8 @@
 // Inline scalars must survive value slots, heap container growth and calls.
 let id = (x) -> x;
-let uninitialized;
-println(uninitialized.type);
-uninitialized = null;
+// Reading a declared-but-uninitialized binding is now a frontend error, so this
+// fixture starts it initialized.
+let uninitialized = null;
 println(Null.check(uninitialized));
 println(std.Type.of(0) == Number);
 println(std.Type.of(false) == Boolean);

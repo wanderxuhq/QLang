@@ -48,8 +48,6 @@ println(loop(1000));
 // Return and ? leave stack frames safely, with heap results/errors retained.
 let early = (x) -> { if x > 0 { return (x + 1) * 2; }; 0; };
 println(early(4)); println(early(0));
-let fail = () -> { let x; x?; println("UNREACHABLE"); };
-let error = fail(); println(error.type);
 let cause = () -> { let x = Error.raise("kept"); x + (3 + 4); };
 let caught = cause(); println(caught.cause.message);
 // Branch results, short circuit and fallback can themselves escape.

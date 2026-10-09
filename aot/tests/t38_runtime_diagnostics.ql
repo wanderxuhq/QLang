@@ -24,9 +24,9 @@ check(bad.type == "TypeCheck" && bad.line == 22 && bad.col == 1, "declaration an
 let reassigned: Number = 1;
 reassigned = "x";
 check(reassigned.type == "TypeCheck" && reassigned.line == 25 && reassigned.col == 1, "assignment annotation source");
-let uninitialized;
-let read = uninitialized;
-check(read.type == "Uninitialized" && read.line == 28 && read.col == 12, "uninitialized read source");
+// An uninitialized read is now a frontend error, not a runtime value; the
+// frontend diagnostic fixture covers it. Lines kept so later source positions
+// below stay stable.
 let index = [1][3];
 check(index.type == "IndexOutOfBounds" && index.line == 30 && index.col == 13, "index source");
 let field = ({}).missing;

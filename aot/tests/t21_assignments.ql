@@ -1,11 +1,8 @@
 // Fixed contracts for both QLang AST consumers. Failed writes return from the
 // current function without executing subsequent statements or mutating targets.
-// uninitialized-field
-let attempt = () -> { let x; x.field = 1; println("UNREACHABLE"); };
-println(attempt().type);
-// uninitialized-index
-let attempt = () -> { let x; x[0] = 1; println("UNREACHABLE"); };
-println(attempt().type);
+// uninitialized-field / uninitialized-index: reading a member/index write's
+// receiver is now a frontend error, so those two cases are no longer runtime
+// contracts (covered by the frontend diagnostic fixture).
 // null-field
 let attempt = () -> { let x = null; x.field = 1; println("UNREACHABLE"); };
 println(attempt().type);
@@ -45,9 +42,8 @@ println(attempt().type);
 // missing-parent
 let attempt = () -> { let x = {}; x.missing.field = 1; println("UNREACHABLE"); };
 println(attempt().type);
-// failed-index
-let attempt = () -> { let x = []; let index; x[index] = 1; println("UNREACHABLE"); };
-println(attempt().type);
+// failed-index: an uninitialized index is now a frontend error, so this case is
+// covered by the frontend diagnostic fixture instead.
 // protected-field
 let attempt = () -> { Number.check = (v) -> false; println("UNREACHABLE"); };
 println(attempt().type);
@@ -74,7 +70,7 @@ receiver()[index()] = rhs();
 println(order);
 println(target[0]);
 order = "";
-let failedReceiver = () -> { order = order + "O"; let missing; missing; };
+let failedReceiver = () -> { order = order + "O"; let missing = null; missing.field; };
 let attempt = () -> { failedReceiver()[index()] = rhs(); println("UNREACHABLE"); };
 println(attempt().type);
 println(order);
