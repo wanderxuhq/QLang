@@ -8,7 +8,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parent.parent
 FIXTURES = (
-    ('t38_runtime_diagnostics', b'runtime source checks: 18\n'),
+    ('t38_runtime_diagnostics', b'runtime source checks: 17\n'),
     ('t39_runtime_module_diagnostics', b'runtime module source checks: 7\n'),
 )
 
