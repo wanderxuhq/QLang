@@ -166,12 +166,18 @@ let StringLibrary = {
     if !AnyArray.check(a) { return std.Error.raise("TypeMismatch", "String.join expects Array", null); };
     (separator) -> {
       if !String.check(separator) { return ""; };
-      let out = ""; let i = 0;
-      while i < a.length {
-        if i > 0 { out = out + separator; };
-        out = out + `${a[i]}`; i = i + 1;
+      // Pairwise reduction: growing one string with `out = out + …` per element
+      // is O(n²) and dominates callers that join large arrays.
+      let parts = []; let i = 0;
+      while i < a.length { parts[parts.length] = `${a[i]}`; i = i + 1; };
+      while parts.length > 1 {
+        let next = []; let k = 0;
+        while k + 1 < parts.length { next[next.length] = parts[k] + separator + parts[k + 1]; k = k + 2; };
+        if k < parts.length { next[next.length] = parts[k]; };
+        parts = next;
       };
-      out;
+      if parts.length == 0 { return ""; };
+      parts[0];
     };
   },
   at: (s, index) -> {

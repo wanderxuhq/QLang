@@ -453,16 +453,42 @@ tiny — the `+` is inlined as `ql_tag` checks plus `fadd` — so the mass is:
   entry-block stack-slot mechanism, so a 3000-statement module hoists tens of
   thousands of allocas.
 
-Plan (not attempted): share the cold paths — emit one helper per error *shape*
-(kind + message, so one per variable/kind pair) parameterized by the source
-location, and have each site emit a call plus the short propagate sequence. For
-a module whose statements all touch the same binding that collapses thousands of
-identical diagnostic blocks into one. Expected effect: `x = x + 1` from ~311 to
-roughly 40 lines, i.e. roughly a 4–8× emission speedup and a several-fold smaller
-artifact. Risk: it is a codegen refactor — the exact error kind/message/location
-must be preserved and the stage2/stage3 fixed point plus the error/diagnostic
-suites must stay green. The per-call-site `alloca` could be pooled separately if
-liveness permits. This is the change that warrants the branch the user offered.
+Root cause found and fixed (branch `emission-scaling`): `String.join` built its
+result with `out = out + …` per element — O(n²) — and `stackEntry()` joins the
+per-call-site stack-slot list, which grows with every statement. Two fixes:
+
+- `String.join` in `stdlib/string.ql` now uses a pairwise reduction (O(n log n));
+  this is the root-cause fix and protects every join caller.
+- Call-argument buffers are pooled per size (`argSlot` in `aot/qlangc.ql`) instead
+  of one `alloca` per call site, so main's entry block holds a handful of allocas
+  rather than tens of thousands. This is safe because the invocation ABI only
+  borrows the buffer (partial application copies), every argument is evaluated
+  before the stores, and each use is bracketed by `lifetime.start/end`.
+
+Emission times (native `stage1`, nothing else running):
+
+| case | before | after |
+| --- | --- | --- |
+| trivial `println(1)` | 14.4 s | **10.1 s** |
+| +1000 `x = x + 1` | 43.5 s | **13.6 s** (3.2×) |
+| +2000 | 127.7 s | **17.2 s** (7.4×) |
+| +3000 | 252.1 s | **34.8 s** (7.2×) |
+| interpreter `run_file.ql` | 35.9 s | **30.0 s** |
+| t16 fixture | 12.1 s | **9.5 s** |
+
+Pooling alone accounted for ~2.4× (it shrank the list being joined). Validated:
+selfhost gate 47/47 including the stage2/stage3 IR fixed point, interpreter 52/52,
+numeric suite, call-buffer allocations still flat `[633, 633]`, lifetime suite,
+extension and extension-bridge suites, portable String suite, `cargo test`.
+
+Remaining: the per-statement IR mass is still the cold error/diagnostic paths
+emitted inline at every read, write and call (~40–80 lines each, never executed on
+the normal path). Sharing them — one helper per error *shape* (kind + message)
+parameterized by the source location — should take `x = x + 1` from ~311 lines to
+roughly 40 and cut both emission time and artifact size further; it needs the
+exact error kind/message/location preserved plus the full gates. Also known
+quadratic: `JSON.stringify` in `stdlib/json.ql` builds its output with `output =
+output + …` per token, so large values pay O(output²). Neither is attempted yet.
 
 ## Extension suites need a dlopen-permitted TMPDIR (2026-10-08)
 

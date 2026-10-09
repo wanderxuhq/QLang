@@ -228,6 +228,22 @@ let stackSlot = (bytes) -> {
   reg;
 };
 let stackEntry = () -> std.Array.join(stackSlots)("\n");
+// Call-argument buffers are provably short-lived: the invocation ABI only
+// borrows them (partial application copies), every argument is evaluated before
+// the stores, and a lifetime.start/end pair brackets each use. Reuse one slot per
+// size instead of one per call site, or a 3000-statement module hoists tens of
+// thousands of allocas into the entry block.
+let argSlotPool = {};
+let argSlot = (bytes) -> {
+  let size = if bytes < 1 { 1 } else { bytes };
+  let key = std.String.toString(size);
+  let hit = argSlotPool[key];
+  if !isError(hit) { return hit; };
+  let reg = temp();
+  stackSlots[stackSlots.length] = "  " + reg + " = alloca i8, i64 " + key + ", align 8";
+  argSlotPool[key] = reg;
+  reg;
+};
 let line = (s) -> { curSink[curSink.length] = s; };
 let temp = () -> { tmpN = tmpN + 1; "%t" + std.String.toString(tmpN); };
 let lbl = () -> { lblN = lblN + 1; "bb" + std.String.toString(lblN); };
@@ -898,6 +914,7 @@ let emitFunction = (node, name) -> {
   let savedSink = curSink;
   let savedExports = moduleExportsReg;
   let savedStackSlots = stackSlots; stackSlots = [];
+  let savedArgSlots = argSlotPool; argSlotPool = {};
   // 函数体作用域 = 新空作用域,parent = 定义处作用域(闭包环境链的编译期镜像)。
   curScope = { slots: {}, active: {}, parent: savedScope, isFunction: false };
   curScope.isFunction = true;
@@ -978,6 +995,7 @@ let emitFunction = (node, name) -> {
   curRetv = savedRetv; curEpiLbl = savedEpi; isTopLevel = savedTop;
   blk[2] = stackEntry();
   stackSlots = savedStackSlots;
+  argSlotPool = savedArgSlots;
   fnBlocks[fnBlocks.length] = blk;
   // 恢复调用方上下文;闭包盒指令写回调用方当前块/当前 sink。
   moduleExportsReg = savedExports;
@@ -1190,7 +1208,7 @@ let emitInvokeRegs = (FN, argRegs) -> {
   let narg = argRegs.length;
   // The invocation ABI copies argument values, never retains this raw buffer.
   let bytes = if narg == 0 { 1 } else { 16 * narg };
-  let arr = stackSlot(bytes);
+  let arr = argSlot(bytes);
   line("  call void @llvm.lifetime.start.p0(i64 " + std.String.toString(bytes) + ", ptr " + arr + ")");
   let i = 0;
   while i < narg {
