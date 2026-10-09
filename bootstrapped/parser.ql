@@ -124,6 +124,165 @@ let Parser = (tokens) -> {
     }
   };
 
+  // ---- Definite assignment (frontend, shared by both engines) ----------------
+  // QLang requires a binding to be initialized before it is read. A read of a
+  // binding that is not definitely initialized at that point is a compile error
+  // rather than a runtime Uninitialized value. Names that appear inside a nested
+  // function are exempt (an over-approximation of captured names): such a read is
+  // deferred and may legitimately happen after the outer binding is assigned, so
+  // the emitter keeps its runtime check for those.
+  let daError = (node, message) -> {
+    let point = null;
+    if !isError(node.location) { point = node.location; };
+    let line = 0; let col = 0;
+    if point != null { line = point.line; col = point.col; };
+    let text = sourcePath + ":" + std.String.toString(line) + ":" + std.String.toString(col) + ": " + message;
+    errors[errors.length] = text;
+    diagnostics[diagnostics.length] = {message: message, file: sourcePath, line: line, col: col, endLine: line, endCol: col, span: {start: 0, end: 0}};
+  };
+  let isNode = (v) -> !isError(v.type);
+  // Generic walk over AST nodes; the callback may stop descent by returning false.
+  let daWalk = (node, fn) -> {
+    if node == null || !isNode(node) { return null; };
+    if fn(node) == false { return null; };
+    let keys = std.Object.keys(node);
+    let i = 0;
+    while i < keys.length {
+      let v = node[keys[i]];
+      if isNode(v) { daWalk(v, fn); }
+      else if AnyArray.check(v) { let j = 0; while j < v.length { if isNode(v[j]) { daWalk(v[j], fn); }; j = j + 1; }; };
+      i = i + 1;
+    };
+  };
+  let daCopyMap = (m) -> {
+    let out = {}; let keys = std.Object.keys(m); let i = 0;
+    while i < keys.length { out[keys[i]] = m[keys[i]]; i = i + 1; };
+    out;
+  };
+  let daState = (declared, initialized) -> { { declared: declared, initialized: initialized, terminated: false }; };
+  let daCopyState = (st) -> { { declared: st.declared, initialized: daCopyMap(st.initialized), terminated: st.terminated }; };
+  let daEscaped = (range) -> {
+    let escaped = {};
+    let i = 0;
+    while i < range.length {
+      daWalk(range[i], (node) -> {
+        if node.type == "Function" {
+          daWalk(node.body, (inner) -> { if inner.type == "Identifier" { escaped[inner.name] = true; }; true; });
+        };
+        true;
+      });
+      i = i + 1;
+    };
+    escaped;
+  };
+  let daCheckExpr = (node, st, escaped) -> {
+    if node == null || !isNode(node) { return null; };
+    if node.type == "Function" {
+      // Nested function: check its own locals; outer reads are deferred.
+      checkFunctionBody(node);
+      return null;
+    };
+    if node.type == "Identifier" {
+      let name = node.name;
+      if !isError(st.declared[name]) && st.initialized[name] != true && escaped[name] != true {
+        daError(node, "reading uninitialized variable: " + name);
+      };
+      return null;
+    };
+    // Recurse into every child node (expressions, containers, blocks embedded in
+    // expressions) so reads anywhere in an expression are checked.
+    let keys = std.Object.keys(node);
+    let i = 0;
+    while i < keys.length {
+      let v = node[keys[i]];
+      if isNode(v) { daCheckExpr(v, st, escaped); }
+      else if AnyArray.check(v) { let j = 0; while j < v.length { if isNode(v[j]) { daCheckExpr(v[j], st, escaped); }; j = j + 1; }; };
+      i = i + 1;
+    };
+    null;
+  };
+  let checkStatements = (statements, st, escaped) -> {
+    let i = 0;
+    while i < statements.length {
+      if !st.terminated { checkStatement(statements[i], st, escaped); };
+      i = i + 1;
+    };
+  };
+  let checkStatement = (node, st, escaped) -> {
+    if node.type == "Let" {
+      if node.value != null { daCheckExpr(node.value, st, escaped); st.declared[node.name] = true; st.initialized[node.name] = true; }
+      else { st.declared[node.name] = true; st.initialized[node.name] = false; };
+      null;
+    } else if node.type == "Assign" {
+      daCheckExpr(node.value, st, escaped);
+      if node.target.type == "Identifier" {
+        // Assigning only initializes a binding that this body declared with let.
+        // An outer/module binding stays outside this body's analysis (its reads
+        // are deferred, and an assignment to an undeclared name is a separate
+        // frontend error).
+        if !isError(st.declared[node.target.name]) { st.initialized[node.target.name] = true; };
+      } else { daCheckExpr(node.target, st, escaped); };
+      null;
+    } else if node.type == "If" {
+      let i = 0; let alive = []; let any = false;
+      while i < node.branches.length {
+        let branch = node.branches[i];
+        daCheckExpr(branch.condition, st, escaped);
+        let b = daCopyState(st);
+        if branch.body.type == "Block" { checkStatements(branch.body.statements, b, escaped); } else { checkStatement(branch.body, b, escaped); };
+        if !b.terminated { alive[alive.length] = b.initialized; any = true; };
+        i = i + 1;
+      };
+      if node.elseBody != null {
+        let e = daCopyState(st);
+        if node.elseBody.type == "Block" { checkStatements(node.elseBody.statements, e, escaped); } else { checkStatement(node.elseBody, e, escaped); };
+        if !e.terminated { alive[alive.length] = e.initialized; any = true; };
+      } else { alive[alive.length] = st.initialized; any = true; };
+      // Merge: initialized after the join only if initialized on every live path.
+      // Each live branch state already reflects the incoming state, so the join
+      // is the conjunction over the live paths.
+      let merged = {};
+      let names = std.Object.keys(st.declared); let n = 0;
+      while n < names.length {
+        let name = names[n]; let value = true;
+        let k = 0;
+        while k < alive.length { if alive[k][name] != true { value = false; }; k = k + 1; };
+        merged[name] = value;
+        n = n + 1;
+      };
+      st.initialized = merged;
+      if !any { st.terminated = true; };
+      null;
+    } else if node.type == "While" {
+      daCheckExpr(node.condition, st, escaped);
+      // Analyze the body once (reporting errors inside it) but never propagate
+      // its assignments: a body assignment is not definite after the loop.
+      let b = daCopyState(st);
+      if node.body.type == "Block" { checkStatements(node.body.statements, b, escaped); } else { checkStatement(node.body, b, escaped); };
+      null;
+    } else if node.type == "Return" {
+      if node.value != null { daCheckExpr(node.value, st, escaped); };
+      st.terminated = true;
+      null;
+    } else if node.type == "Export" {
+      if node.value != null { daCheckExpr(node.value, st, escaped); };
+      null;
+    } else { daCheckExpr(node, st, escaped); null; };
+  };
+  let checkFunctionBody = (fn) -> {
+    let declared = {}; let initialized = {};
+    let i = 0;
+    while i < fn.parameters.length { declared[fn.parameters[i].name] = true; initialized[fn.parameters[i].name] = true; i = i + 1; };
+    let st = daState(declared, initialized);
+    let escaped = daEscaped([fn.body, fn.parameters]);
+    if fn.body.type == "Block" { checkStatements(fn.body.statements, st, escaped); } else { checkStatement(fn.body, st, escaped); };
+  };
+  let checkDefiniteAssignment = (statements) -> {
+    let st = daState({}, {});
+    let escaped = daEscaped(statements);
+    checkStatements(statements, st, escaped);
+  };
+
   let parse = () -> {
     let statements = [];
     while !check(TokenKind.Eof) {
@@ -138,6 +297,7 @@ let Parser = (tokens) -> {
     }
     let program = Program(statements);
     if tokens.length > 0 { locateBetween(program, tokens[0], tokens[tokens.length - 1]); };
+    checkDefiniteAssignment(statements);
     program.errors = errors; program.diagnostics = diagnostics;
     return program;
   };
