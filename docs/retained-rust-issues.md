@@ -82,6 +82,16 @@ context (`src/parser.rs`, `parse_return_statement`); this is a deferred parser
 discrepancy, identified by source inspection. It does not block the shared
 QLang parser or the native self-hosted build. No Rust change is included.
 
+## Reading an uninitialized binding (2026-10-09)
+
+The QLang frontend now rejects a read of a not-definitely-initialized binding at
+compile time ("reading uninitialized variable: NAME", definite-assignment rule in
+`bootstrapped/parser.ql`). The retained Rust parser/evaluator still reports it as a
+runtime `Uninitialized` error value; `tests/uninitialized.rs` pins that host
+behaviour and stays valid for the host. Rust is not changed, so the two frontends
+differ here; the QLang frontend is authoritative for compiled and interpreted
+QLang programs.
+
 ## Approved mechanism parity added to the host (2026-10-07)
 
 Two new language mechanisms were approved by the user, and the portable QLang

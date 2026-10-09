@@ -117,7 +117,7 @@ def main():
         check_program(stage1, ROOT / 'bootstrapped/tests/function_ast.ql',
                       b'PASS function AST contracts (11 valid, 7 invalid)\n', work, 'frontend')
         check_program(stage1, ROOT / 'bootstrapped/tests/diagnostics.ql',
-                      b'PASS source diagnostics (30 invalid, 14 valid)\n', work, 'source-diagnostics')
+                      b'PASS source diagnostics (34 invalid, 14 valid)\n', work, 'source-diagnostics')
         return_scope = ROOT / 'bootstrapped/tests/return_scope.ql'
         check_program(stage1, return_scope,
                       return_scope.with_suffix('.expected').read_bytes(), work, 'return-scope-frontend')

@@ -134,11 +134,14 @@ let Parser = (tokens) -> {
   let daError = (node, message) -> {
     let point = null;
     if !isError(node.location) { point = node.location; };
-    let line = 0; let col = 0;
-    if point != null { line = point.line; col = point.col; };
+    let line = 0; let col = 0; let span = {start: 0, end: 0};
+    if point != null {
+      line = point.line; col = point.col;
+      if !isError(point.span) { span = point.span; };
+    };
     let text = sourcePath + ":" + std.String.toString(line) + ":" + std.String.toString(col) + ": " + message;
     errors[errors.length] = text;
-    diagnostics[diagnostics.length] = {message: message, file: sourcePath, line: line, col: col, endLine: line, endCol: col, span: {start: 0, end: 0}};
+    diagnostics[diagnostics.length] = {message: message, file: sourcePath, line: line, col: col, endLine: line, endCol: col, span: span};
   };
   let isNode = (v) -> !isError(v.type);
   // Generic walk over AST nodes; the callback may stop descent by returning false.
@@ -187,6 +190,15 @@ let Parser = (tokens) -> {
       if !isError(st.declared[name]) && st.initialized[name] != true && escaped[name] != true {
         daError(node, "reading uninitialized variable: " + name);
       };
+      return null;
+    };
+    if node.type == "Assign" {
+      // Assignment used as an expression: the value is read, a plain name target
+      // is written (not read), and a member/index target reads its receivers.
+      daCheckExpr(node.value, st, escaped);
+      if node.target.type == "Identifier" {
+        if !isError(st.declared[node.target.name]) { st.initialized[node.target.name] = true; };
+      } else { daCheckExpr(node.target, st, escaped); };
       return null;
     };
     // Recurse into every child node (expressions, containers, blocks embedded in

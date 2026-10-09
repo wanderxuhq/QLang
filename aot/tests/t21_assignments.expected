@@ -1,5 +1,3 @@
-Uninitialized
-Uninitialized
 NotAnObject
 NotAnObject
 CannotIndex
@@ -13,7 +11,6 @@ CannotIndex
 CannotIndex
 CannotIndex
 UndefinedField
-Uninitialized
 Custom
 Custom
 Custom
@@ -23,7 +20,7 @@ true
 true
 VOI
 7
-Uninitialized
+NotAnObject
 VO
 Error
 V

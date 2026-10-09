@@ -66,8 +66,10 @@ the bridge results establish the preceding integration.
 ## Language behavior to preserve
 
 - A declared but uninitialized binding establishes lexical scope and shadows
-  outer bindings; reading it reports Uninitialized. Undeclared/private names
-  cannot be used. Do not introduce an undefined value. Keep null and Null distinct.
+  outer bindings. **Reading it is a frontend (compile) error** — not a runtime
+  Uninitialized value: the shared parser runs a definite-assignment check (see
+  below). Undeclared/private names cannot be used. Do not introduce an undefined
+  value. Keep null and Null distinct.
 - Builtin names obey ordinary lexical lookup, shadowing and captured assignment.
   Public rebinding must not overwrite private runtime/library bindings.
 - Function arity, partial application, annotations and Error-argument policy
@@ -381,6 +383,44 @@ The output-only implementation is applied. The bridge revision has passed
 semantic, parse and runtime diagnostics plus complete core/selfhost gates.
 The later numeric-key repair also passed all six final integration gates. Earlier public-field experiments must not be
 published unchanged. See [source-diagnostics.md](source-diagnostics.md).
+
+## Definite assignment: uninitialized reads are a compile error (2026-10-09)
+
+The user chose to change the semantics: a binding must be initialized before it
+is read, and violating that is a frontend error rather than a runtime Uninitialized
+value. Implemented in the shared parser (`bootstrapped/parser.ql`), so the
+self-hosted compiler, the boot interpreter and the native interpreter all get it.
+
+Rules: `let x;` declares an uninitialized binding; assignment initializes it;
+`if`/`else` joins are conjunctive over the live paths (a one-sided branch does not
+initialize); a loop body's assignments never become definite; `return` ends
+reachability. Reads of a not-definitely-initialized binding produce
+`reading uninitialized variable: NAME` with the original source coordinate.
+
+Sound escape hatch: names that appear anywhere inside a nested function are exempt
+(an over-approximation of captures). Those reads are deferred — a closure may read
+an outer binding after the assignment — so the emitter keeps its runtime check for
+them. The corpus relies on this: runtime.ql and qlangc.ql have forward references
+inside function bodies.
+
+Effect: with same-body reads guaranteed, the emitter no longer emits the null
+check, the `ql_empty` check or their cold diagnostic paths for them
+(`aot/qlangc.ql`, depth 0 and non-optional scope). One `x = x + 1` dropped from 301
+to 174 IR lines, emitted IR shrank ~34 % (1000 statements 33.9 → 24.5 MB, 3000
+statements 62.2 → 40.9 MB), and the compiler's static string declarations went
+2699 → 2086. Verified by self-hosting with the native compiler only
+(`stage1 --emit-llvm aot/qlangc.ql aot/runtime.ql`, 41 s) with byte-identical
+stage2/stage3 IR, and the native compiler rejects `let x; x;`.
+
+Workflow note (user direction): build and test with the QLang-compiled native
+compiler, not the Rust host. `stage1 --emit-llvm aot/qlangc.ql aot/runtime.ql` is
+~41 s, where the Rust boot path took ~13 min, and it exercises the shipping path.
+
+Fixtures that deliberately exercised the old runtime semantics were reworked
+(t13/t15/t20/t21/t22/t23/t33/t34/t38); their coverage moves to the frontend
+diagnostic fixture. `tests/uninitialized.rs` runs the retained Rust host, which
+still reports the runtime value — a recorded discrepancy in
+[retained-rust-issues.md](retained-rust-issues.md).
 
 ## Line endings: keep core.autocrlf off (2026-10-09)
 
