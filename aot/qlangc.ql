@@ -692,6 +692,11 @@ let curLbl = "";
 let curRetv = "";       // 当前函数 %retv 寄存器名
 let curEpiLbl = "";     // 当前函数 epilogue label 名
 let isTopLevel = true;  // main 顶层 ? → __exit_error
+// Set the first time a reader needs the located-error helper, and the position in
+// `out` where its definition is spliced (just after the prelude, so it precedes
+// every call site: this toolchain rejects a forward `declare`).
+let needColdLocated = false;
+let coldHelperAt = 0;
 
 // Frames reserve slots ahead of time, but declarations become visible in
 // source order. An all-zero internal value is binding state, never QLang null.
@@ -1480,17 +1485,46 @@ let emitMemberAccess = (node) -> {
   };
 };
 
+// The cold half of emitLocatedError, as a private function with an ordinary ABI
+// (values in registers, no frame buffer). Returns its lines; the caller splices
+// them in ahead of every use site. Callers pass their environment so the runtime
+// lookup inside resolves against the same module frame.
+let emitColdLocatedHelper = () -> {
+  let savedStackSlots = stackSlots; stackSlots = [];
+  let savedArgSlots = argSlotPool; argSlotPool = {};
+  let savedScope = curScope; let savedEnv = curEnv; let savedLbl = curLbl;
+  let savedTop = isTopLevel; let savedRetv = curRetv; let savedEpi = curEpiLbl;
+  let blk = [];
+  curSink = blk;
+  line("define %ql_value @__cold_located_error(ptr %env, %ql_value %v, %ql_value %file, %ql_value %line, %ql_value %col, %ql_value %cf) {");
+  line("entry:");
+  let slotAt = blk.length; line("");
+  curLbl = "entry";
+  curEnv = "%env";
+  isTopLevel = false; curRetv = "%retv"; curEpiLbl = "epilogue";
+  let located = emitCallRegs("__err_at", ["%v", "%file", "%line", "%col", "%cf"]);
+  line("  ret %ql_value " + located);
+  line("}");
+  blk[slotAt] = stackEntry();
+  stackSlots = savedStackSlots; argSlotPool = savedArgSlots;
+  curScope = savedScope; curEnv = savedEnv; curLbl = savedLbl;
+  isTopLevel = savedTop; curRetv = savedRetv; curEpiLbl = savedEpi;
+  blk;
+};
 // Attach provenance only on an Error edge. Synthetic/runtime nodes have no
 // user position. Calls/imports extend a persistent trace; ordinary reads do not.
 let emitLocatedError = (value, node, callFrame) -> {
   if inRuntime || isError(node.location) { return value; };
   let point = node.location;
+  needColdLocated = true;
+  let siteEnv = curEnv;
   let tag = temp(); let error = temp(); let bad = lbl(); let good = lbl(); let done = lbl();
   line("  " + tag + " = call i64 @ql_tag(%ql_value " + value + ")");
   line("  " + error + " = icmp eq i64 " + tag + ", 8");
   line("  br i1 " + error + ", label %" + bad + ", label %" + good);
   line(bad + ":"); curLbl = bad;
-  let located = emitCallRegs("__err_at", [value, internString(point.file), emitNumber({value: point.line}), emitNumber({value: point.col}), emitBoolean({value: callFrame})]);
+  let located = temp();
+  line("  " + located + " = call %ql_value @__cold_located_error(ptr " + siteEnv + ", %ql_value " + value + ", %ql_value " + internString(point.file) + ", %ql_value " + emitNumber({value: point.line}) + ", %ql_value " + emitNumber({value: point.col}) + ", %ql_value " + emitBoolean({value: callFrame}) + ")");
   let failedEnd = curLbl; line("  br label %" + done);
   line(good + ":"); curLbl = good; line("  br label %" + done);
   line(done + ":"); curLbl = done; let result = temp();
@@ -1629,6 +1663,7 @@ let main = (args) -> {
     r = r + 1;
   };
   emitPrelude();
+  coldHelperAt = out.length;
   if extensionMode { line("define %ql_value @qlang_extension_init_v1(ptr %host_env) {"); }
   else { line("define i32 @main(i32 %argc, ptr %argv) {"); };
   line("entry:");
@@ -1708,6 +1743,18 @@ let main = (args) -> {
   };
   line("}");
   out[mainStackAt] = stackEntry();
+  // Splice the located-error helper in right after the prelude: the scope is fully
+  // populated here, and the definition must precede every call site.
+  if needColdLocated {
+    let helper = emitColdLocatedHelper();
+    let merged = [];
+    let m = 0;
+    while m < coldHelperAt { merged[merged.length] = out[m]; m = m + 1; };
+    let hh = 0;
+    while hh < helper.length { merged[merged.length] = helper[hh]; hh = hh + 1; };
+    while m < out.length { merged[merged.length] = out[m]; m = m + 1; };
+    out = merged;
+  };
   // Never turn unsupported syntax into a successful, silently incorrect binary.
   if compileErrors.length > 0 {
     std.Error.raise("CompileError", compileErrors[0], null)?;

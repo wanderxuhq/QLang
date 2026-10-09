@@ -644,3 +644,33 @@ diagnostic as the native path. The whole suite passes ("Module suite: ALL PASS",
 11 checks) against the current compiler and release host; the earlier failure
 was a stale test expectation, not a runtime defect. No runtime or compiler source
 changed for this.
+
+## Cold-path outlining (WIP on branch `cold-paths-and-lazy-std`, 2026-10-09)
+
+Goal: emit the per-reader located-error path (`__err_at` with the source
+coordinates) once per module instead of inline at every read. Measured with a
+working IR-level version of the change:
+
+- one read: 60 -> 36 IR lines; `x = x + 1`: 111 -> 64
+- a whole module (empty program, i.e. the runtime and standard library):
+  339,948 -> 246,422 lines, 15.8 MB -> 11.7 MB (-26 %)
+
+Blocker found: this clang rejects a forward `declare` for a function that is also
+defined in the same module ("invalid redefinition", reproduced with plain `i32`
+too), so the helper cannot be declared up front. It must instead be *spliced into
+the output stream immediately after the prelude*, ahead of every call site — and
+because the runtime/library bindings only exist once `main` is being emitted, its
+body can only be generated at the end of compilation and then inserted by index.
+
+That splice is implemented and the module links, but the emitted program
+segfaults: the plain-ABI helper passes the caller's environment pointer, and the
+runtime lookup inside it does not yet match what the inline version did. Next step
+is to diff the helper's body against the old inline block and reconcile the
+environment argument, then re-validate with the runtime-diagnostic and
+source-context suites (they pin error coordinates and traces).
+
+Note: 277 of the 278 emitted functions are already `internal`, but link-time
+garbage collection cannot help with the standard library: the std namespace object
+built at startup references every member, so `opt -passes=globaldce` removes 0 of
+278 functions. On-demand std has to be a *compiler* decision (emit only referenced
+members, transitively closed, falling back to everything for dynamic access).
