@@ -1,2 +1,3 @@
 export let notMerged = 1;
-1 / 0;
+let zero = 0;
+1 / zero;

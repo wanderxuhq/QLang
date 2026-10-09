@@ -44,7 +44,7 @@ def main():
         print('PASS modules: BOOT/NATIVE, inputs deleted before native execution', flush=True)
 
         source.mkdir()
-        (source / 'bad.ql').write_text('export let hidden = 1; 1 / 0;')
+        (source / 'bad.ql').write_text('let zero = 0; export let hidden = 1; 1 / zero;')
         entry.write_text('import "./bad.ql";')
         p = compile_source(entry, binary)
         assert p.returncode == 0, p.stderr.decode()

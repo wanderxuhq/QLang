@@ -1,6 +1,6 @@
 let module = import (args[0]);
-let mode = args[1];
-let fail = () -> 1 / 0;
+let mode = args[1]; let zero = 0;
+let fail = () -> 1 / zero;
 if mode == "native" {
   module.fail();
 } else if mode == "callback" {
@@ -8,5 +8,5 @@ if mode == "native" {
 } else if mode == "reused" {
   module.reuse();
 } else if mode == "after" {
-  module.apply(() -> 1); 1 / 0;
+  module.apply(() -> 1); 1 / zero;
 };

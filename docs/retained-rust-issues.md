@@ -39,6 +39,19 @@ metadata rules. No library-name exception is added to the LLVM dispatcher.
 The retained direct Rust namespace is not automatically replaced by the QLang
 bundle; the Rust-hosted QLang core loads the shared library itself.
 
+## The Rust host hangs running the boot interpreter (2026-10-09)
+
+`./target/{debug,release}/qlang bootstrapped/run_file.ql <any file>` parses the
+program and prints `Interpreting...`, then never finishes — even for a file as small
+as `println(1);`. A/B against the previous commit's parser reproduces it exactly, so
+it is not a frontend regression; both a debug and a release host reproduce it, and a
+program with a *parse* error still reports in about a second, so the hang is in the
+host's evaluation of the interpreted interpreter, not in lexing or parsing. Under
+this sandbox the `aot/run_module_tests.py` boot leg therefore times out. The QLang
+parser itself is unaffected: the native compiler (`stage1 --emit-llvm`) and the
+built native interpreter both handle the same sources, and the selfhost and
+interpreter suites pass.
+
 ## A newline before `-`, `+`, `(` or `[`
 
 The two parsers disagree on a newline that *precedes* an operator which also has a

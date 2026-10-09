@@ -126,10 +126,10 @@ def main():
         def point(path, lines, line, token):
             return f'{path}:{line}:{lines[line-1].index(token)+1}'
         origins = {
-            'native': point(plugin, plugin_lines, 1, '1 / 0'),
-            'callback': point(host, host_lines, 3, '1 / 0'),
+            'native': point(plugin, plugin_lines, 1, '1 / zero'),
+            'callback': point(host, host_lines, 3, '1 / zero'),
             'reused': point(plugin, plugin_lines, 3, 'Error.raise'),
-            'after': point(host, host_lines, 11, '1 / 0'),
+            'after': point(host, host_lines, 11, '1 / zero'),
         }
         frames = {
             'native': [point(host, host_lines, 5, 'module.fail')],
