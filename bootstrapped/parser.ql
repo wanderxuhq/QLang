@@ -163,7 +163,7 @@ let Parser = (tokens) -> {
     out;
   };
   let daState = (declared, initialized) -> { { declared: declared, initialized: initialized, terminated: false }; };
-  let daCopyState = (st) -> { { declared: st.declared, initialized: daCopyMap(st.initialized), terminated: st.terminated }; };
+  let daCopyState = (st) -> { { declared: daCopyMap(st.declared), initialized: daCopyMap(st.initialized), terminated: st.terminated }; };
   let daEscaped = (range) -> {
     let escaped = {};
     let i = 0;
