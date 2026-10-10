@@ -1047,3 +1047,19 @@ Also learned the hard way while doing step 1:
 - Removing the `__err_at` wrapper from the annotation check also removed the source
   position from the error; keeping it and propagating afterwards is the correct shape.
 - The reported column for such an error is 1-based at the declaration's `let` keyword.
+
+## Design item to revisit: passing an Error as a call argument (2026-10-10)
+
+`__call_borrowed` (aot/runtime.ql, the ordinary-call path) explicitly rejects an Error
+argument for modes other than 1/3/5 (and unless the caller is internal and exempt):
+
+```qlang
+if __isError(v) { return __err_new("TypeMismatch", "attempt to pass error value as argument", v); }
+```
+
+So `let f = (v) -> 42; f(e)` where `e` is an Error yields a *new* TypeMismatch error,
+not `e` itself. This is a deliberate rule, not a leftover of contagion — but under the
+"errors are values, `?` is the only propagation" model it is worth revisiting: passing
+an Error as a value might simply be allowed, leaving the decision to the callee (which
+can inspect it with `isError`/`.type` or propagate it with `?`). Recorded here for the
+user to decide; the internal `exempt` path already shows the machinery can bypass it.
