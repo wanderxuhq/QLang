@@ -884,3 +884,34 @@ Fixes for the second layer, all unlocked by the same kind analysis as the first:
 - dropping the statement-value bookkeeping when the value is not observable.
 
 Fully done, one `x = x + 1` should be 3-5 lines rather than 62.
+
+### The type system is the channel the compiler should use
+
+QLang's type information (`let x: Number = …`, `(n: Number) -> …`) is enforced at run
+time, so the compiler may *trust* it — no inference pass needed for annotated code.
+Precisely what it buys:
+
+- `x: Number` means x is **a Number or the TypeCheck Error stored when the check
+  failed**. That is enough to **drop the general dispatch path** for every use of x:
+  the single largest saving in the operator family (about 16 lines per operator), and
+  the type test collapses to the Error test alone.
+- It does **not** by itself allow unboxing, because the Error state must stay
+  representable. Unboxing needs the check to be *provably* unable to fail — a literal
+  right-hand side, or a binding of the same type. Then a typed binding can be kept as
+  a plain `double`, and box/unbox plus the Error test disappear: the whole second
+  layer.
+- Structural annotations (`Array(Number)`, `Object({a: Number})`) can specialise
+  indexed and member access further.
+- Recognising the annotation is a scope-aware match: the annotation expression is an
+  identifier that resolves to the builtin `Number` binding (not a shadowed one).
+
+The gap: annotations only help code that has them, and `aot/runtime.ql` plus the
+standard library — 68 % of the emitted module — are essentially unannotated. That
+bulk needs either inference or annotations added to the library sources, which is a
+language-level decision rather than a compiler one.
+
+Staged plan: (1) constant folding (no analysis at all); (2) annotation-driven
+specialisation, including eliding the runtime check and unboxing where the check
+provably cannot fail; (3) inference for the unannotated bulk, or annotations in the
+library. Expected per the measurements: a `Number`-typed `x + 1` about 60 -> 14 lines,
+and about 2 once unboxed.
