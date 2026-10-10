@@ -1485,10 +1485,21 @@ let emitMemberAccess = (node) -> {
   };
 };
 
+// The frame that holds the runtime bindings, as seen from the current position:
+// walk the environment's parent chain once per compile-time scope level between
+// curScope and runtimeScope. This is the base the private helper indexes into.
+let emitRuntimeBase = () -> {
+  let scope = curScope; let depth = 0;
+  while scope != runtimeScope { scope = scope.parent; depth = depth + 1; };
+  let base = curEnv;
+  let i = 0;
+  while i < depth { let p = temp(); line("  " + p + " = load ptr, ptr " + base); base = p; i = i + 1; };
+  base;
+};
 // The cold half of emitLocatedError, as a private function with an ordinary ABI
 // (values in registers, no frame buffer). Returns its lines; the caller splices
-// them in ahead of every use site. Callers pass their environment so the runtime
-// lookup inside resolves against the same module frame.
+// them in ahead of every use site. Its environment argument is the runtime frame,
+// so the lookup inside is depth 0 against runtimeScope.
 let emitColdLocatedHelper = () -> {
   let savedStackSlots = stackSlots; stackSlots = [];
   let savedArgSlots = argSlotPool; argSlotPool = {};
@@ -1501,6 +1512,7 @@ let emitColdLocatedHelper = () -> {
   let slotAt = blk.length; line("");
   curLbl = "entry";
   curEnv = "%env";
+  curScope = runtimeScope;
   isTopLevel = false; curRetv = "%retv"; curEpiLbl = "epilogue";
   let located = emitCallRegs("__err_at", ["%v", "%file", "%line", "%col", "%cf"]);
   line("  ret %ql_value " + located);
@@ -1517,7 +1529,7 @@ let emitLocatedError = (value, node, callFrame) -> {
   if inRuntime || isError(node.location) { return value; };
   let point = node.location;
   needColdLocated = true;
-  let siteEnv = curEnv;
+  let siteEnv = emitRuntimeBase();
   let tag = temp(); let error = temp(); let bad = lbl(); let good = lbl(); let done = lbl();
   line("  " + tag + " = call i64 @ql_tag(%ql_value " + value + ")");
   line("  " + error + " = icmp eq i64 " + tag + ", 8");
