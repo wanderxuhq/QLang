@@ -822,10 +822,14 @@ let emitLetStmt = (node) -> {
   let annotated = !isError(node.annotation) && node.annotation != null;
   // 没被编译期分析标注过的节点(例如受信任的运行时源码)不做任何猜测。
   if isError(node.annotationType) { node.annotationType = ""; };
-  // 编译期已算出右值类型:与注解所指的内建类型一致时,这次检查不可能失败。
-  // 但类型/文本槽必须照写 —— 闭包等非同体写入会读取它来决定要不要检查。
-  let deadCheck = !inRuntime && checkIsDead(node.value, node.annotationType);
-  if annotated { ty = emitExpr(node.annotation); text = internString(annotationText(node.annotation)); };
+  // 编译期类型信息:
+  //  · runtimeTypeFree —— 该绑定的每一次写入右值类型都已知,所以运行期检查永不失败;
+  //    类型/文本槽与检查都可以不生成(闭包读取该槽的路径也不再需要它)。
+  //  · 否则类型/文本槽必须照写(非同体写入会读它决定要不要检查),只是本次写入若右值
+  //    类型已等于注解,这一次检查是死代码。
+  let typeFree = annotated && !inRuntime && !isError(node.runtimeTypeFree) && node.runtimeTypeFree == true;
+  let deadCheck = !inRuntime && (typeFree || checkIsDead(node.value, node.annotationType));
+  if annotated && !typeFree { ty = emitExpr(node.annotation); text = internString(annotationText(node.annotation)); };
   let value = "null";
   if node.value != null {
     if node.value.type == "Function" { value = emitFunction(node.value, node.name); }
@@ -846,9 +850,13 @@ let emitLetStmt = (node) -> {
   if annotated {
     if isError(curScope.annotated) { curScope.annotated = {}; };
     curScope.annotated[node.name] = true;
+    if typeFree {
+      if isError(curScope.typeFree) { curScope.typeFree = {}; };
+      curScope.typeFree[node.name] = true;
+    };
   };
   let off = emitBindingPtr({ depth: 0, slot: slot });
-  if annotated && node.value == null {
+  if annotated && !typeFree && node.value == null {
     // A declaration validates its annotation but does not check an absent value.
     let ok = emitCallRegs("__is_type_value", [ty]);
     let flag = temp(); let valid = temp();
@@ -889,7 +897,8 @@ let emitStoreByName = (name, expression, target, declaredType) -> {
   // store is exactly what the diamond's `plain` branch would do.
   if inRuntime || unannotated { line("  store %ql_value " + value + ", ptr " + off); return null; };
   // 编译期类型信息(来自 Assign 节点的标注):右值静态类型已等于声明的内建类型
-  // ⇒ 重检查不可能失败,走 plain。
+  // ⇒ 重检查不可能失败,走 plain;整条绑定类型已知时同理(其类型槽也不再生成)。
+  if !isError(hit.scope.typeFree) && !isError(hit.scope.typeFree[name]) { line("  store %ql_value " + value + ", ptr " + off); return null; };
   if checkIsDead(expression, declaredType) { line("  store %ql_value " + value + ", ptr " + off); return null; };
   let ap = temp(); let ty = temp(); let has = temp();
   line("  " + ap + " = getelementptr i8, ptr " + off + ", i64 16");

@@ -12,6 +12,8 @@ let typeBuiltins = { Number: true, String: true, Boolean: true, Null: true, Arra
 let typeScopes = [];
 let typeDepth = 0;
 let typeErrors = [];
+// 存在「右值静态类型未知」写入的名字:这些绑定的运行期注解检查必须保留。
+let typeUnknownWrites = {};
 
 let typeReport = (node, message) -> {
   let point = node.location;
@@ -107,16 +109,27 @@ let inferStmts = (stmts) -> {
       if declared != "" && value != "" && value != declared {
         typeReport(s, "type mismatch: value of type " + value + " does not match the annotated type " + declared);
       };
-      typeScopes[typeScopes.length - 1][s.name] = if declared != "" { declared; } else { value; };
+      typeScopes[typeDepth - 1][s.name] = if declared != "" { declared; } else { value; };
+      // 该绑定是否需要运行期的类型槽与检查:只有当存在「右值静态类型未知」的写入时
+      // 才需要兜底。否则每一次写入都在编译期可判定,检查不可能失败。
+      if declared != "" {
+        s.runtimeTypeFree = isError(typeUnknownWrites[s.name]);
+      } else {
+        s.runtimeTypeFree = false;
+      };
     } else if t == "Assign" {
       if !isError(s.target.type) && s.target.type == "Identifier" {
         let value = inferExpr(s.value);
         let declared = typeLookup(s.target.name);
+        // 只有「右值类型已知且与声明一致」才可能省掉运行期检查。类型未知,或已知
+        // 但不一致(此时运行期必须报 TypeCheck),都保留检查。
+        if value == "" || isError(value) { typeUnknownWrites[s.target.name] = true; }
+        else if declared != "" && value != declared { typeUnknownWrites[s.target.name] = true; };
         // 写入目标声明的内建类型(供发射器判定重检查是否为死代码)。
         s.declaredType = if isError(typeBuiltins[declared]) { ""; } else { declared; };
         // 有注解的绑定写入时会重新检查,所以它保持自己的类型;推导出来的类型一旦
         // 与某个赋值的类型不一致就作废。
-        typeScopes[typeScopes.length - 1][s.target.name] =
+        typeScopes[typeDepth - 1][s.target.name] =
           if isError(typeBuiltins[declared]) { declared; }
           else if value == declared { declared; }
           else { ""; };
@@ -144,9 +157,13 @@ let inferStmts = (stmts) -> {
   null;
 };
 
-// 对一个程序(入口 / import 的模块 / 标准库)跑一遍;错误跨程序累积,并以返回值
-// 交回调用方 —— 不依赖「调用方读到的模块全局」与「模块自己写的」是同一个引用。
+// 对一个程序(入口 / import 的模块 / 标准库)跑两遍:第一遍得出每个写入右值的静态
+// 类型,第二遍据此判定哪些绑定可以完全不要运行期的类型槽与检查。错误跨程序累积,
+// 并以返回值交回调用方 —— 不依赖「调用方读到的模块全局」与「模块自己写的」是同一个引用。
 let inferTypes = (stmts) -> {
+  typeScopes[0] = {};
+  typeDepth = 1;
+  inferStmts(stmts);
   typeScopes[0] = {};
   typeDepth = 1;
   inferStmts(stmts);
