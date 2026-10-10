@@ -322,17 +322,20 @@ let Interpreter = () -> {
         if stmt.annotation != null {
           let ck = checkValue(annVal, val, env);
           if isErrorVal(ck) {
-            // The check itself errored (annotation not a type value / check raised an error): bind that error value (same as the host)
-            env._defineAnnotated(stmt.name, ck, { ty: annVal, text: annText });
+            // The check itself errored (annotation not a type value / check raised an error).
+            // A failed annotation check propagates out of the current function, matching the
+            // compiler: the binding is never created holding an Error.
+            return { type: "Error", value: ck.value, propagate: true };
           } else if isTruthy(ck) {
             env._defineAnnotated(stmt.name, val, { ty: annVal, text: annText });
           } else {
-            // Check failed → TypeCheck error value (cause = the original value if it is an error), bound with the annotation
-            // (the error construction is inlined at the host layer: cause is a bare error value; a boot function argument would be rejected)
+            // Check failed → TypeCheck error value (cause = the original value if it is an error),
+            // propagated rather than bound (the error construction is inlined at the host layer:
+            // cause is a bare error value; a boot function argument would be rejected)
             let typeName = if val == null { "Null"; } else if !isError(val.type) { val.type; } else { typeTag(val); };
             if typeName == "Type" { typeName = "Object"; };
             let cause = if isErrorVal(val) { val.value; } else { null; };
-            env._defineAnnotated(stmt.name, { type: "Error", value: std.Error.raise("TypeCheck", typeCheckMsg(typeName, annText), cause), propagate: false }, { ty: annVal, text: annText });
+            return { type: "Error", value: std.Error.raise("TypeCheck", typeCheckMsg(typeName, annText), cause), propagate: true };
           };
         } else {
           env._define(stmt.name, val);
@@ -458,14 +461,16 @@ let Interpreter = () -> {
       if ann != null {
         let ck = checkValue(ann.ty, value, env);
         if isErrorVal(ck) {
-          assigned = env._assign(target.name, ck);
+          // A failed reassignment check propagates out of the current function, matching
+          // the compiler: the binding keeps holding only its declared type.
+          return { type: "Error", value: ck.value, propagate: true };
         } else if isTruthy(ck) {
           assigned = env._assign(target.name, value);
         } else {
           let typeName = if value == null { "Null"; } else if !isError(value.type) { value.type; } else { typeTag(value); };
             if typeName == "Type" { typeName = "Object"; };
           let cause = if isErrorVal(value) { value.value; } else { null; };
-          assigned = env._assign(target.name, { type: "Error", value: std.Error.raise("TypeCheck", typeCheckMsg(typeName, ann.text), cause), propagate: false });
+          return { type: "Error", value: std.Error.raise("TypeCheck", typeCheckMsg(typeName, ann.text), cause), propagate: true };
         };
       } else {
         assigned = env._assign(target.name, value);
