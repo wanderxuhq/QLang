@@ -679,3 +679,23 @@ standard library: the std namespace object built at startup references every mem
 so `opt -passes=globaldce` removes 0 of 278 functions. On-demand std has to be a
 *compiler* decision (emit only referenced members, transitively closed, falling back
 to everything for dynamic access).
+
+### (c) Selective direct runtime calls: done
+
+A runtime function whose body has already been emitted is now called directly
+(`call %ql_value @ql_fnN(...)`): the code address is known, so the box's
+code-pointer load and the indirect branch disappear. Frame and closure still come
+from the box and arguments still go through the pooled buffer, so the ABI is
+unchanged. Safety rests on two facts: this toolchain requires the definition to
+precede a direct call, and runtime bindings are private and never reassigned —
+checked, of the runtime's 173 top-level bindings only 4 mutable state names are
+ever assigned, and none of them is a function.
+
+To make that legal the module layout is now prelude → cold helper → function
+bodies → main (globals last; they are unordered). Closure boxes keep the order
+irrelevant for every indirect call.
+
+Measured: 4850 direct calls against 411 indirect in a whole module; the module
+drops from 257,043 to 247,343 lines (12.10 MB to 11.68 MB); a read from 37 to 35
+lines and `x = x + 1` from 66 to 64. The compiler itself is 3-5 % faster
+(q1000 15.43 -> 14.99 s, p3000 21.48 -> 20.36 s).
