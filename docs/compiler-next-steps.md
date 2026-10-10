@@ -699,3 +699,40 @@ Measured: 4850 direct calls against 411 indirect in a whole module; the module
 drops from 257,043 to 247,343 lines (12.10 MB to 11.68 MB); a read from 37 to 35
 lines and `x = x + 1` from 66 to 64. The compiler itself is 3-5 % faster
 (q1000 15.43 -> 14.99 s, p3000 21.48 -> 20.36 s).
+
+## Emission roadmap (2026-10-10)
+
+Measured composition of one `x = x + 1` at HEAD (about 62 IR lines per statement;
+the located-error helper's own body is a further one-off ~30 lines per module):
+
+| part | lines | why |
+|---|---|---|
+| read `x` | ~15 | frame load of the binding, the "is this value an Error?" test (ql_tag/icmp/br), its cold branch and phi, frame pointer load |
+| `+` dispatch | ~30 | the "are both operands Numbers?" test, the inline numeric fast path (extractvalue/bitcast/fadd/insertvalue), and the general path (frame-slot lookup of the operator, argument buffer, direct call to the runtime's `__op_add`) |
+| write `x = ...` | ~10 | another Error test with its cold branch and phi, the binding store, and the statement-value bookkeeping store |
+| diagnostic file-name string | 2 | interned once per module |
+
+Levers, in rough order of value:
+
+1. **On-demand standard library** — 68 % of the emitted module is the library
+   (247,351 lines with it, 79,684 without, for a program that uses none of it).
+   Compiler-side reachability over the library's top-level bindings and the object
+   literals that expose them, with a fallback to emitting everything whenever the
+   program's use of `std` is not statically enumerable (module object escaping into
+   a variable, dynamic keys, unknown member names — note `std.Number.toString` and
+   friends come from the *runtime*, not the library, so they are not "unknown").
+   Must be validated against the `std.*` fixtures; a wrong decision fails at run
+   time, not at compile time.
+2. **Fold `@ql_tag` on constants and on same-scope bindings** — the read and write
+   Error tests cost ~3 lines each at every site; on a value the compiler knows can
+   never be an Error (a literal, or a binding whose only assignments are literals)
+   the test and its cold branch are dead.
+3. **Common up the runtime box loads** — each operator/call site re-loads the
+   callee's frame pointer and closure from the same module frame (5-8 lines per
+   site); a per-function CSE or hoisting out of loops would remove most of it.
+4. **Drop the statement-value bookkeeping when unobserved** — every statement
+   stores a fresh value into the statement slot; a whole block's worth is dead when
+   nothing reads the block's value.
+5. **Merge the numeric test with the dispatch** — the inline "both Numbers?" test
+   duplicates the check the runtime's `__op_add` performs anyway; calling the
+   runtime path unconditionally would shrink sites at some run-time cost.
