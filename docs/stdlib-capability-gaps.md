@@ -235,3 +235,17 @@ Two consequences:
 2. The runtime has a latent robustness defect worth fixing independently: the library
    plumbing should reject or skip a non-object member instead of crashing.
 
+
+### Resolution (2026-10-10)
+
+Rather than rejecting a non-object member, the namespace was **generalised**: an
+export may be any value. `__install_library` installs a non-object member as-is and
+merges keys only when both the member and the existing target are objects, and
+`__fresh_std` already guards its table probe with the object predicate. Functions,
+types and scalars can now all be exported — `std.Result(T)` (`stdlib/result.ql`,
+written in QLang) is the first such export, and it verifies natively:
+`std.Result(Number).check(1)` is true, `.check("x")` is false, `std.Result` callable.
+
+Left open, independent of Result: passing an Error as a call *argument* still makes
+the call's result an Error — `let h = (v) -> 42; h(e)` yields `e` — a contagion site
+the read-path change did not cover. Recorded for a follow-up.

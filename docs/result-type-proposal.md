@@ -41,15 +41,15 @@ compiler may assume), not a representation change.
 1. **Representation: unchanged.** `Ok(v)` is `v`; `Err(e)` is the Error value.
    `Result(T)` therefore unboxes to `%ql_value` by construction — there is nothing
    to unbox.
-2. **The type:** `std.Result(T)`, a *runtime-provided* type constructor returning
-   `{ check: (v) -> isError(v) || T.check(v) }` — the same shape as `Array(Number)`,
-   which is also built by the runtime rather than exported from the library namespace.
-   QLang's only error carrier is the Error object, so the error side is fixed to
-   `Error`; a two-parameter `Result(T, E)` can be added later if a second carrier ever
-   exists. *Not* a library export: the namespace machinery (`__install_library`,
-   `__fresh_std`) assumes every exported member is a module object, so exporting a
-   function or a scalar makes it dereference a non-pointer (this is the crash recorded
-   in docs/stdlib-capability-gaps.md).
+2. **The type:** `std.Result(T)`, exported from the standard library and written in
+   QLang (`stdlib/result.ql`): a type value whose `check` accepts a `T` or an Error,
+   built with the existing type machinery. QLang's only error carrier is the Error
+   object, so the error side is fixed to `Error`; a two-parameter `Result(T, E)` can
+   be added later if a second carrier ever exists.
+   This required generalising the library namespace first: an export no longer has to
+   be a *module object*, it may be any value (a function, a type, a scalar), so a type
+   constructor can be a plain `std` member (see the crash and its fix in
+   docs/stdlib-capability-gaps.md).
 3. **`?` semantics: unchanged.** `v?` already means "if v is an Error, return it
    from the current function; otherwise yield v" — which is precisely Result
    propagation over this representation. What changes is the *typing* of the
