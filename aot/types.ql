@@ -43,14 +43,14 @@ let typeBound = (name) -> {
   false;
 };
 // 注解所指的内建类型;不是内建(或被遮蔽、或是组合类型表达式)就是 ""。
-let inferAnnotationType = (node) -> {
-  if isError(node.annotation) || node.annotation == null { return ""; };
-  let a = node.annotation;
-  if isError(a.type) || a.type != "Identifier" { return ""; };
-  if typeBound(a.name) { return ""; };
-  if isError(typeBuiltins[a.name]) { return ""; };
-  a.name;
+let annotationBuiltinName = (annotation) -> {
+  if isError(annotation) || annotation == null { return ""; };
+  if isError(annotation.type) || annotation.type != "Identifier" { return ""; };
+  if typeBound(annotation.name) { return ""; };
+  if isError(typeBuiltins[annotation.name]) { return ""; };
+  annotation.name;
 };
+let inferAnnotationType = (node) -> annotationBuiltinName(node.annotation);
 
 let inferExpr = (node) -> {
   let t = node.type;
@@ -60,10 +60,16 @@ let inferExpr = (node) -> {
   if t == "String" { return tagType(node, "String"); };
   if t == "Identifier" { return tagType(node, typeLookup(node.name)); };
   if t == "Function" {
-    // 函数体同样在编译期分析:里面的局部绑定与运算也能拿到类型信息。参数不参与
-    // 推导 —— 直接调用可能绕过调用点的注解检查,除非将来加上入口检查,否则不能
-    // 假定参数已经是注解声明的类型。
+    // 函数体同样在编译期分析。参数：注解会在调用点被注解检查强制执行（带注解的实参
+    // 类型不符时调用返回错误），所以函数体内可以按注解声明的内建类型来用它。
     typePush();
+    let p = 0;
+    while p < node.parameters.length {
+      let param = node.parameters[p];
+      let ptype = annotationBuiltinName(param.annotation);
+      if ptype != "" { typeScopes[typeDepth - 1][param.name] = ptype; };
+      p = p + 1;
+    };
     inferStmts(node.body.statements);
     typePop();
     return tagType(node, "Function");
