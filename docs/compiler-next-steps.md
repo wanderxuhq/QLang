@@ -776,3 +776,46 @@ Priorities follow from this: (1) on-demand std (68 % of the module), (2) the
 operator path — fold the tag test when types are known and share the dispatch
 machinery, (3) direct calls for builtins, (4) the general cold-path and
 bookkeeping cleanups listed above.
+
+### The operator path: where its ~47 lines go, and the ideas
+
+| piece | lines |
+|---|---|
+| "are both operands Numbers?" test | 5 (`ql_tag` x2, `icmp` x2, `and`) |
+| inline numeric fast path | 9 (extractvalue x2, bitcast x2, `fadd`, bitcast, insertvalue x2) |
+| general path: fetch the operator's frame/closure | 9 |
+| general path: argument buffer and call | 7 |
+| branches and phi merge | ~5 |
+
+`aot/value_abi.ql` is a hand-written block of `alwaysinline` IR leaves (`ql_tag`,
+`ql_empty`, `ql_word`, `ql_truthy`) that the compiler emits whole, so moving a hot
+fragment into a leaf needs no ABI or linker change.
+
+1. **Hoist the frame/closure fetch to function scope (largest).** Those 9 lines are
+   identical at every call site in a function, because a runtime function's box is a
+   singleton and runtime bindings are never reassigned (the same invariant the
+   direct-call change rests on). Load once in the entry block, then reference the
+   register: ~8 lines saved per site. The module has ~4,850 direct calls, so this is
+   worth roughly 35k lines, ~14 % of the module. The loads must go in the entry
+   block, not at first use, or a use after a loop would not be dominated.
+2. **A `ql_both_number(a, b)` leaf** replaces the type test: 5 lines -> 2.
+3. **Leaves for the numeric fast path** (`ql_num_add` and friends, `alwaysinline`):
+   9 lines -> 1. `-O2` inlines them back, so run-time is unchanged and only IR volume
+   shrinks (an `-O0` build would pay a call).
+4. **Give `/` and `%` a fast path.** They skip the both-literals fast path today, so
+   they cost 82 and 99 lines. With `ql_num_div` / `ql_num_mod` leaves (zero check
+   included) they drop to the `+` shape: 50-60 lines saved each. Biggest single win
+   in this family.
+5. **Fold the read/write Error test** (3 lines plus branch and phi) when the value
+   cannot be an Error: a literal, or a same-scope binding whose assignments are all
+   literals.
+6. **`&&` at 161 lines** is two operators plus the short-circuit machinery; once
+   operators shrink it falls to roughly 90.
+7. **Long term: type inference with unboxed locals.** If a binding or parameter is
+   provably a Number (or String), keep it unboxed and every tag test, fast path and
+   pack/unpack disappears: an operator becomes ~2 lines and a read ~2. This is the
+   structural answer to "why does one assignment need so many instructions"; the
+   price is a real inference pass.
+
+Do not outline the general (non-numeric) path: it is not cold — string concatenation
+goes through it — so hoisting it out of line would slow string-heavy code.
