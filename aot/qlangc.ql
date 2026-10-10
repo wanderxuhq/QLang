@@ -1774,6 +1774,7 @@ let main = (args) -> {
     r = r + 1;
   };
   emitPrelude();
+  line("; unboxable bindings: " + std.String.toString(typeUnboxCount()));
   coldHelperAt = out.length;
   if extensionMode { mainAt = out.length; line("define %ql_value @qlang_extension_init_v1(ptr %host_env) {"); }
   else { mainAt = out.length; line("define i32 @main(i32 %argc, ptr %argv) {"); };

@@ -8,6 +8,9 @@
 // Boolean/Null/Array/Object/AnyArray/AnyObject)只有在没有任何词法绑定遮蔽它时,
 // 才算"就是那个内建类型" —— 否则一律当作未知,不做任何特化。
 let typeBuiltins = { Number: true, String: true, Boolean: true, Null: true, Array: true, Object: true, AnyArray: true, AnyObject: true };
+// 内建「标量」类型:可解箱(一个机器字即可表示);Array/Object 是引用,另算。
+let typeScalar = { Number: true, String: true, Boolean: true, Null: true };
+let typeUnbox = 0;
 // 作用域栈用深度索引,不重赋值数组本身 —— 模块全局的重赋值要穿过闭包,代价与风险都高。
 // typeScopes[i] 存名字的类型,typeFnResults[i] 存「已知返回类型的函数绑定」,同深同栈。
 let typeScopes = [];
@@ -249,6 +252,13 @@ let inferStmts = (stmts) -> {
       } else {
         s.runtimeTypeFree = false;
       };
+      // 可解箱:内建标量,且每次写入右值静态类型已知(与 runtimeTypeFree 同一前提)。
+      if declared != "" && isError(typeUnknownWrites[s.name]) && !isError(typeScalar[declared]) {
+        s.unboxType = declared;
+        typeUnbox = typeUnbox + 1;
+      } else {
+        s.unboxType = "";
+      };
       // 返回类型已知、且绑定稳定(从未被赋值)的函数:登记它,调用点才能拿到类型。
       if s.value != null && !isError(s.value.returnType) && s.value.returnType != "" && isError(typeAssignedNames[s.name]) {
         typeFnResults[typeDepth - 1][s.name] = s.value.returnType;
@@ -350,3 +360,5 @@ export buildStdTypes;
 export isStaticNumber;
 export checkIsDead;
 export typeErrors;
+let typeUnboxCount = () -> typeUnbox;
+export typeUnboxCount;
