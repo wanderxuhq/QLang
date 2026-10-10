@@ -915,3 +915,40 @@ specialisation, including eliding the runtime check and unboxing where the check
 provably cannot fail; (3) inference for the unannotated bulk, or annotations in the
 library. Expected per the measurements: a `Number`-typed `x + 1` about 60 -> 14 lines,
 and about 2 once unboxed.
+
+### Typed bindings must not hold an Error (design decision, needs sign-off)
+
+Today a failed annotation check *stores* the TypeCheck Error into the binding, so
+`x: Number` really means "Number or Error" — the `T or null` trap, where the
+declared type is a lie and every consumer must handle the extra state. Requirement
+from the user: a typed binding holds exactly its type, nothing else.
+
+Minimal change, no rewrite of the error model: make the check **propagate** on
+failure instead of storing the value. QLang already has that path — the `?`
+propagation (`emitPropagateError`: store into the return slot and branch to the
+epilogue, or `__exit_error` at top level), the same one `Error.raise` uses. So this
+is one semantic decision, not an architecture change.
+
+What it buys, once `x: Number` really is only a Number:
+
+| today | after |
+|---|---|
+| general dispatch path, ~16 lines per operator | removed |
+| read/write Error test, ~7 lines | removed (a Number cannot be an Error) |
+| box/unbox, ~9 lines | removed (the binding can be a plain `double`) |
+
+Measured target: a `Number`-typed `x + 1` from ~60 lines to about 2-3, with no
+inference pass needed — the information is author-declared and runtime-enforced.
+
+Honest costs:
+
+- It is a **semantics change**: the error surfaces at the declaration/assignment
+  instead of at first use. Fixtures that inspect a stored failed-check value
+  (`t13`'s `mismatch.type` / `.cause`, `t33`) have to change, the same kind of cost
+  as the uninitialized-read and arity changes.
+- Only annotated code benefits; the runtime and standard library (68 % of the
+  emitted module) are unannotated and still need inference or added annotations.
+
+Deliberately *not* proposed: moving the whole language from errors-as-values to
+errors-as-control-flow. The minimal version above gives the compiler the guarantee it
+needs while leaving the rest of the model alone.
