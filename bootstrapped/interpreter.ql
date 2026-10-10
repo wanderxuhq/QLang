@@ -76,12 +76,12 @@ let Interpreter = () -> {
       return nativeBridge.load(path, origin, processArguments);
     };
     let path = modulePath(currentPath, node.path);
-    if isError(path) { return { type: "Error", value: path, propagate: true }; };
+    if isError(path) { return { type: "Error", value: path, propagate: false }; };
     if !isError(loadingModules[path]) && loadingModules[path] == true {
       return { type: "Error", value: std.Error.raise("ImportCycle", "cyclic import: " + path, null), propagate: true };
     };
     let source = std.fs.readFileText(path);
-    if isError(source) { return { type: "Error", value: source, propagate: true }; };
+    if isError(source) { return { type: "Error", value: source, propagate: false }; };
     let program = parseModule(source, path);
     if isError(program) { return { type: "Error", value: program, propagate: true }; };
     let module = Interpreter(); module.setModuleContext(path, loadingModules); module._shareArguments(processArguments); module._shareNativeBridge(nativeBridge);
@@ -231,7 +231,7 @@ let Interpreter = () -> {
   let protectedWriteError = (field) -> {
     // Host side: RuntimeError::Custom (program abort); the boot has no exit primitive, so it propagates
     // via the error channel (propagate: true → top level prints the diagnostic and returns flow "Error"). The message matches the host.
-    { type: "Error", value: std.Error.raise("Custom", "cannot overwrite protected member '" + field + "' of built-in type", null), propagate: true };
+    { type: "Error", value: std.Error.raise("Custom", "cannot overwrite protected member '" + field + "' of built-in type", null), propagate: false };
   };
 
   // Annotation normalization: constructor products (Array(Number)/Type.make/Object(...)) are wrapped by the call path into
@@ -471,7 +471,7 @@ let Interpreter = () -> {
         assigned = env._assign(target.name, value);
       };
       if assigned != true {
-        return { type: "Error", value: std.Error.raise("UndefinedVariable", "Undefined variable: " + target.name, null), propagate: true };
+        return { type: "Error", value: std.Error.raise("UndefinedVariable", "Undefined variable: " + target.name, null), propagate: false };
       };
       null;
     } else if target.type == "MemberAccess" || target.type == "IndexAccess" {
@@ -484,7 +484,7 @@ let Interpreter = () -> {
       if target.type == "MemberAccess" {
         key = target.field;
         if tag != "Object" && tag != "Type" {
-          return { type: "Error", value: std.Error.raise("NotAnObject", "Not an object", null), propagate: true };
+          return { type: "Error", value: std.Error.raise("NotAnObject", "Not an object", null), propagate: false };
         };
       } else {
         let index = evaluate(target.index, env);
@@ -495,14 +495,14 @@ let Interpreter = () -> {
         if tag == "Array" && indexTag == "Number" {
           let len = receiver.length;
           if !std.Number.isFinite(key) || key < -len || key > len || key % 1 != 0 {
-            return { type: "Error", value: std.Error.raise("IndexOutOfBounds", "Index out of bounds", null), propagate: true };
+            return { type: "Error", value: std.Error.raise("IndexOutOfBounds", "Index out of bounds", null), propagate: false };
           };
           if key < 0 { key = len + key; };
           receiver[key] = value;
           return null;
         };
         if (tag != "Object" && tag != "Type") || (indexTag != "String" && indexTag != "Number") {
-          return { type: "Error", value: std.Error.raise("CannotIndex", "Cannot index", null), propagate: true };
+          return { type: "Error", value: std.Error.raise("CannotIndex", "Cannot index", null), propagate: false };
         };
         if indexTag == "Number" { key = std.Number.toString(key); };
       };
