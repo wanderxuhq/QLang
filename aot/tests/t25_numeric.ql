@@ -73,9 +73,9 @@ check(near(std.Math.sin(parse("1e300")), -0.8178819121159085), "huge sin");
 check(near(std.Math.cos(parse("1e300")), -0.5753861119575491), "huge cos");
 check(std.Number.isNaN(std.Math.sin(inf)), "infinite sin");
 let unary = [std.Math.abs, std.Math.floor, std.Math.ceil, std.Math.round, std.Math.trunc, std.Math.sqrt, std.Math.sin, std.Math.cos];
-i = 0; while i < unary.length { check(unary[i]("bad").type == "TypeMismatch", "math type validation"); i = i + 1; };
-check(std.Math.pow("bad").type == "TypeMismatch", "pow base type");
-check(std.Math.pow(2)(null).type == "TypeMismatch", "pow exponent type");
+i = 0; while i < unary.length { check(unary[i]("bad").type == "TypeCheck", "math type validation"); i = i + 1; };
+check(std.Math.pow("bad").type == "TypeCheck", "pow base type");
+check(std.Math.pow(2)(null).type == "TypeCheck", "pow exponent type");
 let first = std.Math.random(); let different = false; let inRange = first >= 0 && first < 1;
 i = 0;
 while i < 64 {
