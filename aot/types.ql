@@ -10,7 +10,7 @@
 let typeBuiltins = { Number: true, String: true, Boolean: true, Null: true, Array: true, Object: true, AnyArray: true, AnyObject: true };
 // 内建「标量」类型:可解箱(一个机器字即可表示);Array/Object 是引用,另算。
 let typeScalar = { Number: true, String: true, Boolean: true, Null: true };
-let typeUnbox = 0;
+let typeUnboxList = [];   // 标量全局在导入方只是拷贝,列表才共享引用
 // 作用域栈用深度索引,不重赋值数组本身 —— 模块全局的重赋值要穿过闭包,代价与风险都高。
 // typeScopes[i] 存名字的类型,typeFnResults[i] 存「已知返回类型的函数绑定」,同深同栈。
 let typeScopes = [];
@@ -255,7 +255,7 @@ let inferStmts = (stmts) -> {
       // 可解箱:内建标量,且每次写入右值静态类型已知(与 runtimeTypeFree 同一前提)。
       if declared != "" && isError(typeUnknownWrites[s.name]) && !isError(typeScalar[declared]) {
         s.unboxType = declared;
-        typeUnbox = typeUnbox + 1;
+        typeUnboxList[typeUnboxList.length] = s.name;
       } else {
         s.unboxType = "";
       };
@@ -360,5 +360,4 @@ export buildStdTypes;
 export isStaticNumber;
 export checkIsDead;
 export typeErrors;
-let typeUnboxCount = () -> typeUnbox;
-export typeUnboxCount;
+export typeUnboxList;
