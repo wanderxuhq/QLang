@@ -187,3 +187,27 @@ error text. The runtime's `__jp_*` / `__utf8_put` decoder was removed. Inputs
 such as `"\u4e2d"` → `"中"` and `"\uD83D\uDE00"` → `"😀"` are covered by t11 and
 by a 68-input host/native differential. A separate character type, byte-array
 API, or general encoding framework was not required.
+
+## Open issue: a new library binding referenced from the export object crashes (2026-10-10)
+
+While adding `std.Result(T)` the native path started segfaulting at startup. Bisected
+with a minimal module (`let Result = 42;`), using `println(std.Math.sqrt(4))` as the
+probe and always rebuilding the compiler from the modified bundle:
+
+| variant | content | result |
+|---|---|---|
+| V3 | new module added, binding **not** referenced by the export object | works |
+| V4 | new export entry, but pointing at an **existing** binding (`Math2: MathLibrary`) | works |
+| V5 | new module, its new binding referenced from the export object | segfault |
+| V7 | same as V5, module placed first in the bundle instead of last | segfault |
+
+So it is specifically "the export object references a binding that only the newly
+added module defines", independent of position: the runtime's own `__fresh_std` /
+`__install_library` are dynamic and not at fault. The most likely cause is that the
+new binding does not get a slot in the library frame, so the export object reads an
+unallocated slot. Next step: compare the emitted IR of a *working* export (e.g.
+`MathLibrary`) with the failing one and check the slot allocation for the added
+module's binding.
+
+Relevant when this is picked up: this is the blocker for design step B (`std.Result`)
+in docs/result-type-proposal.md.
