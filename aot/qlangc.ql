@@ -819,7 +819,13 @@ let emitLetStmt = (node) -> {
   if node.value != null {
     if node.value.type == "Function" { value = emitFunction(node.value, node.name); }
     else { value = emitExpr(node.value); };
-    if annotated { value = emitLocatedError(emitCallRegs("__check_binding", [value, ty, text]), node, false); };
+    // A typed binding holds only its type: a failed check propagates out of the
+    // current function (or exits at top level) instead of being stored, so
+    // `x: Number` can never end up holding the TypeCheck Error.
+    if annotated {
+      value = emitCallRegs("__check_binding", [value, ty, text]);
+      emitPropagateError(value);
+    };
   };
   let slot = defineSlot(node.name);
   curScope.active[node.name] = true;
@@ -883,7 +889,13 @@ let emitStoreByName = (name, expression, target) -> {
   let tp = temp(); let text = temp();
   line("  " + tp + " = getelementptr i8, ptr " + off + ", i64 32");
   line("  " + text + " = load %ql_value, ptr " + tp);
-  let checked = emitLocatedError(emitCallRegs("__check_binding", [value, ty, text]), target, false);
+  // Reassigning to a typed binding re-checks it; a failure propagates rather than
+  // being stored, so the binding keeps holding only its declared type. The diamond
+  // is also emitted for writes whose target the compiler cannot see, so the
+  // propagation is emitted only when the declaring scope marks the name annotated.
+  let checked = emitCallRegs("__check_binding", [value, ty, text]);
+  let declaringScope = hit.scope;
+  if !isError(declaringScope.annotated) && declaringScope.annotated[name] == true { emitPropagateError(checked); };
   line("  store %ql_value " + checked + ", ptr " + off); line("  br label %" + done);
   line(plain + ":"); curLbl = plain;
   line("  store %ql_value " + value + ", ptr " + off); line("  br label %" + done);
