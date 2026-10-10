@@ -1863,7 +1863,9 @@ let __fresh_std = () -> {
   let result = {}; let keys = __obj_keys(std); let i = 0;
   while i < keys.length {
     let key = keys[i]; let value = __obj_get(std, key);
-    if key != "Type" && readU64(value, 0) == 6 { value = __copy_table(value); };
+    // Only tables are copied. Guarding with the object predicate keeps a member that
+    // is not an object (a scalar, or a function) from being dereferenced as one.
+    if key != "Type" && AnyObject.check(value) && readU64(value, 0) == 6 { value = __copy_table(value); };
     __obj_set(result, key, value); i = i + 1;
   };
   result;
@@ -1876,10 +1878,16 @@ let __install_library = (library) -> {
   while i < names.length {
     let name = names[i]; let module = __obj_get(library, name);
     let target = __obj_get(std, name);
-    if __isError(target) { target = {}; __obj_set(std, name, target); };
-    let keys = __obj_keys(module); let j = 0;
-    while j < keys.length {
-      let key = keys[j]; __obj_set(target, key, __obj_get(module, key)); j = j + 1;
+    // A member may be *any* value, not only a module object: a function, a type or a
+    // scalar is installed as-is. Only when the member and the existing target are both
+    // objects are the member's keys merged into the target.
+    if AnyObject.check(module) && AnyObject.check(target) {
+      let keys = __obj_keys(module); let j = 0;
+      while j < keys.length {
+        let key = keys[j]; __obj_set(target, key, __obj_get(module, key)); j = j + 1;
+      };
+    } else {
+      __obj_set(std, name, module);
     };
     i = i + 1;
   };
