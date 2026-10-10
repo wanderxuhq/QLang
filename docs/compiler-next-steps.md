@@ -1063,3 +1063,23 @@ not `e` itself. This is a deliberate rule, not a leftover of contagion — but u
 an Error as a value might simply be allowed, leaving the decision to the callee (which
 can inspect it with `isError`/`.type` or propagate it with `?`). Recorded here for the
 user to decide; the internal `exempt` path already shows the machinery can bypass it.
+
+## Gap to study later: runtime-provided std members have no interface types (2026-10-10)
+
+The compile-time stage can now derive a return type through `if` tail values and
+annotated parameters, so most of the standard library's own functions are typed. It
+cannot cross into the members the *runtime* provides: `std.Number.frexp`/`ldexp`,
+`Math.random`, and the String/Object/Array members implemented natively. Nothing the
+stage can read declares their signatures, so any library function whose tail lands on
+one of them stays unknown — `Math.sqrt` is the example, since `scaleByPowerOfTwo` ends
+in `std.Number.ldexp`.
+
+The fix is to write those signatures down in the language, as a small interface table
+the compiler reads (stdlib side, matching "runtime supplies mechanisms, the language
+declares the interface"). Deliberately deferred; it only affects the few functions
+whose tail is a runtime member.
+
+Measured after parameter annotations in stdlib/math.ql plus the if-tail join (same
+sources, same outputs):
+  `std.Math.sqrt(x) + 1`   216946 -> 216846 lines  (-100)
+  `std.Math.abs(x) + 1`    216937 -> 216837 lines  (-100)

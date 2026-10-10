@@ -5,10 +5,10 @@ let requireNumber = (n, name) -> {
   if !Number.check(n) { return std.Error.raise("TypeMismatch", name + " expects Number", null); };
   n;
 };
-let absolute = (n) -> {
+let absolute = (n: Number) -> {
   if n == 0 { 0; } else if n < 0 { -n; } else { n; };
 };
-let truncate = (n) -> {
+let truncate = (n: Number) -> {
   let magnitude = absolute(n);
   // Multiplication retains the input's zero sign without inspecting its bytes.
   if magnitude < 1 { return n * 0; };
@@ -222,20 +222,20 @@ let trig = (n, cosine) -> {
 let MathLibrary = {
   PI: 3.141592653589793,
   E: 2.718281828459045,
-  abs: (n) -> absolute(requireNumber(n, "Math.abs")?),
-  trunc: (n) -> truncate(requireNumber(n, "Math.trunc")?),
-  floor: (n) -> {
-    n = requireNumber(n, "Math.floor")?;
-    let t = truncate(n); if n < t { t - 1; } else { t; };
+  abs: (n: Number) -> absolute(requireNumber(n, "Math.abs")?),
+  trunc: (n: Number) -> truncate(requireNumber(n, "Math.trunc")?),
+  floor: (n: Number) -> {
+    let checked = requireNumber(n, "Math.floor")?;
+    let t = truncate(checked); if checked < t { t - 1; } else { t; };
   },
-  ceil: (n) -> {
-    n = requireNumber(n, "Math.ceil")?;
-    let t = truncate(n); if n > t { t + 1; } else { t; };
+  ceil: (n: Number) -> {
+    let checked = requireNumber(n, "Math.ceil")?;
+    let t = truncate(checked); if checked > t { t + 1; } else { t; };
   },
-  round: (n) -> roundValue(requireNumber(n, "Math.round")?),
+  round: (n: Number) -> roundValue(requireNumber(n, "Math.round")?),
   sqrt: squareRoot,
   pow: power,
-  sin: (n) -> trig(requireNumber(n, "Math.sin")?, false),
-  cos: (n) -> trig(requireNumber(n, "Math.cos")?, true)
+  sin: (n: Number) -> trig(requireNumber(n, "Math.sin")?, false),
+  cos: (n: Number) -> trig(requireNumber(n, "Math.cos")?, true)
 };
 export { MathLibrary };

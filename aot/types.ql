@@ -276,14 +276,29 @@ let inferStmts = (stmts) -> {
         inferExpr(s.value);
       };
     } else if t == "If" {
+      // if 作为尾值时,取各分支尾值的公共类型:全一致就用它,否则未知。没有 else 的
+      // if 在条件为假时其值来自更早的语句,这里不做拼接,直接记未知(保守)。
+      let joined = ""; let first = true; let mixed = false;
       let b = 0;
       while b < s.branches.length {
         inferExpr(s.branches[b].condition);
-        typePush(); inferStmts(s.branches[b].body.statements); typePop();
+        typePush();
+        let branchTail = inferStmts(s.branches[b].body.statements);
+        typePop();
+        if first { joined = branchTail; first = false; }
+        else if branchTail != joined { mixed = true; };
         b = b + 1;
       };
-      if s.elseBody != null { typePush(); inferStmts(s.elseBody.statements); typePop(); };
-      tail = "";
+      if s.elseBody != null {
+        typePush();
+        let elseTail = inferStmts(s.elseBody.statements);
+        typePop();
+        if first { joined = elseTail; first = false; }
+        else if elseTail != joined { mixed = true; };
+      } else {
+        mixed = true;
+      };
+      tail = if mixed { ""; } else { joined; };
     } else if t == "While" {
       inferExpr(s.condition);
       typePush(); inferStmts(s.body.statements); typePop();
