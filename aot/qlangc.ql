@@ -895,8 +895,16 @@ let emitStoreByName = (name, expression, target) -> {
   // writes whose target the compiler cannot see, so the propagation is emitted only
   // when the declaring scope marks the name annotated.
   let checked = emitLocatedError(emitCallRegs("__check_binding", [value, ty, text]), target, false);
+  // Guard the lookup: indexing an object with a missing key yields an Error, and
+  // that Error would propagate through the comparison and make the condition an
+  // Error value rather than a boolean.
+  let annotatedHere = false;
   let declaringScope = hit.scope;
-  if !isError(declaringScope.annotated) && declaringScope.annotated[name] == true { emitPropagateError(checked); };
+  if !isError(declaringScope.annotated) {
+    let flag = declaringScope.annotated[name];
+    if !isError(flag) && flag == true { annotatedHere = true; };
+  };
+  if annotatedHere { emitPropagateError(checked); };
   line("  store %ql_value " + checked + ", ptr " + off); line("  br label %" + done);
   line(plain + ":"); curLbl = plain;
   line("  store %ql_value " + value + ", ptr " + off); line("  br label %" + done);
