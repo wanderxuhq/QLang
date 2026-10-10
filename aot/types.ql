@@ -70,6 +70,75 @@ let annotationBuiltinName = (annotation) -> {
 };
 let inferAnnotationType = (node) -> annotationBuiltinName(node.annotation);
 
+// ---- std 成员类型(供 std.Math.sqrt(x) 之类的调用也在编译期定型) ----------------
+// 标准库源码里,模块对象是普通的对象字面量(如 MathLibrary = { sqrt: squareRoot, PI: 3.14 }),
+// 导出对象把它们挂到模块名上(Math: MathLibrary)。两者都在 AST 上,所以成员类型是纯
+// 编译期信息:字段是函数就取它的返回类型,是字面量就取字面量类型。
+let stdModuleBinds = {};   // 模块名(导出字段)-> 模块对象的绑定名
+let stdFieldCall = {};     // 绑定名 -> { 字段 -> 该成员函数的返回类型 }
+let stdFieldValue = {};    // 绑定名 -> { 字段 -> 该成员值的类型 }
+let stdValueBinds = {};    // 库内顶层绑定名 -> 其值节点(用于识别函数成员)
+
+let stdScanLet = (node) -> {
+  if isError(node) || node == null { return null; };
+  if isError(node.type) || node.type != "Let" || node.value == null { return null; };
+  if !isError(node.value.type) && node.value.type == "Object" {
+    let callMap = {}; let valueMap = {}; let fieldIndex = 0;
+    while fieldIndex < node.value.fields.length {
+      let field = node.value.fields[fieldIndex];
+      let fv = field.value;
+      if !isError(fv.type) && fv.type == "Identifier" {
+        let target = stdValueBinds[fv.name];
+        if !isError(target) && !isError(target.type) && target.type == "Function" {
+          if !isError(target.returnType) && target.returnType != "" { callMap[field.name] = target.returnType; };
+        } else if !isError(target) { valueMap[field.name] = target.staticType; };
+      } else if !isError(fv.staticType) && fv.staticType != "" {
+        valueMap[field.name] = fv.staticType;
+      };
+      fieldIndex = fieldIndex + 1;
+    };
+    stdFieldCall[node.name] = callMap;
+    stdFieldValue[node.name] = valueMap;
+  } else if !isError(node.value.type) && node.value.type == "Function" {
+    stdValueBinds[node.name] = node.value;
+  };
+  // 库里可能有嵌套的 let(例如模块工厂内部),一并收集。
+  if !isError(node.value.type) && node.value.type == "Function" && node.value.body != null {
+    let i = 0;
+    while i < node.value.body.statements.length { stdScanLet(node.value.body.statements[i]); i = i + 1; };
+  };
+  null;
+};
+// 导出对象:字段值都是「指向对象字面量的标识符」的那个对象字面量。
+let stdScanExports = (node) -> {
+  if isError(node) || node == null { return null; };
+  if isError(node.type) || node.type != "Let" || node.value == null { return null; };
+  if !isError(node.value.type) && node.value.type == "Object" {
+    let fields = node.value.fields; let j = 0; let looksLikeExports = fields.length > 0;
+    while j < fields.length {
+      let fv = fields[j].value;
+      if isError(fv.type) || fv.type != "Identifier" || isError(stdFieldCall[fv.name]) { looksLikeExports = false; };
+      j = j + 1;
+    };
+    if looksLikeExports {
+      j = 0;
+      while j < fields.length { stdModuleBinds[fields[j].name] = fields[j].value.name; j = j + 1; };
+    };
+  };
+  if !isError(node.value.type) && node.value.type == "Function" && node.value.body != null {
+    let i = 0;
+    while i < node.value.body.statements.length { stdScanExports(node.value.body.statements[i]); i = i + 1; };
+  };
+  null;
+};
+let buildStdTypes = (stmts) -> {
+  let i = 0;
+  while i < stmts.length { stdScanLet(stmts[i]); i = i + 1; };
+  i = 0;
+  while i < stmts.length { stdScanExports(stmts[i]); i = i + 1; };
+  null;
+};
+
 let inferExpr = (node) -> {
   let t = node.type;
   if t == "Number" { return tagType(node, "Number"); };
@@ -125,11 +194,31 @@ let inferExpr = (node) -> {
     if op == "+" && (left == "String" || right == "String") { return tagType(node, "String"); };
     return tagType(node, "");
   };
+  if t == "MemberAccess" {
+    // 先分析对象,std.<模块> 才会带上模块名。
+    inferExpr(node.object);
+    let obj = node.object;
+    if !isError(obj.type) && obj.type == "Identifier" && obj.name == "std" && !typeBound("std") {
+      if !isError(stdModuleBinds[node.field]) { node.moduleName = stdModuleBinds[node.field]; return tagType(node, "Object"); };
+      return tagType(node, "");
+    };
+    if !isError(obj.type) && obj.type == "MemberAccess" && !isError(obj.moduleName) {
+      let calls = stdFieldCall[obj.moduleName];
+      let values = stdFieldValue[obj.moduleName];
+      if !isError(calls) && !isError(calls[node.field]) { node.memberReturn = calls[node.field]; return tagType(node, "Function"); };
+      if !isError(values) && !isError(values[node.field]) && values[node.field] != "" { return tagType(node, values[node.field]); };
+    };
+    return tagType(node, "");
+  };
   if t == "Call" {
-    // 调用结果的类型:callee 是标识符,且词法解析到一个「返回类型已知、绑定稳定」的函数。
+    // 调用结果的类型:callee 是「返回类型已知、绑定稳定」的函数绑定,或是 std 的成员函数。
     if !isError(node.callee.type) && node.callee.type == "Identifier" {
       let rt = typeFnLookup(node.callee.name);
       if rt != "" { return tagType(node, rt); };
+    };
+    if !isError(node.callee.type) && node.callee.type == "MemberAccess"
+        && !isError(node.callee.memberReturn) && node.callee.memberReturn != "" {
+      return tagType(node, node.callee.memberReturn);
     };
     return tagType(node, "");
   };
@@ -242,6 +331,7 @@ let checkIsDead = (valueNode, declaredName) -> {
 };
 
 export inferTypes;
+export buildStdTypes;
 export isStaticNumber;
 export checkIsDead;
 export typeErrors;

@@ -1753,10 +1753,14 @@ let main = (args) -> {
   if isError(path) { std.Error.raise("CompileError", path.message, null)?; };
   let root = loadModuleProgram(source, path, 0)?;
   let userProgram = root.program;
-  // 类型信息在生成代码之前算好:用户程序与所有已加载模块(import 的依赖)。
-  let typeErrs = inferTypes(userProgram.statements);
+  // 类型信息在生成代码之前算好。顺序:先分析标准库(它自己的推导结论要用来建 std 成员
+  // 类型索引),再分析用户程序与已加载的 import 模块。
   let libraryProgram = parseStandardLibrary()?;
   inferTypes(libraryProgram.statements);
+  buildStdTypes(libraryProgram.statements);
+  let typeErrs = inferTypes(userProgram.statements);
+  let typePaths = std.Object.keys(moduleCache); let typeIndex = 0;
+  while typeIndex < typePaths.length { inferTypes(moduleCache[typePaths[typeIndex]].program.statements); typeIndex = typeIndex + 1; };
   let runtimeParser = Parser(Lexer(runtimeSource).tokenize());
   runtimeParser.setSource(runtimeSource);
   runtimeParser.setSourcePath(if args[0] == "--emit-llvm" || extensionMode { args[2]; } else { "<runtime>"; });
