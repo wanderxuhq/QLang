@@ -819,11 +819,11 @@ let emitLetStmt = (node) -> {
   if node.value != null {
     if node.value.type == "Function" { value = emitFunction(node.value, node.name); }
     else { value = emitExpr(node.value); };
-    // A typed binding holds only its type: a failed check propagates out of the
-    // current function (or exits at top level) instead of being stored, so
-    // `x: Number` can never end up holding the TypeCheck Error.
+    // A typed binding holds only its type. The check's value still goes through
+    // __err_at first, so a failing check carries the declaration's source position,
+    // and only then propagates out of the current function (or exits at top level).
     if annotated {
-      value = emitCallRegs("__check_binding", [value, ty, text]);
+      value = emitLocatedError(emitCallRegs("__check_binding", [value, ty, text]), node, false);
       emitPropagateError(value);
     };
   };
@@ -889,11 +889,12 @@ let emitStoreByName = (name, expression, target) -> {
   let tp = temp(); let text = temp();
   line("  " + tp + " = getelementptr i8, ptr " + off + ", i64 32");
   line("  " + text + " = load %ql_value, ptr " + tp);
-  // Reassigning to a typed binding re-checks it; a failure propagates rather than
-  // being stored, so the binding keeps holding only its declared type. The diamond
-  // is also emitted for writes whose target the compiler cannot see, so the
-  // propagation is emitted only when the declaring scope marks the name annotated.
-  let checked = emitCallRegs("__check_binding", [value, ty, text]);
+  // Reassigning to a typed binding re-checks it; the value still gets its source
+  // position attached, then a failure propagates rather than being stored, so the
+  // binding keeps holding only its declared type. The diamond is also emitted for
+  // writes whose target the compiler cannot see, so the propagation is emitted only
+  // when the declaring scope marks the name annotated.
+  let checked = emitLocatedError(emitCallRegs("__check_binding", [value, ty, text]), target, false);
   let declaringScope = hit.scope;
   if !isError(declaringScope.annotated) && declaringScope.annotated[name] == true { emitPropagateError(checked); };
   line("  store %ql_value " + checked + ", ptr " + off); line("  br label %" + done);
