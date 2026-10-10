@@ -1083,3 +1083,18 @@ Measured after parameter annotations in stdlib/math.ql plus the if-tail join (sa
 sources, same outputs):
   `std.Math.sqrt(x) + 1`   216946 -> 216846 lines  (-100)
   `std.Math.abs(x) + 1`    216937 -> 216837 lines  (-100)
+
+## Backlog (do last): move the stdlib source generators off Python
+
+The chain that matters is already pure QLang: `stdlib/*.ql` -> `build_bundle.ql` (QLang,
+no exec/spawn anywhere) -> the embedded `standardLibrarySource` string the compiler
+parses. Python only appears at the edges:
+
+  - `stdlib/generate_unicode_tables.py`, `aot/generate_math_constants.py`: source
+    generators whose output (QLang) is committed, so the build never runs them — only a
+    developer refreshing the tables does;
+  - `aot/run_*.py` (test harness) and `aot/native_link.py` (hands the emitted LLVM IR to
+    clang and links a binary).
+
+Rewriting the generators in QLang would make the whole toolchain Python-free. Deferred:
+nothing in a normal build depends on them.
