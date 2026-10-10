@@ -736,3 +736,43 @@ Levers, in rough order of value:
 5. **Merge the numeric test with the dispatch** — the inline "both Numbers?" test
    duplicates the check the runtime's `__op_add` performs anyway; calling the
    runtime path unconditionally would shrink sites at some run-time cost.
+
+### Per-construct emission cost (measured 2026-10-10)
+
+Base program declares `x`, `y`, `f = (a) -> a`, `g = (a, b) -> a + b`,
+`o = {p: 1}`, `a = [1, 2]` and reads `y` once (so the located-error helper's
+one-off body, about 22-30 lines per module, is already present and cancels out).
+
+| construct | lines | | construct | lines |
+|---|---|---|---|---|
+| `write x = 1;` | 2 | | `call f(1);` | 58 |
+| `while false { 1; }` | 7 | | `y + 1;` / `y == 1;` | 60 / 60 |
+| `read y;` | 13 | | `x = y + 1;` | 62 |
+| `x = y;` | 15 | | `y < 1;` | 62 |
+| `let z = y;` | 21 | | `if y == 1 { 1; }` | 68 |
+| `!y;` | 29 | | `println(y);` | 71 |
+| `[y, 1];` | 29 | | `y / 2;` | 82 |
+| `y ?? 1;` | 31 | | `g(y, y);` | 86 |
+| `y.p;` / `a[0];` | 40 / 40 | | `y % 2;` | 99 |
+| `{p: y};` | 43 | | `f(1)(2);` | 103 |
+| `y?;` | 44 | | `y == 1 && y == 2;` | 161 |
+| `-y;` | 53 | | | |
+
+Conclusions this changes:
+
+- A plain read is **13** lines, not 35: the earlier figure included the once-per
+  module cold helper. Writes are already nearly free (2).
+- **Operators dominate**: 47-99 lines each, and `/` and `%` are worse than `+`
+  because they skip the "both operands are Number literals" fast path and always
+  take the tag test plus the general dispatch. `&&`/`||` pay that twice plus the
+  short-circuit machinery (161 for one `&&` of two comparisons).
+- **Calls are next**: `f(1)` 58, `println(y)` 71, `g(y, y)` 86, `f(1)(2)` 103.
+  `println` is a builtin, so it still goes through the box path; a known-builtin
+  direct call would help everywhere (fixtures and the compiler itself use it
+  heavily).
+- Unary minus (53) is the same shape as a binary operator and just as expensive.
+
+Priorities follow from this: (1) on-demand std (68 % of the module), (2) the
+operator path — fold the tag test when types are known and share the dispatch
+machinery, (3) direct calls for builtins, (4) the general cold-path and
+bookkeeping cleanups listed above.
