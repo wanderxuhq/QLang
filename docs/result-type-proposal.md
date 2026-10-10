@@ -2,6 +2,8 @@
 
 Status: proposal, for review. Nothing here is implemented yet.
 
+Chinese version: [result-type-proposal.zh.md](./result-type-proposal.zh.md)
+
 ## Motivation, measured
 
 - Every value may implicitly be an Error, so every read/write pays an "is this an
