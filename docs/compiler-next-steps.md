@@ -952,3 +952,31 @@ Honest costs:
 Deliberately *not* proposed: moving the whole language from errors-as-values to
 errors-as-control-flow. The minimal version above gives the compiler the guarantee it
 needs while leaving the rest of the model alone.
+
+### Reference: what "automatic error contagion" is
+
+QLang's current error semantics: an Error is a *value*, and **using it makes it the
+result of that use**. `let a = 1 / 0; let b = a + 1;` does not add and does not raise
+a TypeError — the error infects the result, so `b` is that same Error.
+`"a" + (1 / 0)` is not a concatenation; `x.field` where x is an Error is not an
+UndefinedField. The compiler inserts "is this value an Error (tag 8)?" at every read,
+write, member access, index and operator result; when it is, the value becomes the
+result with the current source position attached, so an error **gathers locations and
+a trace as it travels** (what the source-context and t40 diagnostics rely on).
+
+Compared with other models: Rust/Go return errors explicitly (`Result` / `(T, error)`
+plus `?`); Java's `T or null` leaks the possibility into the type; JS/Python unwind.
+QLang is values plus contagion plus explicit `?` — no unwinding, and the error stays
+inspectable (`e.type`, `.cause`, `.trace`).
+
+What it buys: failures inside a callee reach the user without writing `?` at every
+level, they stay inspectable, and there is no unwinding. What it costs, measured: the
+check at every read/write/index (19.5 % of the emitted module) and, more importantly,
+"any value might be an Error" as a *premise*, which is what blocks type
+specialisation and unboxing.
+
+Step 1 (approved) is precisely: **contagion does not apply to typed things** — a
+failed annotation check propagates (the `?` path) instead of being stored, so a
+`Number`-annotated binding is only ever a Number. The union then exists only at
+function boundaries, where it is legitimate (a `Result`-like contract), and an error
+still reaches the caller as a value. Unannotated code keeps contagion unchanged.
