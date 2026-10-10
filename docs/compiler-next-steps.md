@@ -849,3 +849,38 @@ only combined with that type). It is the same forward flow analysis the
 definite-assignment pass already performs, needs no interprocedural work, and falls
 back to today's dynamic emission whenever it cannot prove a type. Parameters and
 return values (every call site agreeing on a type) are a later step.
+
+### Two layers, and the second one is the representation (measured)
+
+`z = 1;` (writing a literal) costs **2 lines**; `z = 1 + 2;` (same types known, but the
+value is *computed*) costs **21**. The difference is:
+
+- ~9 lines of boxing/unboxing: the operands are packed `%ql_value`s, so the compiler
+  unpacks (extractvalue, bitcast), computes (`fadd`) and re-packs (bitcast,
+  insertvalue) for a single addition;
+- ~7 lines of "is this value an Error?" test plus its branch and phi;
+- the rest is statement bookkeeping.
+
+Note that `z = 1;` is only 2: the write's Error test is *already* skipped for a
+literal, so the mechanism exists — it just needs to know that a computed Number
+cannot be an Error either.
+
+So the cost splits into two layers, and they share one prerequisite:
+
+1. **Unknown types at compile time** force both the specialised and the general path
+   plus the branches merging them (62 vs 21 for the same statement).
+2. **The boxed, possibly-Error representation** charges unpack/pack and an Error test
+   at every compute and every use, and does not go away just because the type is
+   known (21 vs 2 for a computed vs a literal value).
+
+Fixes for the second layer, all unlocked by the same kind analysis as the first:
+
+- **unboxed locals**: a binding proven to hold a Number kept as a `double`; one `+`
+  becomes one `fadd`, no Error test (a double cannot be an Error), no bookkeeping —
+  an assignment drops to ~3-5 lines;
+- **constant folding** for literal operands (`1 + 2` -> `3`): needs *no* analysis and
+  can be done immediately, by folding in the branch that already special-cases two
+  literal operands;
+- dropping the statement-value bookkeeping when the value is not observable.
+
+Fully done, one `x = x + 1` should be 3-5 lines rather than 62.
