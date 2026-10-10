@@ -823,8 +823,9 @@ let emitLetStmt = (node) -> {
   // 没被编译期分析标注过的节点(例如受信任的运行时源码)不做任何猜测。
   if isError(node.annotationType) { node.annotationType = ""; };
   // 编译期已算出右值类型:与注解所指的内建类型一致时,这次检查不可能失败。
+  // 但类型/文本槽必须照写 —— 闭包等非同体写入会读取它来决定要不要检查。
   let deadCheck = !inRuntime && checkIsDead(node.value, node.annotationType);
-  if annotated && !deadCheck { ty = emitExpr(node.annotation); text = internString(annotationText(node.annotation)); };
+  if annotated { ty = emitExpr(node.annotation); text = internString(annotationText(node.annotation)); };
   let value = "null";
   if node.value != null {
     if node.value.type == "Function" { value = emitFunction(node.value, node.name); }
