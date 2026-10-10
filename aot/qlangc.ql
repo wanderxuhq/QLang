@@ -1631,17 +1631,22 @@ let emitLocatedError = (value, node, callFrame) -> {
   result;
 };
 // emitExpr(node) returns an LLVM %ql_value operand (constant or register).
-let emitExpr = (node) -> {
+// emitValue 返回 {reg, raw}:raw="" 时 reg 是 %ql_value(既有路径);raw="Number" 时
+// reg 是裸 double —— 只出现在编译期已证明类型的绑定上。emitExpr 是它的装箱化薄
+// 包装,所以除少数决策点(NodeAnd/unboxing 相关)外,其余调用点无需改动。
+let emitValue = (node) -> {
   let value = emitExprInner(node); let kind = node.type;
   // Contagion is off: only an expression that can *create* an error attaches a
   // source position. A plain read can only carry one, so an Identifier is not
   // checked — reading a binding that holds an Error yields that Error as an
   // ordinary value and it propagates only through `?` or another operation.
   if kind == "BinaryOp" || kind == "UnaryOp" || kind == "Call" || kind == "Import" || kind == "MemberAccess" || kind == "IndexAccess" {
-    return emitLocatedError(value, node, kind == "Call" || kind == "Import");
+    value = emitLocatedError(value, node, kind == "Call" || kind == "Import");
   };
-  value;
+  { reg: value, raw: "" };
 };
+// 薄包装:取装箱后的寄存器,忽略表示信息。
+let emitExpr = (node) -> emitValue(node).reg;
 let emitExprInner = (node) -> {
   let t = node.type;
   if t == "Number" {
