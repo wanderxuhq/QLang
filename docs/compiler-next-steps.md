@@ -645,32 +645,37 @@ diagnostic as the native path. The whole suite passes ("Module suite: ALL PASS",
 was a stale test expectation, not a runtime defect. No runtime or compiler source
 changed for this.
 
-## Cold-path outlining (WIP on branch `cold-paths-and-lazy-std`, 2026-10-09)
+## Cold-path outlining: done on branch `cold-paths-and-lazy-std` (2026-10-09)
 
-Goal: emit the per-reader located-error path (`__err_at` with the source
-coordinates) once per module instead of inline at every read. Measured with a
-working IR-level version of the change:
+The per-reader located-error path (`__err_at` with the source coordinates) is now
+emitted **once per module** as a private function `@__cold_located_error` with an
+ordinary ABI (values in registers, no frame buffer) instead of inline at every
+reader. Measured:
 
-- one read: 60 -> 36 IR lines; `x = x + 1`: 111 -> 64
-- a whole module (empty program, i.e. the runtime and standard library):
-  339,948 -> 246,422 lines, 15.8 MB -> 11.7 MB (-26 %)
+- one read: 60 -> 37 IR lines; `x = x + 1`: 111 -> 66
+- a whole module (empty program, i.e. the runtime and the standard library):
+  339,948 -> 257,043 lines, 15.84 MB -> 12.10 MB (-24 %)
 
-Blocker found: this clang rejects a forward `declare` for a function that is also
-defined in the same module ("invalid redefinition", reproduced with plain `i32`
-too), so the helper cannot be declared up front. It must instead be *spliced into
-the output stream immediately after the prelude*, ahead of every call site — and
-because the runtime/library bindings only exist once `main` is being emitted, its
-body can only be generated at the end of compilation and then inserted by index.
+Validated: selfhost gate 47/47 (including the stage2/stage3 fixed point), native
+interpreter 53/53, and the runtime-diagnostic and source-context suites — the two
+that pin error coordinates and traces, so the outlining is behaviour-preserving.
 
-That splice is implemented and the module links, but the emitted program
-segfaults: the plain-ABI helper passes the caller's environment pointer, and the
-runtime lookup inside it does not yet match what the inline version did. Next step
-is to diff the helper's body against the old inline block and reconcile the
-environment argument, then re-validate with the runtime-diagnostic and
-source-context suites (they pin error coordinates and traces).
+Two constraints this toolchain imposes, both found the hard way:
 
-Note: 277 of the 278 emitted functions are already `internal`, but link-time
-garbage collection cannot help with the standard library: the std namespace object
-built at startup references every member, so `opt -passes=globaldce` removes 0 of
-278 functions. On-demand std has to be a *compiler* decision (emit only referenced
-members, transitively closed, falling back to everything for dynamic access).
+- **A forward `declare` for a function defined in the same module is rejected**
+  ("invalid redefinition", reproducible with plain `i32`). This is why runtime calls
+  are all indirect through closure boxes. The helper therefore cannot be declared up
+  front: it is generated at the end of compilation (where the module bindings exist)
+  and **spliced into the output stream right after the prelude**, ahead of every use.
+- **The helper must index the runtime frame directly.** A runtime name's lookup depth
+  is the compile-time distance from `curScope` to `runtimeScope`, so the helper sets
+  its scope to `runtimeScope` (depth 0 against its argument) and each call site
+  passes the runtime frame obtained by walking `curEnv`'s parent chain once per level.
+
+Next on this branch: (c) direct calls to runtime functions (which needs the function
+definitions emitted *before* `main`, since this clang forbids forward declarations),
+and then on-demand `std`. Note that link-time garbage collection cannot help with the
+standard library: the std namespace object built at startup references every member,
+so `opt -passes=globaldce` removes 0 of 278 functions. On-demand std has to be a
+*compiler* decision (emit only referenced members, transitively closed, falling back
+to everything for dynamic access).
