@@ -697,6 +697,15 @@ let isTopLevel = true;  // main 顶层 ? → __exit_error
 // every call site: this toolchain rejects a forward `declare`).
 let needColdLocated = false;
 let coldHelperAt = 0;
+// Runtime functions whose body is already emitted, keyed by source name: a call
+// after that point can be direct (this toolchain wants the definition first), and
+// runtime bindings are private, so they cannot be rebound by user code.
+let runtimeFnIr = {};
+let assignedRuntime = {};
+// Index in `out` where main's header begins, and a guard that keeps the cold
+// helper's own __err_at call indirect (it is emitted ahead of the runtime blocks).
+let mainAt = 0;
+let inColdHelper = false;
 
 // Frames reserve slots ahead of time, but declarations become visible in
 // source order. An all-zero internal value is binding state, never QLang null.
@@ -1020,6 +1029,8 @@ let emitFunction = (node, name) -> {
   stackSlots = savedStackSlots;
   argSlotPool = savedArgSlots;
   fnBlocks[fnBlocks.length] = blk;
+  // Its body is defined from here on: later calls to it may be direct.
+  if name != "" && !isError(runtimeFunctions[name]) { runtimeFnIr[name] = fname; };
   // 恢复调用方上下文;闭包盒指令写回调用方当前块/当前 sink。
   moduleExportsReg = savedExports;
   curSink = savedSink;
@@ -1218,10 +1229,40 @@ let emitInt = (value, width) -> {
 // __invoke/__same_ptr intrinsics. User-selected names do not grant exemptions.
 // emitCallRegs(fname, argRegs):给定 callee 名与已计算的参数寄存器,构造 args 数组并调用。
 // runtime.ql 函数是顶层 let → 全局帧槽 → emitIdentifier(fname) 解析成功。
+// A direct call to an already-defined runtime function: same frame/closure as the
+// boxed form, but the code address is known, so no pointer load and no indirect
+// branch. Arguments still go through the ordinary buffer.
+let emitDirectCall = (irName, name, argRegs) -> {
+  let FN = emitIdentifier({ type: "Identifier", name: name, internal: true });
+  let pointer = emitPointer(FN);
+  let ep = temp(); let env = temp(); let ap = temp(); let annotations = temp();
+  line("  " + ep + " = getelementptr i8, ptr " + pointer + ", i64 16");
+  line("  " + env + " = load ptr, ptr " + ep);
+  line("  " + ap + " = getelementptr i8, ptr " + pointer + ", i64 56");
+  line("  " + annotations + " = load %ql_value, ptr " + ap);
+  let narg = argRegs.length;
+  let bytes = if narg == 0 { 1 } else { 16 * narg };
+  let arr = argSlot(bytes);
+  line("  call void @llvm.lifetime.start.p0(i64 " + std.String.toString(bytes) + ", ptr " + arr + ")");
+  let i = 0;
+  while i < narg {
+    let aoff = temp();
+    line("  " + aoff + " = getelementptr %ql_value, ptr " + arr + ", i64 " + std.String.toString(i));
+    line("  store %ql_value " + argRegs[i] + ", ptr " + aoff);
+    i = i + 1;
+  };
+  let r = temp();
+  line("  " + r + " = call %ql_value @" + irName + "(ptr " + env + ", ptr " + arr + ", i64 " + std.String.toString(narg) + ", %ql_value " + annotations + ")");
+  line("  call void @llvm.lifetime.end.p0(i64 " + std.String.toString(bytes) + ", ptr " + arr + ")");
+  r;
+};
 let emitCallRegs = (fname, argRegs) -> {
   // NOTE(deviation from brief): emitIdentifier 现签名取 Identifier 节点(读 node.name),
   // 直接传字符串会访问 "str".name → host Error → lookupSlot miss → null 值(运行期 call null 崩溃)。
   // 构造节点保持 brief 其余部分逐字不变。Task 7/8 复用同一 emitCallRegs(fname 字符串)调用形式。
+  let ir = runtimeFnIr[fname];
+  let rebound = assignedRuntime[fname];
+  if !isError(ir) && isError(rebound) && !inColdHelper { return emitDirectCall(ir, fname, argRegs); };
   let FN = emitIdentifier({ type: "Identifier", name: fname, internal: true });
   emitInvokeRegs(FN, argRegs);
 };
@@ -1513,11 +1554,13 @@ let emitColdLocatedHelper = () -> {
   curLbl = "entry";
   curEnv = "%env";
   curScope = runtimeScope;
+  inColdHelper = true;
   isTopLevel = false; curRetv = "%retv"; curEpiLbl = "epilogue";
   let located = emitCallRegs("__err_at", ["%v", "%file", "%line", "%col", "%cf"]);
   line("  ret %ql_value " + located);
   line("}");
   blk[slotAt] = stackEntry();
+  inColdHelper = false;
   stackSlots = savedStackSlots; argSlotPool = savedArgSlots;
   curScope = savedScope; curEnv = savedEnv; curLbl = savedLbl;
   isTopLevel = savedTop; curRetv = savedRetv; curEpiLbl = savedEpi;
@@ -1672,12 +1715,13 @@ let main = (args) -> {
   while r < program.statements.length {
     let stmt = program.statements[r];
     if stmt.type == "Let" && stmt.value != null && stmt.value.type == "Function" { runtimeFunctions[stmt.name] = true; };
+    if stmt.type == "Assign" && stmt.target.type == "Identifier" { assignedRuntime[stmt.target.name] = true; };
     r = r + 1;
   };
   emitPrelude();
   coldHelperAt = out.length;
-  if extensionMode { line("define %ql_value @qlang_extension_init_v1(ptr %host_env) {"); }
-  else { line("define i32 @main(i32 %argc, ptr %argv) {"); };
+  if extensionMode { mainAt = out.length; line("define %ql_value @qlang_extension_init_v1(ptr %host_env) {"); }
+  else { mainAt = out.length; line("define i32 @main(i32 %argc, ptr %argv) {"); };
   line("entry:");
   let mainStackAt = out.length; line("");
   if !extensionMode { line("  store ptr %argv, ptr @ql_stack_top"); };
@@ -1766,15 +1810,18 @@ let main = (args) -> {
     while hh < helper.length { merged[merged.length] = helper[hh]; hh = hh + 1; };
     while m < out.length { merged[merged.length] = out[m]; m = m + 1; };
     out = merged;
+    mainAt = mainAt + helper.length;
   };
   // Never turn unsupported syntax into a successful, silently incorrect binary.
   if compileErrors.length > 0 {
     std.Error.raise("CompileError", compileErrors[0], null)?;
   };
-  // R10-c:先 flush main(out),再按定义序 flush 各函数 fnBlocks(LLVM 允许前向引用:
-  // main 经闭包盒 `store ptr @ql_fn<N>` 引用后定义的函数)。
+  // R10-c: out[0..mainAt) = prelude plus the cold helper, then every function body,
+  // then main. Function bodies come before their direct callers because this
+  // toolchain has no forward declarations; the closure boxes keep the order
+  // irrelevant for every indirect call, and top-level globals are unordered.
   let i2 = 0;
-  while i2 < out.length {
+  while i2 < mainAt {
     println(out[i2]);
     i2 = i2 + 1;
   };
@@ -1787,6 +1834,10 @@ let main = (args) -> {
       j = j + 1;
     };
     b = b + 1;
+  };
+  while i2 < out.length {
+    println(out[i2]);
+    i2 = i2 + 1;
   };
   // M2 Task 2:flush 全局字符串常量/盒(LLVM 顶层实体无序,放函数定义之后合法)。
   // 注意:必须 println 直接落 IR —— line() 会追加到已 flush 过的 out(死数据,永不出现在 IR)。
