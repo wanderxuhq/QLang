@@ -54,8 +54,8 @@ while i < methods.length {
   let j = 0;
   while j < invalid.length {
     let result = methods[i](invalid[j]);
-    check(result.type == "TypeMismatch", "argument type");
-    check(result.message == "Math." + names[i] + " expects Number", "argument message");
+    check(result.type == "TypeCheck", "argument type");
+    check(result.message == "argument 1 does not match the annotated type \"Number\"", "argument message");
     j = j + 1;
   };
   check(methods[i](Error.raise("input")).type == "TypeMismatch", "Error argument remains rejected");
