@@ -8,8 +8,7 @@
     "number.ql",
     "object.ql",
     "json_quote.ql",
-    "json.ql",
-    "result.ql"
+    "json.ql"
   ],
   "exports": [
     {
@@ -35,10 +34,6 @@
     {
       "name": "JSON",
       "value": "JSONLibrary"
-    },
-    {
-      "name": "Result",
-      "value": "Result"
     }
   ]
 }
