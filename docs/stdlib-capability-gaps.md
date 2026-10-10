@@ -211,3 +211,27 @@ module's binding.
 
 Relevant when this is picked up: this is the blocker for design step B (`std.Result`)
 in docs/result-type-proposal.md.
+
+### Root cause (found with AddressSanitizer)
+
+Compiling the failing program with `-fsanitize=address` points straight at the fault:
+
+```
+#2 ql_mem_get_ptr (aot/runtime.c:200)
+#3 ql_fn14  <- #4 ql_fn15  <- #5 ql_fn126  <- main
+```
+
+An object/table operation is applied to something that is not an object. The library
+namespace machinery assumes **every exported member is a module object**: in
+`__install_library`, each member is fetched and then `__obj_keys(module)` is called on
+it; `__fresh_std` similarly probes each member with `readU64(value, 0)`. Exporting a
+*type constructor* (a function) or a *scalar* therefore dereferences a non-pointer.
+
+Two consequences:
+
+1. `Result(T)` must not be a library-namespace export. It belongs where `Array` and
+   `Object` live: a runtime-provided *type constructor* (that is how `Array(Number)`
+   already works), with the check predicate supplied the same way.
+2. The runtime has a latent robustness defect worth fixing independently: the library
+   plumbing should reject or skip a non-object member instead of crashing.
+
