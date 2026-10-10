@@ -1,10 +1,6 @@
 // Math algorithms expressed in ordinary QLang. The only runtime primitives are
 // the frexp/ldexp binary64 representation mechanisms (std.Number.frexp/ldexp);
 // variadic max/min dispatch and entropy-backed random stay runtime mechanisms.
-let requireNumber = (n, name) -> {
-  if !Number.check(n) { return std.Error.raise("TypeMismatch", name + " expects Number", null); };
-  n;
-};
 let absolute = (n: Number) -> {
   if n == 0 { 0; } else if n < 0 { -n; } else { n; };
 };
@@ -95,8 +91,7 @@ let integerPower = (m, e, b) -> {
   if re < -1075 { return 0; };
   scaleByPowerOfTwo(result[0] + result[1])(re);
 };
-let squareRoot = (n) -> {
-  n = requireNumber(n, "Math.sqrt")?;
+let squareRoot = (n: Number) -> {
   if !(n >= 0) { return std.Error.raise("TypeMismatch", "Math.sqrt expects non-negative Number", null); };
   if n == 0 || !finiteNumber(n) { return n; };
   let parts = normalized(n); let m = parts[0]; let e = parts[1];
@@ -105,10 +100,8 @@ let squareRoot = (n) -> {
   while i < 7 { x = (x + m / x) / 2; i = i + 1; };
   scaleByPowerOfTwo(x)(e / 2);
 };
-let power = (a) -> {
-  a = requireNumber(a, "Math.pow")?;
-  (b) -> {
-    b = requireNumber(b, "Math.pow")?;
+let power = (a: Number) -> {
+  (b: Number) -> {
     if b == 0 || a == 1 { return 1; };
     if a != a || b != b { return nanNumber(); };
     let magnitude = absolute(a);
@@ -222,20 +215,18 @@ let trig = (n, cosine) -> {
 let MathLibrary = {
   PI: 3.141592653589793,
   E: 2.718281828459045,
-  abs: (n: Number) -> absolute(requireNumber(n, "Math.abs")?),
-  trunc: (n: Number) -> truncate(requireNumber(n, "Math.trunc")?),
+  abs: (n: Number) -> absolute(n),
+  trunc: (n: Number) -> truncate(n),
   floor: (n: Number) -> {
-    let checked = requireNumber(n, "Math.floor")?;
-    let t = truncate(checked); if checked < t { t - 1; } else { t; };
+    let t = truncate(n); if n < t { t - 1; } else { t; };
   },
   ceil: (n: Number) -> {
-    let checked = requireNumber(n, "Math.ceil")?;
-    let t = truncate(checked); if checked > t { t + 1; } else { t; };
+    let t = truncate(n); if n > t { t + 1; } else { t; };
   },
-  round: (n: Number) -> roundValue(requireNumber(n, "Math.round")?),
+  round: (n: Number) -> roundValue(n),
   sqrt: squareRoot,
   pow: power,
-  sin: (n: Number) -> trig(requireNumber(n, "Math.sin")?, false),
-  cos: (n: Number) -> trig(requireNumber(n, "Math.cos")?, true)
+  sin: (n: Number) -> trig(n, false),
+  cos: (n: Number) -> trig(n, true)
 };
 export { MathLibrary };
