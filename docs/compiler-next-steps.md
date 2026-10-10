@@ -980,3 +980,38 @@ failed annotation check propagates (the `?` path) instead of being stored, so a
 `Number`-annotated binding is only ever a Number. The union then exists only at
 function boundaries, where it is legitimate (a `Result`-like contract), and an error
 still reaches the caller as a value. Unannotated code keeps contagion unchanged.
+
+### Rust-style errors: good fit, but the lever is turning contagion off
+
+The essence of the Rust model is two things: failure travels in the return value
+(in band), and propagation is explicit (`?`). QLang already has half of it — errors
+are values, `?` exists with exactly that shape (store into the return slot, branch to
+the epilogue), and errors stay inspectable via `.type` / `.cause` / `.trace`.
+
+The actual defect is that "may fail" is currently *the hidden other half of every
+type*: any value may be an Error, so every read/write pays a check (19.5 % of the
+emitted module, measured) and `x: Number` may hold an Error. A Rust-style model makes
+the Error **a type of its own**: a value is either a `T` or a `Result`/Error, with no
+hidden state.
+
+Two things to be clear about:
+
+1. Adding `Result` alone shrinks nothing. The saving comes from **removing contagion**
+   (the 19.5 % plus the "any value may be an Error" premise that blocks
+   specialisation and unboxing). `Result` is what makes removing it ergonomic and
+   *typed*: without it the compiler cannot know that a call may fail.
+2. The costs are at call sites and inside the library: every fallible use needs `?`,
+   errors stop being forgiving (`let a = 1/0; a + 1` becomes a real addition and then
+   a TypeMismatch instead of propagating the division error), and `stdlib/*.ql`
+   relies on contagion throughout, so it needs `?` added throughout — mechanical but
+   ~4700 lines, and on hot paths. A `Result` wrapper can also allocate unless the
+   compiler can keep it unboxed, so its representation has to be designed together
+   with annotation-driven specialisation, not afterwards.
+
+Suggested order: (1) turn contagion off, so only `?` propagates — this alone captures
+the 19.5 % and the honest-type premise; (2) add `std.Result`, written in QLang, as the
+typed shape of a fallible call, recognised by the compiler the same way `Number` is
+(a scope-aware name match, no library special-casing); (3) annotation-driven
+specialisation and unboxing, for which the approved step 1 is the prerequisite;
+(4) migrate the library's internals to `?` — this edits stdlib sources, so it needs
+sign-off first.
