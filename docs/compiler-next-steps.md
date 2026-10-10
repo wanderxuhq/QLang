@@ -819,3 +819,33 @@ fragment into a leaf needs no ABI or linker change.
 
 Do not outline the general (non-numeric) path: it is not cold — string concatenation
 goes through it — so hoisting it out of line would slow string-heavy code.
+
+### The real cost is not the check, it is not knowing the type (measured)
+
+Same statement, differing only in whether the compiler knows the operand types:
+
+| statement | lines |
+|---|---|
+| `z = 1 + 2;` (literals: the compiler emits the numeric path alone) | **21** |
+| `z = y + 1;` (dynamic) | **62** |
+| `z = y + y;` (both dynamic) | **75** |
+| `z = s + s;` (strings, general path) | **75** |
+| `y;` / `z = 1;` | 13 / 2 |
+
+So two thirds of a statement's cost is the price of *not knowing types at compile
+time*, and it is not spent on the 5-line test: it is spent on having to emit **both**
+the specialised numeric path (9 lines) and the general dispatch path (16) plus the
+branches that merge them. The test is cheap; the fact that its outcome is unknown is
+what costs 40 lines.
+
+This reorders the roadmap. The mechanical ideas (leaves, hoisting the frame fetch,
+a fast path for `/` and `%`) recover only the mechanism overhead, about 15-20 lines
+per operator; they cannot remove the duplicate paths. Only knowing the types can, and
+the measured target is 62 -> ~20 for a statement whose operands are proven Numbers.
+
+Narrow first step: **intra-function type inference**, restricted to bindings whose
+initial value is a literal of one type and which are never assigned another (and are
+only combined with that type). It is the same forward flow analysis the
+definite-assignment pass already performs, needs no interprocedural work, and falls
+back to today's dynamic emission whenever it cannot prove a type. Parameters and
+return values (every call site agreeing on a type) are a later step.
