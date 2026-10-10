@@ -1330,11 +1330,15 @@ let Interpreter = () -> {
     if libraryExports != null {
       let modules = libraryExports.value; let names = std.Object.keys(modules); let i = 0;
       while i < names.length {
-        let name = names[i]; let fields = modules[name].value;
+        let name = names[i]; let member = modules[name].value;
         let target = userStd[name];
-        if isError(target) { target = {}; userStd[name] = target; };
-        let keys = std.Object.keys(fields); let j = 0;
-        while j < keys.length { target[keys[j]] = fields[keys[j]]; j = j + 1; };
+        // A member may be any value, not only a module object: a function, a type or a
+        // scalar is installed as-is. Only when the member and the existing target are
+        // both objects are the member's keys merged into the target.
+        if !isError(member) && AnyObject.check(member) == true && !isError(target) && AnyObject.check(target) == true {
+          let keys = std.Object.keys(member); let j = 0;
+          while j < keys.length { target[keys[j]] = member[keys[j]]; j = j + 1; };
+        } else { userStd[name] = member; };
         i = i + 1;
       };
     };
