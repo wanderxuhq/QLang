@@ -11,6 +11,8 @@ let typeBuiltins = { Number: true, String: true, Boolean: true, Null: true, Arra
 // 内建「标量」类型:可解箱(一个机器字即可表示);Array/Object 是引用,另算。
 let typeScalar = { Number: true, String: true, Boolean: true, Null: true };
 let typeUnboxList = [];   // 标量全局在导入方只是拷贝,列表才共享引用
+// 按程序(库/入口/各模块)分开命名空间:同名绑定分布在不同程序里,不能互相污染。
+let typeProgram = 0;
 // 作用域栈用深度索引,不重赋值数组本身 —— 模块全局的重赋值要穿过闭包,代价与风险都高。
 // typeScopes[i] 存名字的类型,typeFnResults[i] 存「已知返回类型的函数绑定」,同深同栈。
 let typeScopes = [];
@@ -157,7 +159,16 @@ let inferExpr = (node) -> {
     while p < node.parameters.length {
       let param = node.parameters[p];
       let ptype = annotationBuiltinName(param.annotation);
-      if ptype != "" { typeScopes[typeDepth - 1][param.name] = ptype; };
+      if ptype != "" {
+        typeScopes[typeDepth - 1][param.name] = ptype;
+        // 参数与注解绑定同一前提:调用点的注解检查保证它只持有该类型,所以同样可解箱。
+        if !isError(typeScalar[ptype]) && isError(typeAssignedNames[typeProgram][param.name]) {
+          param.unboxType = ptype;
+          typeUnboxList[typeUnboxList.length] = param.name;
+        } else {
+          param.unboxType = "";
+        };
+      };
       p = p + 1;
     };
     typeReturnStack[typeReturnDepth] = [];
@@ -248,30 +259,30 @@ let inferStmts = (stmts) -> {
       // 该绑定是否需要运行期的类型槽与检查:只有当存在「右值静态类型未知」的写入时
       // 才需要兜底。否则每一次写入都在编译期可判定,检查不可能失败。
       if declared != "" {
-        s.runtimeTypeFree = isError(typeUnknownWrites[s.name]);
+        s.runtimeTypeFree = isError(typeUnknownWrites[typeProgram][s.name]);
       } else {
         s.runtimeTypeFree = false;
       };
       // 可解箱:内建标量,且每次写入右值静态类型已知(与 runtimeTypeFree 同一前提)。
-      if declared != "" && isError(typeUnknownWrites[s.name]) && !isError(typeScalar[declared]) {
+      if declared != "" && isError(typeUnknownWrites[typeProgram][s.name]) && !isError(typeScalar[declared]) {
         s.unboxType = declared;
         typeUnboxList[typeUnboxList.length] = s.name;
       } else {
         s.unboxType = "";
       };
       // 返回类型已知、且绑定稳定(从未被赋值)的函数:登记它,调用点才能拿到类型。
-      if s.value != null && !isError(s.value.returnType) && s.value.returnType != "" && isError(typeAssignedNames[s.name]) {
+      if s.value != null && !isError(s.value.returnType) && s.value.returnType != "" && isError(typeAssignedNames[typeProgram][s.name]) {
         typeFnResults[typeDepth - 1][s.name] = s.value.returnType;
       };
     } else if t == "Assign" {
       if !isError(s.target.type) && s.target.type == "Identifier" {
-        typeAssignedNames[s.target.name] = true;
+        typeAssignedNames[typeProgram][s.target.name] = true;
         let value = inferExpr(s.value);
         let declared = typeLookup(s.target.name);
         // 只有「右值类型已知且与声明一致」才可能省掉运行期检查。类型未知,或已知
         // 但不一致(此时运行期必须报 TypeCheck),都保留检查。
-        if value == "" || isError(value) { typeUnknownWrites[s.target.name] = true; }
-        else if declared != "" && value != declared { typeUnknownWrites[s.target.name] = true; };
+        if value == "" || isError(value) { typeUnknownWrites[typeProgram][s.target.name] = true; }
+        else if declared != "" && value != declared { typeUnknownWrites[typeProgram][s.target.name] = true; };
         // 写入目标声明的内建类型(供发射器判定重检查是否为死代码)。
         s.declaredType = if isError(typeBuiltins[declared]) { ""; } else { declared; };
         // 有注解的绑定写入时会重新检查,所以它保持自己的类型;推导出来的类型一旦
@@ -334,6 +345,9 @@ let inferStmts = (stmts) -> {
 // 类型,第二遍据此判定哪些绑定可以完全不要运行期的类型槽与检查。错误跨程序累积,
 // 并以返回值交回调用方 —— 不依赖「调用方读到的模块全局」与「模块自己写的」是同一个引用。
 let inferTypes = (stmts) -> {
+  typeProgram = typeProgram + 1;
+  typeUnknownWrites[typeProgram] = {};
+  typeAssignedNames[typeProgram] = {};
   typeScopes[0] = {};
   typeFnResults[0] = {};
   typeDepth = 1;
