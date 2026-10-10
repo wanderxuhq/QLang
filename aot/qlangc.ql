@@ -1602,7 +1602,11 @@ let emitLocatedError = (value, node, callFrame) -> {
 // emitExpr(node) returns an LLVM %ql_value operand (constant or register).
 let emitExpr = (node) -> {
   let value = emitExprInner(node); let kind = node.type;
-  if kind == "Identifier" || kind == "BinaryOp" || kind == "UnaryOp" || kind == "Call" || kind == "Import" || kind == "MemberAccess" || kind == "IndexAccess" {
+  // Contagion is off: only an expression that can *create* an error attaches a
+  // source position. A plain read can only carry one, so an Identifier is not
+  // checked — reading a binding that holds an Error yields that Error as an
+  // ordinary value and it propagates only through `?` or another operation.
+  if kind == "BinaryOp" || kind == "UnaryOp" || kind == "Call" || kind == "Import" || kind == "MemberAccess" || kind == "IndexAccess" {
     return emitLocatedError(value, node, kind == "Call" || kind == "Import");
   };
   value;
