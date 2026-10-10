@@ -9,11 +9,18 @@
 // 才算"就是那个内建类型" —— 否则一律当作未知,不做任何特化。
 let typeBuiltins = { Number: true, String: true, Boolean: true, Null: true, Array: true, Object: true, AnyArray: true, AnyObject: true };
 // 作用域栈用深度索引,不重赋值数组本身 —— 模块全局的重赋值要穿过闭包,代价与风险都高。
+// typeScopes[i] 存名字的类型,typeFnResults[i] 存「已知返回类型的函数绑定」,同深同栈。
 let typeScopes = [];
+let typeFnResults = [];
 let typeDepth = 0;
 let typeErrors = [];
 // 存在「右值静态类型未知」写入的名字:这些绑定的运行期注解检查必须保留。
 let typeUnknownWrites = {};
+// 被赋值过的名字:绑定不再稳定,函数返回类型这类推导结论不能落在它上面。
+let typeAssignedNames = {};
+// 正在分析的函数体所收集的 return 类型(嵌套函数各占一层)。
+let typeReturnStack = [];
+let typeReturnDepth = 0;
 
 let typeReport = (node, message) -> {
   let point = node.location;
@@ -30,8 +37,17 @@ let typeLookup = (name) -> {
   if isError(typeBuiltins[name]) { return ""; };
   name;
 };
-let typePush = () -> { typeScopes[typeDepth] = {}; typeDepth = typeDepth + 1; null; };
+let typePush = () -> { typeScopes[typeDepth] = {}; typeFnResults[typeDepth] = {}; typeDepth = typeDepth + 1; null; };
 let typePop = () -> { typeDepth = typeDepth - 1; null; };
+// 词法查找:这个名字是不是「返回类型已知的函数绑定」。
+let typeFnLookup = (name) -> {
+  let i = typeDepth - 1;
+  while i >= 0 {
+    if !isError(typeFnResults[i][name]) { return typeFnResults[i][name]; };
+    i = i - 1;
+  };
+  "";
+};
 let tagType = (node, name) -> { node.staticType = name; name; };
 
 // 该名字是否真的被某个词法作用域绑定。注意不能用 typeLookup 判断:它对未绑定的
@@ -72,7 +88,23 @@ let inferExpr = (node) -> {
       if ptype != "" { typeScopes[typeDepth - 1][param.name] = ptype; };
       p = p + 1;
     };
-    inferStmts(node.body.statements);
+    typeReturnStack[typeReturnDepth] = [];
+    typeReturnDepth = typeReturnDepth + 1;
+    let tail = inferStmts(node.body.statements);
+    let returns = typeReturnStack[typeReturnDepth - 1];
+    typeReturnDepth = typeReturnDepth - 1;
+    // 返回类型 = 尾表达式类型 与 所有 return 的类型 的交集:只要有一处未知或彼此
+    // 不一致,就记未知(宁可不特化,也不猜)。
+    let result = if isError(tail) { ""; } else { tail; };
+    let r = 0;
+    while r < returns.length {
+      let one = returns[r];
+      if one == "" { result = ""; }
+      else if result == "" { result = one; }
+      else if result != one { result = ""; };
+      r = r + 1;
+    };
+    node.returnType = result;
     typePop();
     return tagType(node, "Function");
   };
@@ -93,10 +125,21 @@ let inferExpr = (node) -> {
     if op == "+" && (left == "String" || right == "String") { return tagType(node, "String"); };
     return tagType(node, "");
   };
+  if t == "Call" {
+    // 调用结果的类型:callee 是标识符,且词法解析到一个「返回类型已知、绑定稳定」的函数。
+    if !isError(node.callee.type) && node.callee.type == "Identifier" {
+      let rt = typeFnLookup(node.callee.name);
+      if rt != "" { return tagType(node, rt); };
+    };
+    return tagType(node, "");
+  };
   tagType(node, "");
 };
 
+// 返回本块的「尾值类型」。尾值的判定与发射器一致:表达式语句产生值,If 产生值但类型
+// 这里不推导(记未知),Let/Assign/While/Return/Export/Import 不产生值(尾值保持不变)。
 let inferStmts = (stmts) -> {
+  let tail = "";
   let i = 0;
   while i < stmts.length {
     let s = stmts[i];
@@ -117,8 +160,13 @@ let inferStmts = (stmts) -> {
       } else {
         s.runtimeTypeFree = false;
       };
+      // 返回类型已知、且绑定稳定(从未被赋值)的函数:登记它,调用点才能拿到类型。
+      if s.value != null && !isError(s.value.returnType) && s.value.returnType != "" && isError(typeAssignedNames[s.name]) {
+        typeFnResults[typeDepth - 1][s.name] = s.value.returnType;
+      };
     } else if t == "Assign" {
       if !isError(s.target.type) && s.target.type == "Identifier" {
+        typeAssignedNames[s.target.name] = true;
         let value = inferExpr(s.value);
         let declared = typeLookup(s.target.name);
         // 只有「右值类型已知且与声明一致」才可能省掉运行期检查。类型未知,或已知
@@ -146,15 +194,26 @@ let inferStmts = (stmts) -> {
         b = b + 1;
       };
       if s.elseBody != null { typePush(); inferStmts(s.elseBody.statements); typePop(); };
+      tail = "";
     } else if t == "While" {
       inferExpr(s.condition);
       typePush(); inferStmts(s.body.statements); typePop();
-    } else if t == "Return" { if s.value != null { inferExpr(s.value); }; }
-    else if t == "Export" { inferExpr(s.value); }
-    else if t == "Import" { };
+    } else if t == "Return" {
+      let rt = "";
+      if s.value != null { rt = inferExpr(s.value); if isError(rt) { rt = ""; }; };
+      if typeReturnDepth > 0 {
+        let sink = typeReturnStack[typeReturnDepth - 1];
+        sink[sink.length] = rt;
+      };
+    } else if t == "Export" { inferExpr(s.value); }
+    else if t == "Import" { }
+    else {
+      tail = inferExpr(s);
+      if isError(tail) { tail = ""; };
+    };
     i = i + 1;
   };
-  null;
+  tail;
 };
 
 // 对一个程序(入口 / import 的模块 / 标准库)跑两遍:第一遍得出每个写入右值的静态
@@ -162,10 +221,14 @@ let inferStmts = (stmts) -> {
 // 并以返回值交回调用方 —— 不依赖「调用方读到的模块全局」与「模块自己写的」是同一个引用。
 let inferTypes = (stmts) -> {
   typeScopes[0] = {};
+  typeFnResults[0] = {};
   typeDepth = 1;
+  typeReturnDepth = 0;
   inferStmts(stmts);
   typeScopes[0] = {};
+  typeFnResults[0] = {};
   typeDepth = 1;
+  typeReturnDepth = 0;
   inferStmts(stmts);
   typeErrors;
 };
