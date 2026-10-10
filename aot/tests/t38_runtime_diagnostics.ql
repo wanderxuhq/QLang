@@ -19,11 +19,11 @@ let recursive = recur(3);
 check(recursive.line == 7 && recursive.col == 14, "recursive error retains origin");
 let chained = direct + 1;
 check(chained.line == 20 && chained.col == 15 && chained.cause.line == 3, "cause keeps its own origin");
-let bad: Number = "x";
-check(bad.type == "TypeCheck" && bad.line == 22 && bad.col == 1, "declaration annotation source");
-let reassigned: Number = 1;
-reassigned = "x";
-check(reassigned.type == "TypeCheck" && reassigned.line == 25 && reassigned.col == 1, "assignment annotation source");
+let badDeclaration = () -> { let bad: Number = "x"; }; let bad = badDeclaration();
+check(bad.type == "TypeCheck" && bad.line == 22 && bad.col == 30, "declaration annotation source");
+let reassigned: Number = 1; let reassignBad = () -> { reassigned = "x"; };
+let reassignError = reassignBad(); check(reassignError.type == "TypeCheck" && reassignError.line == 24, "assignment annotation source");
+//
 // An uninitialized read is now a frontend error, not a runtime value; the
 // frontend diagnostic fixture covers it. Lines kept so later source positions
 // below stay stable.

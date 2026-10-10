@@ -1015,3 +1015,35 @@ typed shape of a fallible call, recognised by the compiler the same way `Number`
 specialisation and unboxing, for which the approved step 1 is the prerequisite;
 (4) migrate the library's internals to `?` — this edits stdlib sources, so it needs
 sign-off first.
+
+### Measured: what turning contagion off costs (the migration list)
+
+Experiment: make `emitLocatedError` a no-op (contagion off) and run the suites.
+Volume, as before: a module drops from 247,351 to 199,072 lines (-19.5 %).
+
+Behaviour: the position-sensitive suites are what break, and they break because the
+located-error machinery **is** the position-attachment mechanism:
+
+- `t38_runtime_diagnostics`: 8 checks fail — division coordinates, call/recursive/cause
+  origins, "trace unavailable without changing Error".
+- `t40_diagnostic_context`: 5 checks fail — native boundary origin, context restore,
+  no-context-leak, partial native source.
+
+So removing contagion is not just "delete the checks": error positions and traces must
+be attached somewhere else — logically at the **creation** sites (the operations the
+compiler emits: operators, member access, index, calls), where the compiler knows the
+source position and can pass it, instead of at every *use*. That is the design piece
+step 2 needs, and it is what the 19.5 % buys back.
+
+Also learned the hard way while doing step 1:
+
+- A truncated `grep | head` earlier led to the wrong claim that only t13 has
+  annotations; there are **21 files** with annotations (including
+  `bootstrapped/parser.ql` and `interpreter.ql`). Most are passing annotations and are
+  unaffected, but the failing-annotation fixtures are not: `t38` had to be restructured
+  (the failing declaration now lives in a lambda and the propagated error is asserted
+  through its result), and `t13_bindings.ql` — unregistered, 183 lines, 33 annotations —
+  still needs the same treatment.
+- Removing the `__err_at` wrapper from the annotation check also removed the source
+  position from the error; keeping it and propagating afterwards is the correct shape.
+- The reported column for such an error is 1-based at the declaration's `let` keyword.
