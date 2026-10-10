@@ -7,6 +7,7 @@ import ../bootstrapped/ast.ql;
 import ../bootstrapped/parser.ql;
 import ../bootstrapped/modules.ql;
 import ./lifetime.ql;
+import ./types.ql;
 import ./value_abi.ql;
 import ../bootstrapped/library.ql;
 
@@ -551,7 +552,8 @@ let emitBinaryOp = (node) -> {
     emitCoalesce(node);
   } else {
     let op = node.operator;
-    let bothNum = isNumberOperand(node.left) && isNumberOperand(node.right);
+    // 类型信息来自生成代码之前的那一遍推导(节点上的 staticType)。
+    let bothNum = isStaticNumber(node.left) && isStaticNumber(node.right);
     let isDivMod = op == "/" || op == "%";
     if bothNum && !isDivMod {
       let L = emitExpr(node.left);
@@ -684,44 +686,10 @@ let lookupSlotFrom = (name, scope, depth, deferred) -> {
 let lookupSlot = (name) -> lookupSlotFrom(name, curScope, 0, false);
 // R9/R1:当前函数入口 env 寄存器名(main = 全局帧寄存器);不硬编码 "env0" 字面量。
 let curEnv = "";
-// ---- 类型信息(注解)→ 编译期特化 -------------------------------------------------
-// 绑定一旦被注解为内建 Number,前端就保证它只持有 Number(检查失败即传播,重新赋值
-// 会再检查),因此它的运算可以跳过运行期 tag 测试与通用派发,直接走数值路径。
-// 前提:注解就是内建 Number —— 名字被用户声明/赋值遮蔽时不做特化(保守且健全)。
-let shadowedGlobals = {};
-let collectShadowed = (node) -> {
-  if isError(node) || node == null { return null; };
-  if AnyArray.check(node) { let i = 0; while i < node.length { collectShadowed(node[i]); i = i + 1; }; return null; };
-  if !AnyObject.check(node) { return null; };
-  if (node.type == "Let" || node.type == "Assign") && !isError(node.name) { shadowedGlobals[node.name] = true; };
-  if node.type == "Assign" && !isError(node.target.type) && node.target.type == "Identifier" { shadowedGlobals[node.target.name] = true; };
-  if node.type == "Function" && !isError(node.parameters) { let p = 0; while p < node.parameters.length { shadowedGlobals[node.parameters[p].name] = true; p = p + 1; }; };
-  let keys = std.Object.keys(node);
-  let k = 0;
-  while k < keys.length { collectShadowed(node[keys[k]]); k = k + 1; };
-  null;
-};
-let isBuiltinNumberAnnotation = (annotation) -> {
-  if isError(annotation) || annotation == null { return false; };
-  if isError(annotation.type) || annotation.type != "Identifier" { return false; };
-  if isError(annotation.name) || annotation.name != "Number" { return false; };
-  isError(shadowedGlobals["Number"]);
-};
-let isNumberTyped = (name) -> {
-  let hit = lookupSlot(name);
-  if hit == null || hit.depth != 0 { return false; };
-  let scope = hit.scope;
-  if isError(scope.numberTyped) { return false; };
-  let flag = scope.numberTyped[name];
-  !isError(flag) && flag == true;
-};
-// 数字字面量,或「已知只持有 Number」的绑定读取。
-let isNumberOperand = (node) -> {
-  if isError(node) || node == null { return false; };
-  if node.type == "Number" { return true; };
-  if node.type == "Identifier" && !isError(node.name) { return isNumberTyped(node.name); };
-  false;
-};
+// ---- 编译期类型信息 ---------------------------------------------------------------
+// 生成代码之前先在 AST 上收集类型信息(aot/types.ql),发射器只读节点上的标注:
+// staticType(表达式静态类型)、annotationType(Let 注解所指的内建类型)、
+// declaredType(Assign 写入目标声明的内建类型)。
 // 当前正在 emit 的基本块标签(短路 phi 需记录「emit A + truthy 所在块」作前驱;main 入口、
 // if/while 各块、短路各块处都要更新 —— 否则短路出现在非 entry 块时 phi 前驱写错)。
 let curLbl = "";
@@ -852,7 +820,11 @@ let emitBindingStore = (off, value, ty, text) -> {
 let emitLetStmt = (node) -> {
   let ty = "null"; let text = "null";
   let annotated = !isError(node.annotation) && node.annotation != null;
-  if annotated { ty = emitExpr(node.annotation); text = internString(annotationText(node.annotation)); };
+  // 没被编译期分析标注过的节点(例如受信任的运行时源码)不做任何猜测。
+  if isError(node.annotationType) { node.annotationType = ""; };
+  // 编译期已算出右值类型:与注解所指的内建类型一致时,这次检查不可能失败。
+  let deadCheck = !inRuntime && checkIsDead(node.value, node.annotationType);
+  if annotated && !deadCheck { ty = emitExpr(node.annotation); text = internString(annotationText(node.annotation)); };
   let value = "null";
   if node.value != null {
     if node.value.type == "Function" { value = emitFunction(node.value, node.name); }
@@ -860,7 +832,7 @@ let emitLetStmt = (node) -> {
     // A typed binding holds only its type. The check's value still goes through
     // __err_at first, so a failing check carries the declaration's source position,
     // and only then propagates out of the current function (or exits at top level).
-    if annotated {
+    if annotated && !deadCheck {
       value = emitLocatedError(emitCallRegs("__check_binding", [value, ty, text]), node, false);
       emitPropagateError(value);
     };
@@ -873,11 +845,6 @@ let emitLetStmt = (node) -> {
   if annotated {
     if isError(curScope.annotated) { curScope.annotated = {}; };
     curScope.annotated[node.name] = true;
-    // 类型信息:内建 Number 注解 → 该绑定只持有 Number,它的运算可走数值专用路径。
-    if isBuiltinNumberAnnotation(node.annotation) {
-      if isError(curScope.numberTyped) { curScope.numberTyped = {}; };
-      curScope.numberTyped[node.name] = true;
-    };
   };
   let off = emitBindingPtr({ depth: 0, slot: slot });
   if annotated && node.value == null {
@@ -898,7 +865,7 @@ let emitLetStmt = (node) -> {
   } else { emitBindingStore(off, value, ty, text); };
   slot;
 };
-let emitStoreByName = (name, expression, target) -> {
+let emitStoreByName = (name, expression, target, declaredType) -> {
   let hit = lookupSlot(name);
   if hit == null { addCompileError(target, "assignment to undeclared name: " + name); return null; };
   let value = emitExpr(expression);
@@ -920,6 +887,9 @@ let emitStoreByName = (name, expression, target) -> {
   // Unannotated same-body target: the slot's type/text are zero, so the plain
   // store is exactly what the diamond's `plain` branch would do.
   if inRuntime || unannotated { line("  store %ql_value " + value + ", ptr " + off); return null; };
+  // 编译期类型信息(来自 Assign 节点的标注):右值静态类型已等于声明的内建类型
+  // ⇒ 重检查不可能失败,走 plain。
+  if checkIsDead(expression, declaredType) { line("  store %ql_value " + value + ", ptr " + off); return null; };
   let ap = temp(); let ty = temp(); let has = temp();
   line("  " + ap + " = getelementptr i8, ptr " + off + ", i64 16");
   line("  " + ty + " = load %ql_value, ptr " + ap);
@@ -971,7 +941,7 @@ let emitAssignStmt = (node) -> {
     };
     if !inRuntime { emitPropagateError(emitLocatedError(result, node.target, false)); };
   } else {
-    emitStoreByName(node.target.name, node.value, node.target);
+    emitStoreByName(node.target.name, node.value, node.target, if isError(node.declaredType) { ""; } else { node.declaredType });
   };
 };
 
@@ -1773,11 +1743,12 @@ let main = (args) -> {
   if isError(path) { std.Error.raise("CompileError", path.message, null)?; };
   let root = loadModuleProgram(source, path, 0)?;
   let userProgram = root.program;
-  // 类型信息特化的健全性前提:内建 Number 未被用户遮蔽。
-  collectShadowed(userProgram.statements);
-  let shadowPaths = std.Object.keys(moduleCache); let shadowIndex = 0;
-  while shadowIndex < shadowPaths.length { collectShadowed(moduleCache[shadowPaths[shadowIndex]].program.statements); shadowIndex = shadowIndex + 1; };
+  // 类型信息在生成代码之前算好:用户程序与所有已加载模块(import 的依赖)。
+  inferTypes(userProgram.statements);
+  let typePaths = std.Object.keys(moduleCache); let typeIndex = 0;
+  while typeIndex < typePaths.length { inferTypes(moduleCache[typePaths[typeIndex]].program.statements); typeIndex = typeIndex + 1; };
   let libraryProgram = parseStandardLibrary()?;
+  inferTypes(libraryProgram.statements);
   let runtimeParser = Parser(Lexer(runtimeSource).tokenize());
   runtimeParser.setSource(runtimeSource);
   runtimeParser.setSourcePath(if args[0] == "--emit-llvm" || extensionMode { args[2]; } else { "<runtime>"; });
@@ -1885,6 +1856,9 @@ let main = (args) -> {
     mainAt = mainAt + helper.length;
   };
   // Never turn unsupported syntax into a successful, silently incorrect binary.
+  // 编译期分析报出的静态类型错误与其他编译错误一并让编译失败。
+  let typeErrIndex = 0;
+  while typeErrIndex < typeErrors.length { compileErrors[compileErrors.length] = typeErrors[typeErrIndex]; typeErrIndex = typeErrIndex + 1; };
   if compileErrors.length > 0 {
     std.Error.raise("CompileError", compileErrors[0], null)?;
   };
