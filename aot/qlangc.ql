@@ -1744,9 +1744,7 @@ let main = (args) -> {
   let root = loadModuleProgram(source, path, 0)?;
   let userProgram = root.program;
   // 类型信息在生成代码之前算好:用户程序与所有已加载模块(import 的依赖)。
-  inferTypes(userProgram.statements);
-  let typePaths = std.Object.keys(moduleCache); let typeIndex = 0;
-  while typeIndex < typePaths.length { inferTypes(moduleCache[typePaths[typeIndex]].program.statements); typeIndex = typeIndex + 1; };
+  let typeErrs = inferTypes(userProgram.statements);
   let libraryProgram = parseStandardLibrary()?;
   inferTypes(libraryProgram.statements);
   let runtimeParser = Parser(Lexer(runtimeSource).tokenize());
@@ -1857,8 +1855,10 @@ let main = (args) -> {
   };
   // Never turn unsupported syntax into a successful, silently incorrect binary.
   // 编译期分析报出的静态类型错误与其他编译错误一并让编译失败。
-  let typeErrIndex = 0;
-  while typeErrIndex < typeErrors.length { compileErrors[compileErrors.length] = typeErrors[typeErrIndex]; typeErrIndex = typeErrIndex + 1; };
+  if !isError(typeErrs) {
+    let typeErrIndex = 0;
+    while typeErrIndex < typeErrs.length { compileErrors[compileErrors.length] = typeErrs[typeErrIndex]; typeErrIndex = typeErrIndex + 1; };
+  };
   if compileErrors.length > 0 {
     std.Error.raise("CompileError", compileErrors[0], null)?;
   };

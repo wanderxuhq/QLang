@@ -8,7 +8,9 @@
 // Boolean/Null/Array/Object/AnyArray/AnyObject)只有在没有任何词法绑定遮蔽它时,
 // 才算"就是那个内建类型" —— 否则一律当作未知,不做任何特化。
 let typeBuiltins = { Number: true, String: true, Boolean: true, Null: true, Array: true, Object: true, AnyArray: true, AnyObject: true };
+// 作用域栈用深度索引,不重赋值数组本身 —— 模块全局的重赋值要穿过闭包,代价与风险都高。
 let typeScopes = [];
+let typeDepth = 0;
 let typeErrors = [];
 
 let typeReport = (node, message) -> {
@@ -18,7 +20,7 @@ let typeReport = (node, message) -> {
   null;
 };
 let typeLookup = (name) -> {
-  let i = typeScopes.length - 1;
+  let i = typeDepth - 1;
   while i >= 0 {
     if !isError(typeScopes[i][name]) { return typeScopes[i][name]; };
     i = i - 1;
@@ -26,16 +28,26 @@ let typeLookup = (name) -> {
   if isError(typeBuiltins[name]) { return ""; };
   name;
 };
-let typePush = () -> { typeScopes[typeScopes.length] = {}; };
-let typePop = () -> { typeScopes = typeScopes.slice(0, typeScopes.length - 1); };
+let typePush = () -> { typeScopes[typeDepth] = {}; typeDepth = typeDepth + 1; null; };
+let typePop = () -> { typeDepth = typeDepth - 1; null; };
 let tagType = (node, name) -> { node.staticType = name; name; };
 
+// 该名字是否真的被某个词法作用域绑定。注意不能用 typeLookup 判断:它对未绑定的
+// 内建名会回退成"返回名字本身",无法区分"用户绑定"和"内建回退"。
+let typeBound = (name) -> {
+  let i = typeDepth - 1;
+  while i >= 0 {
+    if !isError(typeScopes[i][name]) { return true; };
+    i = i - 1;
+  };
+  false;
+};
 // 注解所指的内建类型;不是内建(或被遮蔽、或是组合类型表达式)就是 ""。
 let inferAnnotationType = (node) -> {
   if isError(node.annotation) || node.annotation == null { return ""; };
   let a = node.annotation;
   if isError(a.type) || a.type != "Identifier" { return ""; };
-  if !isError(typeLookup(a.name)) { return ""; };
+  if typeBound(a.name) { return ""; };
   if isError(typeBuiltins[a.name]) { return ""; };
   a.name;
 };
@@ -126,11 +138,13 @@ let inferStmts = (stmts) -> {
   null;
 };
 
-// 对一个程序(入口 / import 的模块 / 标准库)跑一遍;错误跨程序累积。
+// 对一个程序(入口 / import 的模块 / 标准库)跑一遍;错误跨程序累积,并以返回值
+// 交回调用方 —— 不依赖「调用方读到的模块全局」与「模块自己写的」是同一个引用。
 let inferTypes = (stmts) -> {
-  typeScopes = [{}];
+  typeScopes[0] = {};
+  typeDepth = 1;
   inferStmts(stmts);
-  null;
+  typeErrors;
 };
 
 let isStaticNumber = (node) -> !isError(node.staticType) && node.staticType == "Number";
