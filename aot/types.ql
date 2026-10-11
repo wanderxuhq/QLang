@@ -296,6 +296,14 @@ let inferExpr = (node) -> {
     // 先分析对象,std.<模块> 才会带上模块名。
     inferExpr(node.object);
     let obj = node.object;
+    // 接收者静态类型是 Array/String 时,length 是全的 Number 成员:任何输入都返回一个
+    // 长度数字,绝不返回 Error。所以这条声明可靠(与 check 谓词同一性质),不依赖调用点
+    // 检查。Object 上的 length 可能是用户字段(任意值),故不声明。
+    let recvType = obj.staticType;
+    if !isError(recvType) && node.field == "length" && (recvType == "Array" || recvType == "String") {
+      tagType(node, "Number");
+      return tagRep(node, "");
+    };
     // 内建类型名上的运行期谓词:Number.check / String.check …… 返回 Boolean。
     if !isError(obj.type) && obj.type == "Identifier" && !typeBound(obj.name) && !isError(typeBuiltins[obj.name]) {
       let pred = typeRuntimePredicates[obj.name + "." + node.field];
