@@ -1771,6 +1771,13 @@ let main = (args) -> {
   runtimeParser.setSourcePath(if args[0] == "--emit-llvm" || extensionMode { args[2]; } else { "<runtime>"; });
   let program = runtimeParser.parse();
   if program.errors.length > 0 { return std.Error.raise("CompileError", "runtime: " + program.errors[0], null); };
+  // 运行期程序也走一遍分析:它的绑定与成员签名要能推导出来,库/用户才用得上。
+  // 它自己的静态类型错误不计入面向用户的诊断(底层代码 + 分析不认识宿主原语,现在多半
+  // 是误报),但条数要报出来,不悄悄丢掉 —— 那是「让运行期干净通过分析」的工作清单。
+  let runtimeErrBase = typeErrors.length;
+  inferTypes(program.statements);
+  let runtimeErrCount = typeErrors.length - runtimeErrBase;
+  while typeErrors.length > runtimeErrBase { typeErrors.remove(typeErrors.length - 1); };
   let r = 0;
   while r < program.statements.length {
     let stmt = program.statements[r];
@@ -1830,6 +1837,8 @@ let main = (args) -> {
   line("; typeRep unknown: binds=" + std.String.toString(uB) + " params=" + std.String.toString(uP));
   line("; typeRep unknown binds[lib]: " + uB1);
   line("; typeRep unknown params[lib]: " + uP1);
+  // 运行期那一遍分析报出的静态错误条数(已从用户诊断中移除,这里只报数)。
+  line("; typeRep runtime: analysisErrors=" + std.String.toString(runtimeErrCount));
   coldHelperAt = out.length;
   if extensionMode { mainAt = out.length; line("define %ql_value @qlang_extension_init_v1(ptr %host_env) {"); }
   else { mainAt = out.length; line("define i32 @main(i32 %argc, ptr %argv) {"); };
