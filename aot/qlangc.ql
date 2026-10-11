@@ -1791,49 +1791,66 @@ let main = (args) -> {
   // 装箱的一侧按静态类型分层,才能分清「根本不是 Number」和「是 Number 但操作数不裸」。
   // 只进注释,不进代码。
   let repAll = typeRepReport();
+  let uBinds = typeBindsUnknown();
+  let uParams = typeParamsUnknown();
+  let repCount = typeRepPrograms();
+  // 逐程序分开报:程序 1 = 标准库,2 = 入口,中间的按加载顺序是各 import 模块,
+  // 最后一个 = 运行期。运行期是个很大的底层程序,不分开的话它的未知读会把库/入口
+  // 那批真正能解箱的燃料数淹掉。
+  let repPaths = std.Object.keys(moduleCache);
   let repIdx = 1;
   let rLit = 0; let rRead = 0; let rArith = 0; let rCmp = 0; let rNot = 0;
   let rReadNum = 0; let rReadStr = 0; let rReadUnk = 0;
   let rArithNum = 0; let rCmpNum = 0; let rStr = 0; let rBinUnk = 0;
-  while repIdx <= typeRepPrograms() {
+  let uB = 0; let uP = 0; let uB1 = ""; let uP1 = "";
+  while repIdx <= repCount {
     let bucket = repAll[repIdx];
+    let vLit = 0; let vRead = 0; let vArith = 0; let vCmp = 0; let vNot = 0;
+    let vReadNum = 0; let vReadStr = 0; let vReadUnk = 0;
+    let vArithNum = 0; let vCmpNum = 0; let vStr = 0; let vBinUnk = 0;
     if !isError(bucket) {
-      let v1 = bucket["Number/Number/Number"]; if !isError(v1) { rLit = rLit + v1; };
-      let v2 = bucket["Identifier/Number/Number"]; if !isError(v2) { rRead = rRead + v2; };
-      let v3 = bucket["BinaryOp/Number/Number"]; if !isError(v3) { rArith = rArith + v3; };
-      let v4 = bucket["BinaryOp/Boolean/Boolean"]; if !isError(v4) { rCmp = rCmp + v4; };
-      let v5 = bucket["UnaryOp/Boolean/Boolean"]; if !isError(v5) { rNot = rNot + v5; };
-      let u1 = bucket["Identifier/Number/boxed"]; if !isError(u1) { rReadNum = rReadNum + u1; };
-      let u2 = bucket["Identifier/String/boxed"]; if !isError(u2) { rReadStr = rReadStr + u2; };
-      let u3 = bucket["Identifier//boxed"]; if !isError(u3) { rReadUnk = rReadUnk + u3; };
-      let u4 = bucket["BinaryOp/Number/boxed"]; if !isError(u4) { rArithNum = rArithNum + u4; };
-      let u5 = bucket["BinaryOp/Boolean/boxed"]; if !isError(u5) { rCmpNum = rCmpNum + u5; };
-      let u6 = bucket["BinaryOp/String/boxed"]; if !isError(u6) { rStr = rStr + u6; };
-      let u7 = bucket["BinaryOp//boxed"]; if !isError(u7) { rBinUnk = rBinUnk + u7; };
+      let b1 = bucket["Number/Number/Number"]; if !isError(b1) { vLit = b1; };
+      let b2 = bucket["Identifier/Number/Number"]; if !isError(b2) { vRead = b2; };
+      let b3 = bucket["BinaryOp/Number/Number"]; if !isError(b3) { vArith = b3; };
+      let b4 = bucket["BinaryOp/Boolean/Boolean"]; if !isError(b4) { vCmp = b4; };
+      let b5 = bucket["UnaryOp/Boolean/Boolean"]; if !isError(b5) { vNot = b5; };
+      let b6 = bucket["Identifier/Number/boxed"]; if !isError(b6) { vReadNum = b6; };
+      let b7 = bucket["Identifier/String/boxed"]; if !isError(b7) { vReadStr = b7; };
+      let b8 = bucket["Identifier//boxed"]; if !isError(b8) { vReadUnk = b8; };
+      let b9 = bucket["BinaryOp/Number/boxed"]; if !isError(b9) { vArithNum = b9; };
+      let b10 = bucket["BinaryOp/Boolean/boxed"]; if !isError(b10) { vCmpNum = b10; };
+      let b11 = bucket["BinaryOp/String/boxed"]; if !isError(b11) { vStr = b11; };
+      let b12 = bucket["BinaryOp//boxed"]; if !isError(b12) { vBinUnk = b12; };
     };
+    rLit = rLit + vLit; rRead = rRead + vRead; rArith = rArith + vArith; rCmp = rCmp + vCmp; rNot = rNot + vNot;
+    rReadNum = rReadNum + vReadNum; rReadStr = rReadStr + vReadStr; rReadUnk = rReadUnk + vReadUnk;
+    rArithNum = rArithNum + vArithNum; rCmpNum = rCmpNum + vCmpNum; rStr = rStr + vStr; rBinUnk = rBinUnk + vBinUnk;
+    let vB = 0; let vP = 0;
+    let lb = uBinds[repIdx];
+    if !isError(lb) {
+      vB = lb.length; uB = uB + vB;
+      if repIdx == 1 { let uJ = 0; while uJ < lb.length { uB1 = uB1 + lb[uJ] + " "; uJ = uJ + 1; }; };
+    };
+    let lp = uParams[repIdx];
+    if !isError(lp) {
+      vP = lp.length; uP = uP + vP;
+      if repIdx == 1 { let uK = 0; while uK < lp.length { uP1 = uP1 + lp[uK] + " "; uK = uK + 1; }; };
+    };
+    let pName = "";
+    if repIdx == 1 { pName = "library"; }
+    else if repIdx == 2 { pName = "entry"; }
+    else if repIdx == repCount { pName = "runtime"; }
+    else {
+      let mi = repIdx - 3;
+      if mi >= 0 && mi < repPaths.length { pName = "module:" + repPaths[mi]; }
+      else { pName = "program" + std.String.toString(repIdx); };
+    };
+    line("; typeRep p" + std.String.toString(repIdx) + "[" + pName + "] raw lit=" + std.String.toString(vLit) + " read=" + std.String.toString(vRead) + " arith=" + std.String.toString(vArith) + " cmp=" + std.String.toString(vCmp) + " not=" + std.String.toString(vNot) + " | boxed reads num=" + std.String.toString(vReadNum) + " str=" + std.String.toString(vReadStr) + " unk=" + std.String.toString(vReadUnk) + " | boxed binops num=" + std.String.toString(vArithNum) + " cmp=" + std.String.toString(vCmpNum) + " str=" + std.String.toString(vStr) + " unk=" + std.String.toString(vBinUnk) + " | unknown binds=" + std.String.toString(vB) + " params=" + std.String.toString(vP));
     repIdx = repIdx + 1;
   };
   line("; typeRep raw: lit=" + std.String.toString(rLit) + " read=" + std.String.toString(rRead) + " arith=" + std.String.toString(rArith) + " cmp=" + std.String.toString(rCmp) + " not=" + std.String.toString(rNot));
   line("; typeRep boxed reads: num=" + std.String.toString(rReadNum) + " str=" + std.String.toString(rReadStr) + " unk=" + std.String.toString(rReadUnk));
   line("; typeRep boxed binops: num=" + std.String.toString(rArithNum) + " cmp=" + std.String.toString(rCmpNum) + " str=" + std.String.toString(rStr) + " unk=" + std.String.toString(rBinUnk));
-  // 补类型的工作清单:程序 1 是标准库(要完善的正是它),程序 2 是入口。
-  let uBinds = typeBindsUnknown();
-  let uParams = typeParamsUnknown();
-  let uB = 0; let uP = 0; let uB1 = ""; let uP1 = "";
-  let uIdx = 1;
-  while uIdx <= typeRepPrograms() {
-    let lb = uBinds[uIdx];
-    if !isError(lb) {
-      uB = uB + lb.length;
-      if uIdx == 1 { let uJ = 0; while uJ < lb.length { uB1 = uB1 + lb[uJ] + " "; uJ = uJ + 1; }; };
-    };
-    let lp = uParams[uIdx];
-    if !isError(lp) {
-      uP = uP + lp.length;
-      if uIdx == 1 { let uK = 0; while uK < lp.length { uP1 = uP1 + lp[uK] + " "; uK = uK + 1; }; };
-    };
-    uIdx = uIdx + 1;
-  };
   line("; typeRep unknown: binds=" + std.String.toString(uB) + " params=" + std.String.toString(uP));
   line("; typeRep unknown binds[lib]: " + uB1);
   line("; typeRep unknown params[lib]: " + uP1);
