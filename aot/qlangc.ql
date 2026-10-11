@@ -1809,6 +1809,27 @@ let main = (args) -> {
   line("; typeRep raw: lit=" + std.String.toString(rLit) + " read=" + std.String.toString(rRead) + " arith=" + std.String.toString(rArith) + " cmp=" + std.String.toString(rCmp) + " not=" + std.String.toString(rNot));
   line("; typeRep boxed reads: num=" + std.String.toString(rReadNum) + " str=" + std.String.toString(rReadStr) + " unk=" + std.String.toString(rReadUnk));
   line("; typeRep boxed binops: num=" + std.String.toString(rArithNum) + " cmp=" + std.String.toString(rCmpNum) + " str=" + std.String.toString(rStr) + " unk=" + std.String.toString(rBinUnk));
+  // 补类型的工作清单:程序 1 是标准库(要完善的正是它),程序 2 是入口。
+  let uBinds = typeBindsUnknown();
+  let uParams = typeParamsUnknown();
+  let uB = 0; let uP = 0; let uB1 = ""; let uP1 = "";
+  let uIdx = 1;
+  while uIdx <= typeRepPrograms() {
+    let lb = uBinds[uIdx];
+    if !isError(lb) {
+      uB = uB + lb.length;
+      if uIdx == 1 { let uJ = 0; while uJ < lb.length { uB1 = uB1 + lb[uJ] + " "; uJ = uJ + 1; }; };
+    };
+    let lp = uParams[uIdx];
+    if !isError(lp) {
+      uP = uP + lp.length;
+      if uIdx == 1 { let uK = 0; while uK < lp.length { uP1 = uP1 + lp[uK] + " "; uK = uK + 1; }; };
+    };
+    uIdx = uIdx + 1;
+  };
+  line("; typeRep unknown: binds=" + std.String.toString(uB) + " params=" + std.String.toString(uP));
+  line("; typeRep unknown binds[lib]: " + uB1);
+  line("; typeRep unknown params[lib]: " + uP1);
   coldHelperAt = out.length;
   if extensionMode { mainAt = out.length; line("define %ql_value @qlang_extension_init_v1(ptr %host_env) {"); }
   else { mainAt = out.length; line("define i32 @main(i32 %argc, ptr %argv) {"); };

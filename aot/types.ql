@@ -24,6 +24,17 @@ let typeErrors = [];
 let typeRepScopes = [];
 // 诊断口径:每个程序里各表示各出现多少个节点(只用于量测,不参与生成)。
 let typeRepCounts = {};
+// 「补类型」的工作清单(按程序分开):推导不出类型的绑定、没有注解的参数。
+// 这两样正是 std 类型信息的主要来源 —— 参数写注解,函数体才能按注解定型。
+let typeUnknownBinds = {};
+let typeUnknownParams = {};
+// 记录时截断,免得探针把整棵库都倒出来。
+let typeUnknownPush = (sink, name) -> {
+  if isError(sink) { return null; };
+  if sink.length >= 40 { return null; };
+  sink[sink.length] = name;
+  null;
+};
 // 存在「右值静态类型未知」写入的名字:这些绑定的运行期注解检查必须保留。
 let typeUnknownWrites = {};
 // 被赋值过的名字:绑定不再稳定,函数返回类型这类推导结论不能落在它上面。
@@ -212,6 +223,9 @@ let inferExpr = (node) -> {
         } else {
           param.unboxType = "";
         };
+      } else {
+        // 没注解(或注解不是内建类型)的参数:函数体里只能当未知,补类型时优先看这里。
+        typeUnknownPush(typeUnknownParams[typeProgram], param.name);
       };
       p = p + 1;
     };
@@ -332,6 +346,8 @@ let inferStmts = (stmts) -> {
       // 槽里就一直是 double。模块根(深度 1)一律不解箱:扩展桥会把帧 memcpy 给解释器。
       // 目前只做 Number;String 的裸 ptr 还牵扯生命周期,按既定顺序排在后面。
       let effective = if declared != "" { declared; } else { value; };
+      // 类型推不出来的绑定(常来自「返回类型未知的调用」):补类型清单的头一批。
+      if effective == "" { typeUnknownPush(typeUnknownBinds[typeProgram], s.name); };
       s.unboxType = "";
       if typeDepth > 1 && effective == "Number" && isError(typeUnknownWrites[typeProgram][s.name]) {
         s.unboxType = "Number";
@@ -424,11 +440,13 @@ let inferTypes = (stmts) -> {
   typeReturnDepth = 0;
   inferStmts(stmts);
   // 第二遍才是权威口径:第一遍只负责把每次写入的右值类型收齐,第二遍据此判定可解箱性;
-  // 计数也在第二遍重来,免得把两遍的遍历算成两份。
+  // 计数与两张工作清单也在第二遍重来,免得把两遍的遍历算成两份。
   typeScopes[0] = {};
   typeFnResults[0] = {};
   typeRepScopes[0] = {};
   typeRepCounts[typeProgram] = {};
+  typeUnknownBinds[typeProgram] = [];
+  typeUnknownParams[typeProgram] = [];
   typeDepth = 1;
   typeReturnDepth = 0;
   inferStmts(stmts);
@@ -447,6 +465,9 @@ let checkIsDead = (valueNode, declaredName) -> {
 // 自己那份(与 inferTypes 交回 typeErrors 同一个道理)。
 let typeRepReport = () -> typeRepCounts;
 let typeRepPrograms = () -> typeProgram;
+// 补类型的两张工作清单:推导不出类型的绑定、没有注解的参数(每程序最多记 40 条)。
+let typeBindsUnknown = () -> typeUnknownBinds;
+let typeParamsUnknown = () -> typeUnknownParams;
 
 export inferTypes;
 export buildStdTypes;
@@ -456,3 +477,5 @@ export typeErrors;
 export typeUnboxList;
 export typeRepReport;
 export typeRepPrograms;
+export typeBindsUnknown;
+export typeParamsUnknown;
