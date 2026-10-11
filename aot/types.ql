@@ -366,7 +366,19 @@ let inferExpr = (node) -> {
   if t == "Number" { tagType(node, "Number"); node.cannotBeError = true; return tagRep(node, "Number"); };
   if t == "Boolean" { tagType(node, "Boolean"); node.cannotBeError = true; return tagRep(node, ""); };
   if t == "Null" { tagType(node, "Null"); node.cannotBeError = true; return tagRep(node, ""); };
-  if t == "String" { tagType(node, "String"); node.cannotBeError = true; return tagRep(node, ""); };
+  if t == "String" {
+    tagType(node, "String"); node.cannotBeError = true;
+    // 插值里的表达式同样要定型(`"a${f(x)}b"` 的 f(x))。
+    if !isError(node.parts) && node.parts != null {
+      let si = 0;
+      while si < node.parts.length {
+        let part = node.parts[si];
+        if !isError(part.kind) && part.kind == "Interpolation" { inferExpr(part.expression); };
+        si = si + 1;
+      };
+    };
+    return tagRep(node, "");
+  };
   // 标识符的自然表示 = 它解析到的那个绑定的表示(作用域栈上问,遮蔽与捕获自然正确)。
   // 读的安全性同样来自绑定:它的每次写入都不可能产出 Error 时才安全。
   if t == "Identifier" {
@@ -441,8 +453,18 @@ let inferExpr = (node) -> {
     node.cannotBeError = true;
     return tagRep(node, "");
   };
-  if t == "Object" { tagType(node, "Object"); return tagRep(node, ""); };
-  if t == "Array" { tagType(node, "Array"); return tagRep(node, ""); };
+  if t == "Object" {
+    let ofi = 0;
+    while ofi < node.fields.length { inferExpr(node.fields[ofi].value); ofi = ofi + 1; };
+    tagType(node, "Object");
+    return tagRep(node, "");
+  };
+  if t == "Array" {
+    let aei = 0;
+    while aei < node.elements.length { inferExpr(node.elements[aei]); aei = aei + 1; };
+    tagType(node, "Array");
+    return tagRep(node, "");
+  };
   if t == "UnaryOp" {
     let inner = inferExpr(node.operand);
     if node.operator == "!" {
@@ -546,6 +568,24 @@ let inferExpr = (node) -> {
       tagType(node, node.callee.memberReturn);
       return tagRep(node, "");
     };
+    tagType(node, "");
+    return tagRep(node, "");
+  };
+  if t == "IndexAccess" {
+    inferExpr(node.object);
+    if node.index != null && !isError(node.index) { inferExpr(node.index); };
+    tagType(node, "");
+    return tagRep(node, "");
+  };
+  if t == "If" {
+    // 表达式位置的 if(语句位置的走 inferStmts 自己的分支):子表达式也要定型。
+    let ibi = 0;
+    while ibi < node.branches.length {
+      inferExpr(node.branches[ibi].condition);
+      typePush(); inferStmts(node.branches[ibi].body.statements); typePop();
+      ibi = ibi + 1;
+    };
+    if node.elseBody != null { typePush(); inferStmts(node.elseBody.statements); typePop(); };
     tagType(node, "");
     return tagRep(node, "");
   };
