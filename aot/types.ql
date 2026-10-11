@@ -312,6 +312,8 @@ let inferExpr = (node) -> {
   if t == "Function" {
     // 函数体同样在编译期分析。参数：注解会在调用点被注解检查强制执行（带注解的实参
     // 类型不符时调用返回错误），所以函数体内可以按注解声明的内建类型来用它。
+    // 作者声明的返回类型:像参数注解一样在定义处的外层上下文里求值,并且是权威结论。
+    let declaredReturn = annotationBuiltinName(node.returnTypeAnnotation);
     typePush();
     let p = 0;
     while p < node.parameters.length {
@@ -350,7 +352,20 @@ let inferExpr = (node) -> {
       else if result != one { result = ""; };
       r = r + 1;
     };
-    node.returnType = result;
+    // 声明了返回类型就以它为准(调用点直接信任);只有能证明「所有返回路径都给出另一个
+    // 类型」才是编译错误 —— 交集非空正说明每条路径都是那个类型,不会把不可达分支里的
+    // return 误判成错误。
+    if declaredReturn != "" {
+      if result != "" && result != declaredReturn {
+        typeReport(node, "return type mismatch: function declares " + declaredReturn + " but returns " + result);
+      };
+      node.returnType = declaredReturn;
+    } else {
+      node.returnType = result;
+    };
+    // 给生成端区分「作者声明的类型」(权威、要强制)与「推导出的类型」(只是近似)。
+    node.declaredReturnType = declaredReturn;
+    node.derivedReturnType = result;
     typePop();
     tagType(node, "Function");
     node.cannotBeError = true;

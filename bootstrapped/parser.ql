@@ -10,6 +10,9 @@ let Parser = (tokens) -> {
   // Return belongs to a lexical function body, not a block or module factory.
   let insideFunction = false;
   let setFunctionContext = (inside) -> { insideFunction = inside; };
+  // While parsing a return type the trailing `->` belongs to the function, not to a
+  // bare-lambda body: `(x): Number -> body` must read `Number` as the type.
+  let suppressArrowLambda = false;
   let errors = []; let diagnostics = [];
   let sourcePath = "<source>";
   let setSourcePath = (path) -> {
@@ -829,13 +832,26 @@ let Parser = (tokens) -> {
   };
 
   // Every arrow spelling lowers to the same Function / Parameter / Block AST.
-  let parseFunctionBody = (params) -> {
+  // `(params): Type -> body` — a declared return type. The caller may trust it and
+  // the callee is checked against it (compile error where provable, runtime check
+  // otherwise). Only the parenthesized parameter form can carry it, so `x: T -> …`
+  // stays unambiguous with a parameter annotation.
+  let parseReturnTypeAnnotation = () -> {
+    if !check(TokenKind.Colon) { return null; };
+    advance();
+    let saved = suppressArrowLambda; suppressArrowLambda = true;
+    let annotation = parseAnnotation();
+    suppressArrowLambda = saved;
+    annotation;
+  };
+
+  let parseFunctionBody = (params, returnTypeAnnotation) -> {
     // Parameters/annotations were parsed in the defining outer context.
     let outerContext = insideFunction;
     insideFunction = true;
     let body = parseBlock();
     insideFunction = outerContext;
-    FunctionExpr(params, body);
+    FunctionExpr(params, body, returnTypeAnnotation);
   };
 
   let parsePrimary = () -> {
@@ -883,8 +899,8 @@ let Parser = (tokens) -> {
       return NullExpr();
     } else if token.kind == TokenKind.Identifier {
       advance();
-      if matchToken([TokenKind.Arrow]) {
-        return parseFunctionBody([locatedParameter(token.value, null, token)]);
+      if !suppressArrowLambda && matchToken([TokenKind.Arrow]) {
+        return parseFunctionBody([locatedParameter(token.value, null, token)], null);
       };
       return IdentifierExpr(token.value);
     } else if token.kind == TokenKind.Import {
@@ -929,10 +945,13 @@ let Parser = (tokens) -> {
       if check(TokenKind.RightParen) {
         // Empty parens: ()
         advance();
+        let emptyRet = parseReturnTypeAnnotation();
         if check(TokenKind.Arrow) {
           // () -> body - empty parameter function
           advance();
-          return parseFunctionBody([]);
+          return parseFunctionBody([], emptyRet);
+        } else if emptyRet != null {
+          return parseError("Expected '->' after return type");
         } else {
           // Just empty parens
           return { type: "Null", value: null };
@@ -968,16 +987,19 @@ let Parser = (tokens) -> {
             };
           };
           if !matchToken([TokenKind.RightParen]) { return parseError("Expected ')' after parameters"); };
+          let listRet = parseReturnTypeAnnotation();
           if !matchToken([TokenKind.Arrow]) { return parseError("Expected '->' after parameters"); };
-          return parseFunctionBody(params);
+          return parseFunctionBody(params, listRet);
         } else if check(TokenKind.RightParen) {
           // Just (name) - could be grouping or single param function
           advance();
+          let singleRet = parseReturnTypeAnnotation();
           if check(TokenKind.Arrow) {
             // (name) -> body
             advance();
-            return parseFunctionBody([locatedParameter(potentialParam, null, firstToken)]);
+            return parseFunctionBody([locatedParameter(potentialParam, null, firstToken)], singleRet);
           } else {
+            if singleRet != null { return parseError("Expected '->' after return type"); };
             // Grouped expression: (name)
             return locateBetween(IdentifierExpr(potentialParam), firstToken, firstToken);
           };
@@ -990,11 +1012,13 @@ let Parser = (tokens) -> {
           let expr = parseExpression();
           skipNewlines();
           if !matchToken([TokenKind.RightParen]) { return parseError("Expected ')' after expression"); };
+          let groupedRet = parseReturnTypeAnnotation();
           if check(TokenKind.Arrow) {
             advance();
             if expr.type != "Identifier" { return parseError("Expected parameter name before '->'"); };
-            return parseFunctionBody([locatedParameter(expr.name, null, nodeStart(expr))]);
+            return parseFunctionBody([locatedParameter(expr.name, null, nodeStart(expr))], groupedRet);
           };
+          if groupedRet != null { return parseError("Expected '->' after return type"); };
           return expr;
         };
       } else {
@@ -1003,11 +1027,13 @@ let Parser = (tokens) -> {
         let expr = parseExpression();
         skipNewlines();
         if !matchToken([TokenKind.RightParen]) { return parseError("Expected ')' after expression"); };
+        let genericRet = parseReturnTypeAnnotation();
         if check(TokenKind.Arrow) {
           advance();
           if expr.type != "Identifier" { return parseError("Expected parameter name before '->'"); };
-          return parseFunctionBody([locatedParameter(expr.name, null, nodeStart(expr))]);
+          return parseFunctionBody([locatedParameter(expr.name, null, nodeStart(expr))], genericRet);
         };
+        if genericRet != null { return parseError("Expected '->' after return type"); };
         return expr;
       }
     } else if token.kind == TokenKind.LeftBracket {
@@ -1052,7 +1078,7 @@ let Parser = (tokens) -> {
       return ObjectExpr(fields);
     } else if token.kind == TokenKind.Arrow {
       advance();
-      return parseFunctionBody([]);
+      return parseFunctionBody([], null);
     } else {
       advance();
       if token.kind == TokenKind.Error { return parseErrorAt(token.value, token); };

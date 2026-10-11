@@ -71,8 +71,8 @@ let ObjectField = (name, value) -> {
   { type: "ObjectField", name: name, value: value };
 };
 
-let FunctionExpr = (parameters, body) -> {
-  { type: "Function", parameters: parameters, body: body };
+let FunctionExpr = (parameters, body, returnTypeAnnotation) -> {
+  { type: "Function", parameters: parameters, body: body, returnTypeAnnotation: returnTypeAnnotation };
 };
 
 let Parameter = (name, annotation) -> {

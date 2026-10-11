@@ -698,6 +698,12 @@ let curLbl = "";
 let curRetv = "";       // 当前函数 %retv 寄存器名
 let curEpiLbl = "";     // 当前函数 epilogue label 名
 let isTopLevel = true;  // main 顶层 ? → __exit_error
+// 当前函数声明的返回类型。与参数注解同一性质:只要写了注解就强制(不只内建类型),
+// 运行期在返回边检查。curReturnType 只是内建类型名 —— 能证明整条路径都返回它时跳过检查。
+let curReturnActive = false;
+let curReturnType = "";
+let curReturnTy = "null";
+let curReturnText = "null";
 // Set the first time a reader needs the located-error helper, and the position in
 // `out` where its definition is spliced (just after the prelude, so it precedes
 // every call site: this toolchain rejects a forward `declare`).
@@ -1039,7 +1045,23 @@ let emitFunction = (node, name) -> {
   line("  " + rv + " = alloca %ql_value");
   let lEpi = lbl();
   let savedRetv = curRetv; let savedEpi = curEpiLbl; let savedTop = isTopLevel;
+  let savedRetType = curReturnType; let savedRetTy = curReturnTy; let savedRetText = curReturnText;
+  let savedRetActive = curReturnActive;
   curRetv = rv; curEpiLbl = lEpi; isTopLevel = false;
+  // 作者声明的返回类型:在入口块求一次类型值,返回边的检查才支配所有返回点。若推导交集
+  // 与声明的内建类型一致(每条路径都返回它),整条函数不需要任何检查。
+  curReturnActive = false; curReturnType = ""; curReturnTy = "null"; curReturnText = "null";
+  if !isError(node.returnTypeAnnotation) && node.returnTypeAnnotation != null {
+    let proven = false;
+    if !isError(node.declaredReturnType) && node.declaredReturnType != ""
+       && !isError(node.derivedReturnType) && node.declaredReturnType == node.derivedReturnType { proven = true; };
+    if !proven {
+      curReturnActive = true;
+      curReturnType = if isError(node.declaredReturnType) { ""; } else { node.declaredReturnType; };
+      curReturnTy = emitExpr(node.returnTypeAnnotation);
+      curReturnText = internString(annotationText(node.returnTypeAnnotation));
+    };
+  };
   // 函数体:R10-a 语句级 last-value 语义 —— emitBlockStmts 返回最后值寄存器;函数结果 =
   // 函数体最后值(恒有值,默认 null 值)。
   if isModule {
@@ -1061,6 +1083,7 @@ let emitFunction = (node, name) -> {
     line("  " + result + " = select i1 " + failed + ", %ql_value " + bl + ", %ql_value " + moduleExportsReg);
     bl = result;
   };
+  bl = emitReturnCheck(bl, node);
   line("  store %ql_value " + bl + ", ptr " + rv);
   line("  br label %" + lEpi);
   line(lEpi + ":");
@@ -1071,6 +1094,7 @@ let emitFunction = (node, name) -> {
   line("  ret %ql_value " + rv2);
   line("}");
   curRetv = savedRetv; curEpiLbl = savedEpi; isTopLevel = savedTop;
+  curReturnType = savedRetType; curReturnTy = savedRetTy; curReturnText = savedRetText; curReturnActive = savedRetActive;
   blk[2] = stackEntry();
   stackSlots = savedStackSlots;
   argSlotPool = savedArgSlots;
@@ -1124,6 +1148,7 @@ let emitStmtDispatch = (node, prevLast) -> {
     if isTopLevel {
       addCompileError(node, "top-level return is not supported");
     } else {
+      value = emitReturnCheck(value, node.value);
       line("  store %ql_value " + value + ", ptr " + curRetv);
       line("  br label %" + curEpiLbl);
       // Continue emitting into an unreachable block so enclosing CFG builders
@@ -1592,6 +1617,9 @@ let emitColdLocatedHelper = () -> {
   let savedArgSlots = argSlotPool; argSlotPool = {};
   let savedScope = curScope; let savedEnv = curEnv; let savedLbl = curLbl;
   let savedTop = isTopLevel; let savedRetv = curRetv; let savedEpi = curEpiLbl;
+  let savedRetType = curReturnType; let savedRetTy = curReturnTy; let savedRetText = curReturnText;
+  let savedRetActive = curReturnActive;
+  curReturnType = ""; curReturnTy = "null"; curReturnText = "null"; curReturnActive = false;
   let blk = [];
   curSink = blk;
   line("define %ql_value @__cold_located_error(ptr %env, %ql_value %v, %ql_value %file, %ql_value %line, %ql_value %col, %ql_value %cf) {");
@@ -1610,6 +1638,7 @@ let emitColdLocatedHelper = () -> {
   stackSlots = savedStackSlots; argSlotPool = savedArgSlots;
   curScope = savedScope; curEnv = savedEnv; curLbl = savedLbl;
   isTopLevel = savedTop; curRetv = savedRetv; curEpiLbl = savedEpi;
+  curReturnType = savedRetType; curReturnTy = savedRetTy; curReturnText = savedRetText; curReturnActive = savedRetActive;
   blk;
 };
 // Attach provenance only on an Error edge. Synthetic/runtime nodes have no
@@ -1631,6 +1660,13 @@ let emitLocatedError = (value, node, callFrame) -> {
   line(done + ":"); curLbl = done; let result = temp();
   line("  " + result + " = phi %ql_value [ " + located + ", %" + failedEnd + " ], [ " + value + ", %" + good + " ]");
   result;
+};
+// 声明了返回类型的函数:在返回边检查值确实是该类型。能证明相等时不发 —— 编译期那半已覆盖。
+// 检查失败得到的是 TypeCheck 错误,它就是这次调用的返回值,所以调用方看得到。
+let emitReturnCheck = (value, valueNode) -> {
+  if !curReturnActive { return value; };
+  if curReturnType != "" && valueNode != null && !isError(valueNode) && !isError(valueNode.staticType) && valueNode.staticType == curReturnType { return value; };
+  emitLocatedError(emitCallRegs("__check_binding", [value, curReturnTy, curReturnText]), valueNode, false);
 };
 // emitExpr(node) returns an LLVM %ql_value operand (constant or register).
 // emitValue 返回 {reg, raw}:raw="" 时 reg 是 %ql_value(既有路径);raw="Number" 时

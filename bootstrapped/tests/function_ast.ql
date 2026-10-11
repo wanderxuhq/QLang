@@ -52,17 +52,17 @@ let expression = (source) -> {
 };
 let x = IdentifierExpr("x");
 let add = BinaryOpExpr("+", x, NumberExpr(1));
-let single = FunctionExpr([Parameter("x", null)], Block([add]));
+let single = FunctionExpr([Parameter("x", null)], Block([add]), null);
 assert(equal(expression("x -> x + 1;")?, single), "bare parameter AST")?;
 assert(equal(expression("(x) -> x + 1;")?, single), "parenthesized parameter AST")?;
 assert(equal(expression("x -> { x + 1; };")?, single), "block body AST")?;
 assert(equal(expression("(x -> x + 1);")?, single), "grouped function AST")?;
-let zero = FunctionExpr([], Block([NumberExpr(1)]));
+let zero = FunctionExpr([], Block([NumberExpr(1)]), null);
 assert(equal(expression("-> 1;")?, zero), "bare zero-argument AST")?;
 assert(equal(expression("() -> 1;")?, zero), "parenthesized zero-argument AST")?;
 let nested = FunctionExpr([Parameter("x", null)], Block([
-  FunctionExpr([Parameter("y", null)], Block([BinaryOpExpr("+", x, IdentifierExpr("y"))]))
-]));
+  FunctionExpr([Parameter("y", null)], Block([BinaryOpExpr("+", x, IdentifierExpr("y"))]), null)
+]), null);
 assert(equal(expression("x -> y -> x + y;")?, nested), "nested function AST")?;
 assert(equal(expression("(x) -> (y) -> x + y;")?, nested), "nested parenthesized AST")?;
 assert(equal(expression("(x + 1);")?, add), "ordinary grouping")?;
@@ -74,4 +74,23 @@ while i < invalid.length {
   assert(parse(invalid[i]).errors.length > 0, "reject: " + invalid[i])?;
   i = i + 1;
 };
-println("PASS function AST contracts (11 valid, 7 invalid)");
+// Declared return types: `(params): Type -> body`. Only the parenthesized form
+// carries one (a bare `x -> body` has nowhere unambiguous to put it).
+let returnAnnName = (source) -> {
+  let fn = expression(source)?;
+  assert(fn.type == "Function", "function node: " + source)?;
+  let a = fn.returnTypeAnnotation;
+  assert(a != null && a.type == "Identifier", "return type node: " + source)?;
+  a.name;
+};
+assert(returnAnnName("(x): Number -> x;")? == "Number", "return type annotation")?;
+assert(returnAnnName("(x: Number): Number -> x;")? == "Number", "parameter and return type")?;
+assert(returnAnnName("(): Number -> 1;")? == "Number", "zero-argument return type")?;
+assert(expression("(x) -> x;")?.returnTypeAnnotation == null, "no return type")?;
+let invalidRet = ["(x): Number x;", "(x): Number;", "(x): -> x;"];
+let j = 0;
+while j < invalidRet.length {
+  assert(parse(invalidRet[j]).errors.length > 0, "reject: " + invalidRet[j])?;
+  j = j + 1;
+};
+println("PASS function AST contracts (15 valid, 10 invalid)");

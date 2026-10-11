@@ -638,7 +638,15 @@ let Interpreter = () -> {
         }
         i = i + 1;
       }
-      { type: "Function", params: p, body: b, env: capturedEnv, path: currentPath, moduleExports: moduleExports, paramTypes: paramTypes };
+      // 作者声明的返回类型(与参数注解同一性质):在定义处求值,函数返回时检查。
+      let returnType = null;
+      if expr.returnTypeAnnotation != null {
+        let rtVal = evaluate(expr.returnTypeAnnotation, env);
+        if isExiting(rtVal) { return rtVal; }
+        let rtText = if isError(expr.returnTypeAnnotation.annotationText) { "?"; } else { expr.returnTypeAnnotation.annotationText; };
+        returnType = { ty: normalizeAnnotation(rtVal), text: rtText };
+      };
+      { type: "Function", params: p, body: b, env: capturedEnv, path: currentPath, moduleExports: moduleExports, paramTypes: paramTypes, returnType: returnType };
     } else if expr.type == "Call" {
       let func = evaluate(expr.callee, env);
       if isExiting(func) { return func; }
@@ -1105,7 +1113,7 @@ let Interpreter = () -> {
             remaining[remaining.length] = allParams[r];
             r = r + 1;
           }
-          { type: "Function", params: remaining, body: func.body, env: partialEnv, path: func.path, moduleExports: func.moduleExports, allParams: allParams, boundArgs: allArgs, paramTypes: func.paramTypes };
+          { type: "Function", params: remaining, body: func.body, env: partialEnv, path: func.path, moduleExports: func.moduleExports, allParams: allParams, boundArgs: allArgs, paramTypes: func.paramTypes, returnType: func.returnType };
         } else if allArgs.length != allParams.length {
           // Too many arguments: host ArityMismatch error value (the boot's old behavior silently dropped excess arguments)
           { type: "Error", value: std.Error.raise("ArityMismatch", "Arity mismatch: expected " + std.Number.toString(allParams.length) + " arguments, got " + std.Number.toString(allArgs.length), null), propagate: false };
@@ -1155,8 +1163,21 @@ let Interpreter = () -> {
           if result.flow == "Propagate" {
             return { type: "Error", value: result.value.value, propagate: false };
           }
-          // Return the block value regardless of Return or None flow
-          result.value;
+          // Return the block value regardless of Return or None flow. A declared
+          // return type is enforced here (the `?` propagation path above is exempt,
+          // exactly like the native emitter's return edges).
+          let produced = result.value;
+          if func.returnType != null {
+            let ck = checkValue(func.returnType.ty, produced, env);
+            if isErrorVal(ck) { return ck; }
+            if !isTruthy(ck) {
+              let rtn = if produced == null { "Null"; } else if !isError(produced.type) { produced.type; } else { typeTag(produced); };
+              if rtn == "Type" { rtn = "Object"; };
+              let rcause = if isErrorVal(produced) { produced.value; } else { null; };
+              return { type: "Error", value: std.Error.raise("TypeCheck", typeCheckMsg(rtn, func.returnType.text), rcause), propagate: false };
+            };
+          };
+          produced;
         };
       } else if ft == null {
         // ---- hosting-runtime native or QLang function (stdlib.ql) ----
