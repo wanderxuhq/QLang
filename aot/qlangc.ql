@@ -852,6 +852,12 @@ let emitLetStmt = (node) -> {
   };
   let slot = defineSlot(node.name);
   curScope.active[node.name] = true;
+  // 裸槽:分析期判定这个绑定是裸 double(unboxType)。槽里 payload 就是 double 的位
+  // (写成 Number 盒时如此),所以裸写只需写位(tag 早已是 NUMBER,槽仍是合法盒)。
+  if !isError(node.unboxType) && node.unboxType == "Number" {
+    if isError(curScope.unbox) { curScope.unbox = {}; };
+    curScope.unbox[node.name] = true;
+  };
   // Remember which bindings carry a runtime annotation: an unannotated slot's
   // type/text are zero, so a later plain store is equivalent to the
   // __check_binding diamond and the diamond can be dropped.
@@ -879,13 +885,28 @@ let emitLetStmt = (node) -> {
     error = emitLocatedError(error, node, false);
     emitBindingStore(off, error, "null", "null"); line("  br label %" + done);
     line(done + ":"); curLbl = done;
-  } else { emitBindingStore(off, value, ty, text); };
+  } else {
+    // 未初始化声明的裸槽也要写成一个合法的 NUMBER 盒(tag=1),否则后续只写 payload
+    // 的裸写会留下 tag=0,任何按 %ql_value 读它的路径都会把它当成指针。
+    if value == "null" && !isError(node.unboxType) && node.unboxType == "Number" { value = "{ i64 1, i64 0 }"; };
+    emitBindingStore(off, value, ty, text);
+  };
   slot;
 };
 let emitStoreByName = (name, expression, target, declaredType) -> {
   let hit = lookupSlot(name);
   if hit == null { addCompileError(target, "assignment to undeclared name: " + name); return null; };
-  let value = emitExpr(expression);
+  let rv = emitValue(expression);
+  // 裸槽的写入:只写 payload 位(标签早已是 NUMBER,槽仍是合法 Number 盒),不必先装箱。
+  if !inRuntime && !isError(hit.scope.unbox) && !isError(hit.scope.unbox[name]) && rv.raw == "Number" {
+    let off0 = emitResolvedBindingPtr(hit, name);
+    let bits0 = temp(); let pp0 = temp();
+    line("  " + bits0 + " = bitcast double " + rv.reg + " to i64");
+    line("  " + pp0 + " = getelementptr i8, ptr " + off0 + ", i64 8");
+    line("  store i64 " + bits0 + ", ptr " + pp0);
+    return null;
+  };
+  let value = if rv.raw == "Number" { emitFloatValue(rv.reg); } else if rv.raw == "Boolean" { emitBoolResult(rv.reg); } else { rv.reg; };
   let off = emitResolvedBindingPtr(hit, name);
   // A same-body write target is a direct slot pointer: the frontend guarantees
   // the binding exists, so the absent-pointer check is dead.
@@ -1038,6 +1059,10 @@ let emitFunction = (node, name) -> {
       text = emitCallRegs("__get_index", [entry, emitNumber({value: 1})]);
     };
     emitBindingStore(off, rv, ty, text);
+    if !isError(node.parameters[a].unboxType) && node.parameters[a].unboxType == "Number" {
+      if isError(curScope.unbox) { curScope.unbox = {}; };
+      curScope.unbox[node.parameters[a].name] = true;
+    };
     a = a + 1;
   };
   // M3 T3:epilogue —— %retv alloca 在 entry 分配;body 末 store + br;? 的 prop 分支同样 store 后 br。
@@ -1225,9 +1250,11 @@ let emitBlockStmts = (stmts) -> {
 // (Task 6 Fix Round 1 同类问题的推广)。
 let emitIfStmt = (node, prevLast) -> {
   let br = node.branches[0];
-  let C = emitExpr(br.condition);
-  let C2 = temp(); let tr = temp();
-  line("  " + tr + " = call i1 @ql_truthy(%ql_value " + C + ")");
+  // 条件若是裸 i1(分析期已判定),直接 br —— 省掉 zext+pack+ql_truthy。
+  let cv = emitValue(br.condition);
+  let tr = temp();
+  if cv.raw == "Boolean" { tr = cv.reg; }
+  else { line("  " + tr + " = call i1 @ql_truthy(%ql_value " + cv.reg + ")"); };
   let lThen = lbl(); let lElse = lbl(); let lEnd = lbl();
   line("  br i1 " + tr + ", label %" + lThen + ", label %" + lElse);
   line(lThen + ":");
@@ -1273,9 +1300,10 @@ let emitWhileStmt = (node) -> {
   line("  br label %" + lCond);
   line(lCond + ":");
   curLbl = lCond;
-  let C = emitExpr(node.condition);
-  let C2 = temp(); let tr = temp();
-  line("  " + tr + " = call i1 @ql_truthy(%ql_value " + C + ")");
+  let cv = emitValue(node.condition);
+  let tr = temp();
+  if cv.raw == "Boolean" { tr = cv.reg; }
+  else { line("  " + tr + " = call i1 @ql_truthy(%ql_value " + cv.reg + ")"); };
   line("  br i1 " + tr + ", label %" + lBody + ", label %" + lExit);
   line(lBody + ":");
   curLbl = lBody;
@@ -1672,8 +1700,65 @@ let emitReturnCheck = (value, valueNode) -> {
 // emitValue 返回 {reg, raw}:raw="" 时 reg 是 %ql_value(既有路径);raw="Number" 时
 // reg 是裸 double —— 只出现在编译期已证明类型的绑定上。emitExpr 是它的装箱化薄
 // 包装,所以除少数决策点(NodeAnd/unboxing 相关)外,其余调用点无需改动。
+// 当前节点分析期算出的自然表示:"" 装箱 / "Number" 裸 double / "Boolean" 裸 i1。
+let emitNaturalRep = (node) -> if isError(node.staticRep) { ""; } else { node.staticRep };
+let emitRepCmpOp = (op) -> op == "==" || op == "!=" || op == "<" || op == "<=" || op == ">" || op == ">=";
+// 裸 double 操作数:裸的直接用,装箱的解箱;字面量直接给 LLVM double 常量(零指令)。
+let emitRawDouble = (v) -> if v.raw == "Number" { v.reg; } else { emitFloat(v.reg); };
+let emitRawArith = (node) -> {
+  let kind = node.type;
+  if kind == "Number" { return f64lit(node.value); };
+  if kind == "UnaryOp" {
+    let d = emitRawDouble(emitValue(node.operand));
+    if node.operator == "-" { let n = temp(); line("  " + n + " = fneg double " + d); return n; };
+    return d;
+  };
+  let l = emitRawDouble(emitValue(node.left));
+  let r = emitRawDouble(emitValue(node.right));
+  let op = node.operator;
+  if op == "+" || op == "-" || op == "*" {
+    let fop = if op == "+" { "fadd" } else if op == "-" { "fsub" } else { "fmul" };
+    let rr = temp(); line("  " + rr + " = " + fop + " double " + l + ", " + r);
+    return rr;
+  };
+  let i1 = temp(); let i2 = temp(); let ir = temp(); let fr = temp();
+  line("  " + i1 + " = call i64 @llvm.fptosi.sat.i64.f64(double " + l + ")");
+  line("  " + i2 + " = call i64 @llvm.fptosi.sat.i64.f64(double " + r + ")");
+  let bitop = if op == "&" { "and" } else if op == "|" { "or" } else { "xor" };
+  line("  " + ir + " = " + bitop + " i64 " + i1 + ", " + i2);
+  line("  " + fr + " = sitofp i64 " + ir + " to double");
+  fr;
+};
+// 裸 i1:比较与 `!`。条件处可以直接 br i1,省掉 zext+pack+ql_truthy。
+let emitRawBoolean = (node) -> {
+  if node.type == "UnaryOp" {
+    let cv = emitValue(node.operand);
+    let b = if cv.raw == "Boolean" { cv.reg; } else { let t = temp(); line("  " + t + " = call i1 @ql_truthy(%ql_value " + cv.reg + ")"); t; };
+    let inv = temp(); line("  " + inv + " = xor i1 " + b + ", true");
+    return inv;
+  };
+  let l = emitRawDouble(emitValue(node.left));
+  let r = emitRawDouble(emitValue(node.right));
+  let op = node.operator;
+  let cmp = if op == "==" { "oeq" } else if op == "!=" { "une" } else if op == "<" { "olt" } else if op == "<=" { "ole" } else if op == ">" { "ogt" } else { "oge" };
+  let c = temp(); line("  " + c + " = fcmp " + cmp + " double " + l + ", " + r);
+  c;
+};
 let emitValue = (node) -> {
-  let value = emitExprInner(node); let kind = node.type;
+  // 分析期已经算出这个值的自然表示;生成端只消费结论,不猜。裸值在边界处才装箱。
+  let sr = emitNaturalRep(node);
+  let kind = node.type;
+  // 只对**算出来的**节点保持裸表示:字面量本来就是零指令常量盒,标识符的普通读只有 1 条,
+  // 把它们改成裸值再在装箱使用点补回来是净亏。裸表示的价值在于让中间结果不再装箱/解箱往返。
+  if !inRuntime && (kind == "BinaryOp" || kind == "UnaryOp") {
+    if sr == "Number" && (kind == "UnaryOp" || node.operator == "+" || node.operator == "-" || node.operator == "*" || node.operator == "&" || node.operator == "|" || node.operator == "^") {
+      return { reg: emitRawArith(node), raw: "Number" };
+    };
+    if sr == "Boolean" && (kind == "UnaryOp" || emitRepCmpOp(node.operator)) {
+      return { reg: emitRawBoolean(node), raw: "Boolean" };
+    };
+  };
+  let value = emitExprInner(node);
   // Contagion is off: only an expression that can *create* an error attaches a
   // source position. A plain read can only carry one, so an Identifier is not
   // checked — reading a binding that holds an Error yields that Error as an
@@ -1689,8 +1774,13 @@ let emitValue = (node) -> {
   };
   { reg: value, raw: "" };
 };
-// 薄包装:取装箱后的寄存器,忽略表示信息。
-let emitExpr = (node) -> emitValue(node).reg;
+// 薄包装:取装箱后的寄存器(裸值在使用点这里装箱,且只在这里)。
+let emitExpr = (node) -> {
+  let v = emitValue(node);
+  if v.raw == "Number" { return emitFloatValue(v.reg); };
+  if v.raw == "Boolean" { return emitBoolResult(v.reg); };
+  v.reg;
+};
 let emitExprInner = (node) -> {
   let t = node.type;
   if t == "Number" {
