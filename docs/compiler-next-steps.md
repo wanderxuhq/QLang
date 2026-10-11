@@ -1151,6 +1151,52 @@ Acceptance: raw-comparison hits from 2 to hundreds, IR below the 215919-line t20
 probe outputs unchanged (20/20/21/4), interpreter 53/53 and selfhost gate 47/47. Report hit
 counts first, line counts second — a change that never executes otherwise reads as no win.
 
+### Runtime member signatures: derive them, do not write a table
+
+Decision: do **not** keep a hand-written interface table for runtime-provided members. There
+are two reasons a table looked necessary, and both are fixable at the source.
+
+1. The compile-time pass never walks the runtime program. `inferTypes` is called for the
+   library, the entry program and imported modules (`aot/qlangc.ql` ~1764-1768) but not for
+   `aot/runtime.ql`, which is parsed only to learn which names are runtime functions. Walking
+   it is a pure AST traversal — it does not execute the walked code, it only records type
+   names on nodes — so there is no side effect to fear. What it yields is exactly the table's
+   content: for `let stdNumber = { toString: __itoa, frexp: __num_frexp, ldexp: __num_ldexp };`
+   the member names and their return types.
+2. Deriving fails today for a real reason, not a weak analysis: runtime members return
+   `__err("TypeMismatch", ...)` on a bad argument, so their tail type is value|Error, and the
+   rule is "one type or unknown" — the analysis answers *unknown*, correctly. The fix is in
+   the runtime source: make the members total (assume a correct argument, drop the internal
+   error return) and annotate their parameters (`(x: Number, e: Number)`). Then the return
+   type is unique and call-site checking comes from the same annotations in the runtime
+   source — no table, no wrapper, no extra call layer. Variadic `Math.max`/`Math.min` are
+   fine under this form (annotated parameters, not a wrapper).
+
+Two constraints this step must respect.
+
+  - **Programs do not share scopes.** `inferTypes` resets the scope stack per program and
+    bumps its own namespace, so merely walking the runtime does not let the library or the
+    entry program see a runtime signature. Cross-program knowledge has to be *published* the
+    way the std member index already is (`stdModuleBinds` / `stdFieldCall` / `stdFieldValue`):
+    the runtime's member objects are published into that index, otherwise the walk buys
+    nothing.
+  - **Walking the runtime leaves annotations the emitter already reads.** `checkIsDead`,
+    `isStaticNumber`, `runtimeTypeFree` and `unboxType` are consumed during emission, so
+    annotating runtime nodes can change emitted code (e.g. a dead-check elision firing inside
+    the runtime). That is a real, measurable change, not a neutral one: measure it and verify
+    output correctness, and drop the runtime's own diagnostics from `typeErrors` (they concern
+    low-level code and must not fail a user compile).
+
+Once signatures are derived, the temporary `check`-predicate table (commit `4dec1d5`) comes
+out. The first measurement of this step is whether walking the runtime actually derives the
+member signatures, and which members stay unknown — that unknown list is the worklist for the
+"total + annotated" refactor, and it has to be read before any of that refactoring starts.
+
+Boundary to keep: walking the runtime is for *signatures* only. Do not unbox inside the
+runtime's low-level functions — they operate on boxes and raw memory (`readU64`, `ql_mem_get`,
+`ql_alloc`) and assume the boxed representation, so unboxing there would break their own ABI
+assumptions. Unboxing stays on ordinary function-local bindings.
+
 Branch: `unboxed-values`, verified cut 1 at `8f98254` (contract only, IR byte-identical);
 work stays there and stops before merging to `dancing-with-dragon`. Superseded trial
 patches: `cut2-raw-values`, `cut2-raw-arith-and-cmp`, `cut2-D-rawboolean`,
