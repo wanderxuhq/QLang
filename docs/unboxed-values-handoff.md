@@ -52,7 +52,7 @@ seed; the accepted baseline is 215 919.
 | Phase | Goal | Deliverable / evidence | Status |
 |---|---|---|---|
 | **A. Infrastructure** (pre-existing, on main) | The analysis exists at all, and the generator consumes only its outputs | self-hosted native compiler; per-binding type slot / check omission **−5830 IR lines**; numeric specialization; parameter and return annotations; stdlib annotations + bundle regeneration **−1086** | done |
-| **B. Make the type information complete** *(this branch)* | Give the analysis everything it needs to say "known" with confidence, so family (a) fires everywhere and family (b) has fuel | B1 runtime program analyzed ✓ **−11 492**; B2 `.length -> Number` ✓ `a3a4120` **−593**; B3 per-program probe ✓ `464f72c`; B4 Error-test elision ✓ `9cceff7` **−1 929** (corrected — see §5②); B5 publish runtime member signatures *(next)*; B6 runtime members total + annotated; B7 chain-annotate stdlib | **in progress** |
+| **B. Make the type information complete** *(this branch)* | Give the analysis everything it needs to say "known" with confidence, so family (a) fires everywhere and family (b) has fuel | B1 runtime program analyzed ✓ **−11 492**; B2 `.length -> Number` ✓ `a3a4120` **−593**; B3 per-program probe ✓ `464f72c`; B4 error-test elision ✓ `9cceff7` **−1 929** (see §5②); B5 return-type signatures ✓ `47a4e97`; B6 declare the runtime signatures *(next — plan Phase 2)*; B7 general module resolution, `std` + user `import` *(plan Phase 3)*; B8 chain-annotate the stdlib | **in progress** |
 | **C. Consumer pass — unboxing** | `emitValue` reads `staticRep` and emits the raw or boxed direct path; `boxIfNeeded` at use sites; the speculative machinery is deleted | unboxing lands; acceptance: raw-comparison count rises from 24 to the hundreds, IR drops further, outputs and both gates unchanged | not started |
 | **D. Widen the unboxing domain** | Extend raw representation to more shapes, only where static evidence exists | raw Boolean slots (`i1` fits in a byte); module-root bindings once the extension-bridge `memcpy` frame ABI problem is solved; array/object payload representations | not started |
 | **E. Keep hunting family (a)** | The check / slot / error-test levers keep proving bigger than unboxing; keep looking for "information ⇒ dead code" | B4 landed (`9cceff7`); the same `cannotBeError` predicate now applies to `emitPropagateError` (`?` / aggregate assignment) and to error tests reachable only through provably-checked call sites (§6) | continuous |
@@ -70,9 +70,9 @@ lines.
 | Item | State |
 |---|---|
 | Branch | `unboxed-values` (working tree = `/root/projects/QLang`) |
-| Last commit | `9cceff7` — located-error elision where the value provably cannot be an Error (−1 929 IR lines) |
-| Landed since this doc was written | `a3a4120` `Array/String.length -> Number` (−593); `464f72c` per-program probe (B3/①); `9cceff7` B4/② — see §5② |
-| Verification | both suites green on `/tmp/n21`: interpreter 55 PASS (`ALL CHECKS PASS`), selfhost 46 PASS (`ALL REQUESTED CHECKS PASS`) |
+| Last commit | `47a4e97` — function return-type signatures `(params): T -> body`, enforced by both engines |
+| Landed since this doc was written | `a3a4120` `.length -> Number` (−593); `464f72c` per-program probe (B3/①); `9cceff7` error-test elision (B4/②, −1 929); `47a4e97` return-type signatures (③, see §5③) |
+| Verification | both suites green on `/tmp/n26`: interpreter 56 PASS (`ALL CHECKS PASS`), selfhost 47 PASS (`ALL REQUESTED CHECKS PASS`) |
 | Untracked noise | `_b.ql`, `.commandcode/`, `docs/compiler-next-steps.zh.md` |
 | Merge policy | **Do not merge into `dancing-with-dragon` without explicit approval from the user.** |
 
@@ -84,6 +84,7 @@ IR line metric on the accepted fixture, all points measured on the same seed:
                + .length -> Number (n8 = a3a4120)      203 834   (-593)
                + per-program probe (464f72c)           203 838   (+4 comment lines; IR otherwise byte-identical)
                + located-error elision (9cceff7)        201 909   (-1 929, hits 155)
+               + return-type signatures (47a4e97)       201 909   (no annotations in the corpus → byte-identical)
 program output unchanged throughout: 20
 ```
 
@@ -326,29 +327,54 @@ builds a cycle and the walk never terminates (18 s → >240 s, nothing emitted).
 Next user of the same predicate: `emitPropagateError` (the `?` operator and the aggregate
 assignment paths) is the same tag==8 block.
 
-### ③ Publish runtime member signatures into the cross-program index
+### ③ Return-type signatures — *done* (`47a4e97`); the old ③/④/⑤ are superseded
 
-Today the analysis resets its scopes per program, so even though the runtime is analyzed, the
-library and the user program cannot see its member signatures; `ldexp`, `frexp`,
-`codePointAt`, `Object.keys` etc. still resolve to unknown. Publish the runtime's member
-objects (`stdNumber`, `stdString`, `stdMath`, `Number = {check}` …) into the existing
-cross-program indices (`stdModuleBinds` / `stdFieldCall` / `stdFieldValue`).
+**The old ③/④ assumed the runtime members' signatures could be *derived*.** They cannot: their tails
+hang on host/representation primitives — `__number_bits = (…) -> ql_number_bits(…)` (`runtime.ql:1637`),
+`Number.toString`'s tail is `__str_new(...)`, `Object.keys`' tail is `res = allocBox(...)`,
+`String.codePointAt`'s inner tail is `cp ← ql_mem_get`. Removing the internal `__err` (the old ④) is
+necessary but *not* sufficient: it buys exactly one member (`Number.frexp`, whose tail is an Array
+literal via `__math_parts`).
 
-The user's constraint here is explicit: **do not write a duplicate interface table.** If the
-source can derive it, a second copy is the wrong answer (that was the original objection that
-redirected this whole step from "declare an interface" to "analyze the runtime source").
+So the fix is a **language feature: function return-type signatures**, `(params): T -> body`
+(`47a4e97`). The author declares the type; both engines enforce it — compile error where provable,
+runtime check at the return edges otherwise (`?` propagation exempt) — and the compiler only consumes
+it:
 
-### ④ Make runtime members total + parameter annotations
+- `parser.ql`: after a parenthesized parameter list, before `->`; a bare `x -> …` cannot carry one, so
+  `x: T -> …` stays unambiguous with a parameter annotation; `suppressArrowLambda` stops the trailing
+  `->` from being read as a lambda body.
+- `ast.ql`: `FunctionExpr(params, body, returnTypeAnnotation)`.
+- `types.ql`: the declaration is authoritative (`declaredReturnType`); a provable mismatch on *every*
+  path is a compile error (the derived intersection must be non-empty, so unreachable returns cannot
+  trip it); `derivedReturnType` drives the generator's skip.
+- `qlangc.ql` / `interpreter.ql`: the runtime check, uniform with parameter annotations (*any*
+  annotation is enforced, not only builtin scalars); if the whole function provably returns the
+  declared builtin, no check is emitted at all.
 
-Runtime members currently may return `__err("TypeMismatch", …)` internally. Remove that
-internal error return and annotate parameters, so their signatures become derivable and
-total. Consequence to accept and handle: the error moves from a member-internal `TypeMismatch`
-to a call-site `TypeCheck`, so affected fixtures change. (See §6 for the obligation this
-creates for call sites.)
+IR-neutral on the existing corpus (no annotations yet): `/tmp/t20.ql` byte-identical, 201909.
+Fixture `t55_return_types` (10 checks, both engines).
 
-### ⑤ Drop the temporary runtime `check` predicate table
+The remaining work is Phase 2/3 of the plan
+(`~/.commandcode/plans/unboxed-03-04-std-member-index.zh.md`):
 
-Added in `4dec1d5` as scaffolding for ④. Delete it once ④ lands.
+- **Phase 2 — declare the runtime signatures.** `readU64 = (p, off): Number -> …` (`:36`) makes the
+  `__pred_*` bodies (`:871-881`) type, so `Number.check … Type.check` derive from the source and
+  `typeRuntimePredicates` (`types.ql:217-221`) **can be deleted** (that is the old ⑤). Then
+  `__number_bits: Number`, `__num_frexp: Array`, `__obj_keys: Array`, `__itoa: String`,
+  `__s_codepoint`'s inner `: Number`, dropping the internal `__err` where the declared type must hold
+  (`fromCodePoint`'s genuine `RangeError` stays undeclared). Fixture fallout to expect:
+  `t28_objects.ql:12`, `t27_native_calls.ql:38`, `t45_native_function_members.ql`.
+- **Phase 3 — general module resolution (`std` + user `import`).** The cross-program index the old ③
+  wanted is **dormant**: `stdScanExports` needs a `Let`, but the library's export object is a bare
+  statement (`build_bundle.ql:60-66`; a statement-position `{` parses to an Object node), and
+  `looksLikeExports` requires every field value to be a known module object — which wrongly drops
+  `Object`/`JSON`/`Result`. Revive it *generally*: export tables taken at face value (a module is a
+  field name, whatever the value's kind), runtime analysed before the library, one name may bind
+  several values, `std.<X>` typed by the exported value (never a forced `"Object"`), members resolved
+  only where that value is statically visible. The **same rule must serve user `import`**, otherwise
+  it is a privilege over ordinary objects — and ordinary objects get none (only a type value's `check`
+  and `.length` are language contracts/mechanisms, and may stay privileged).
 
 ### ⑥ Chain-annotate the stdlib
 
@@ -536,6 +562,20 @@ the corrections are the important part — do not re-litigate them.
 - **Ask before adding new features unilaterally.** The user prefers being asked, and for
   multi-step plans he approves a recommended ordering with a terse "可以" and then expects the
   work to proceed without further check-ins.
+- **Return types are *declared*, not derived** (2026-10-11). The runtime members' return types cannot
+  be derived — their tails hang on host/representation primitives — so removing the internal `__err`
+  alone buys one member. Fix: the language feature `(params): T -> body` (`47a4e97`), the author's
+  declaration authoritative. The syntax (`: T` *before* the arrow) is the user's choice, because
+  `-> T { … }` is ambiguous with an expression-bodied lambda followed by a block. Enforcement:
+  compile error where provable, runtime check otherwise; and, per the user, uniform with parameter
+  annotations — *any* annotation is enforced, not only builtin scalars.
+- **Module/namespace resolution must be general, not a `std` privilege.** An export *is* the value it
+  is bound to and `import` hands that value over directly; module identity is the export table's field
+  names regardless of the value's kind, and `std.<X>` is typed by that value — never a forced
+  `"Object"`. The same rule must serve user `import`, or it is a privilege over ordinary objects.
+- **Privileges stay only for language contracts/mechanisms**: a type value's `check` (it cannot come
+  from the index — the predicate bodies are written against the opaque host primitive `readU64`), and
+  `.length` on Array/String. Ordinary objects get none.
 
 ## 12. Vocabulary (use the user's words)
 
@@ -553,6 +593,10 @@ the corrections are the important part — do not re-litigate them.
   (e.g. string indexing / length), never std-level helper functions exposed onto std.
 - **M-milestones** — the AOT compiler was built in milestones (M1, M2, M3); design docs live
   under `docs/superpowers/specs/` and plans under `docs/superpowers/plans/`.
+- **"返回类型签名" / return-type signature** — a declared return type, `(params): T -> body`:
+  author-declared, enforced (compile-time where provable, runtime otherwise), consumed by the compiler.
+- **"一般模块解析" / general module resolution** — the export table taken at face value (a module is
+  a field name, whatever the value's kind), shared by `std` and user `import`; not a `std`-only index.
 
 ## 13. Open questions / the next measurements
 
