@@ -52,10 +52,10 @@ seed; the accepted baseline is 215 919.
 | Phase | Goal | Deliverable / evidence | Status |
 |---|---|---|---|
 | **A. Infrastructure** (pre-existing, on main) | The analysis exists at all, and the generator consumes only its outputs | self-hosted native compiler; per-binding type slot / check omission **−5830 IR lines**; numeric specialization; parameter and return annotations; stdlib annotations + bundle regeneration **−1086** | done |
-| **B. Make the type information complete** *(this branch)* | Give the analysis everything it needs to say "known" with confidence, so family (a) fires everywhere and family (b) has fuel | B1 runtime program analyzed ✓ **−11 492**; B2 `.length -> Number` ✓ **−593** (uncommitted); B3 probe per-program breakdown; B4 read-side Error-test elision; B5 publish runtime member signatures; B6 runtime members total + annotated; B7 chain-annotate stdlib | **in progress** |
+| **B. Make the type information complete** *(this branch)* | Give the analysis everything it needs to say "known" with confidence, so family (a) fires everywhere and family (b) has fuel | B1 runtime program analyzed ✓ **−11 492**; B2 `.length -> Number` ✓ `a3a4120` **−593**; B3 per-program probe ✓ `464f72c`; B4 Error-test elision ✓ `9cceff7` **−1 929** (corrected — see §5②); B5 publish runtime member signatures *(next)*; B6 runtime members total + annotated; B7 chain-annotate stdlib | **in progress** |
 | **C. Consumer pass — unboxing** | `emitValue` reads `staticRep` and emits the raw or boxed direct path; `boxIfNeeded` at use sites; the speculative machinery is deleted | unboxing lands; acceptance: raw-comparison count rises from 24 to the hundreds, IR drops further, outputs and both gates unchanged | not started |
 | **D. Widen the unboxing domain** | Extend raw representation to more shapes, only where static evidence exists | raw Boolean slots (`i1` fits in a byte); module-root bindings once the extension-bridge `memcpy` frame ABI problem is solved; array/object payload representations | not started |
-| **E. Keep hunting family (a)** | The check / slot / error-test levers keep proving bigger than unboxing; keep looking for "information ⇒ dead code" | the next one is B4 (read-side Error tests), then the same treatment for error tests whose only reachability is through provably-checked call sites (§6) | continuous |
+| **E. Keep hunting family (a)** | The check / slot / error-test levers keep proving bigger than unboxing; keep looking for "information ⇒ dead code" | B4 landed (`9cceff7`); the same `cannotBeError` predicate now applies to `emitPropagateError` (`?` / aggregate assignment) and to error tests reachable only through provably-checked call sites (§6) | continuous |
 
 The ordering rule that drives all of this: **family (a) is representation-agnostic** — eliding
 an Error test helps a boxed slot exactly as much as a raw one — and it is measurably bigger
@@ -70,19 +70,21 @@ lines.
 | Item | State |
 |---|---|
 | Branch | `unboxed-values` (working tree = `/root/projects/QLang`) |
-| Last commit | `7a55cac` — runtime program now goes through the compile-time analysis (−11 492 IR lines) |
-| Uncommitted | `aot/types.ql` — one new rule: `Array/String.length -> Number` (−593 IR lines) |
-| Verification running | interpreter suite (`--compiler /tmp/n8`) + selfhost gate (`--compiler /tmp/n8`), started 2026-10-11 04:53 |
+| Last commit | `9cceff7` — located-error elision where the value provably cannot be an Error (−1 929 IR lines) |
+| Landed since this doc was written | `a3a4120` `Array/String.length -> Number` (−593); `464f72c` per-program probe (B3/①); `9cceff7` B4/② — see §5② |
+| Verification | both suites green on `/tmp/n21`: interpreter 55 PASS (`ALL CHECKS PASS`), selfhost 46 PASS (`ALL REQUESTED CHECKS PASS`) |
 | Untracked noise | `_b.ql`, `.commandcode/`, `docs/compiler-next-steps.zh.md` |
 | Merge policy | **Do not merge into `dancing-with-dragon` without explicit approval from the user.** |
 
-IR line metric on the accepted fixture, all three points measured on the same seed:
+IR line metric on the accepted fixture, all points measured on the same seed:
 
 ```
 /tmp/t20.ql    pre-runtime-analysis (n0/n3/n6)   215 919
                runtime analyzed (n7, commit 7a55cac)   204 427   (-11 492, -5.3%)
-               + .length -> Number (n8, uncommitted)   203 834   (-593, -2.6% of the change)
-program output in all three cases: 20 (unchanged)
+               + .length -> Number (n8 = a3a4120)      203 834   (-593)
+               + per-program probe (464f72c)           203 838   (+4 comment lines; IR otherwise byte-identical)
+               + located-error elision (9cceff7)        201 909   (-1 929, hits 155)
+program output unchanged throughout: 20
 ```
 
 Everything else after this point is the map.
@@ -281,46 +283,48 @@ Commits (oldest → newest): `6679839`, `348b028`, `8f98254`, `cb53a6b`, `6f935c
 Each step: make the change → report hit counts → report IR lines → run both suites → commit
 only when green. Do not bundle steps.
 
-### ① Per-program probe breakdown
+### ① Per-program probe breakdown — *done* (`464f72c`)
 
-Split the `; typeRep ...` counters by program (library / entry / module N / runtime). Without
-this, the fuel numbers for the code we actually care about are invisible. Mechanical, IR-neutral
-apart from the comment lines.
+Each program now gets its own probe line: 1 = library, 2 = entry, the middle ones the imported
+modules by path, the last = runtime. On `/tmp/t20.ql` the library is *p1* (`boxed reads num=158
+str=34 unk=329`; `boxed binops num=73 cmp=292 str=32 unk=126`) and the runtime's ~700 unknown
+reads stay on *p4*, so the fuel that matters is visible. IR +4 comment lines; ignoring `;` lines
+the IR is byte-identical. Validated on `t35_scoped_modules` (8 programs). Mechanical, IR-neutral
+apart from the comment lines and the one `; located-error elided:` line at the end.
 
-### ② Read-side Error-test elision (the big lever)
+### ② Error-test elision — *done* (`9cceff7`), but not where this section first said
 
-A read can produce an Error **iff some write could have put an Error there**. The analysis
-already knows when that is impossible:
+Two measured facts rewrite the step:
 
-- the binding's static type is a builtin (`Number`/`String`/`Boolean`/`Null`) — an Error
-  belongs to none of them; and
-- every write to that binding has a statically known RHS type (this is the existing
-  `runtimeTypeFree` predicate) — a mismatched write is stopped *at the write point*, so the
-  slot either holds a legal value or control has already left with an error.
+1. **The read path was already unchecked before this branch.** `0d02ef0` ("stop checking plain
+   reads") removed `Identifier` from `emitLocatedError`'s kind list, and it is an ancestor of
+   this branch (shared with `dancing-with-dragon`). Measured now: one read costs **2 IR lines**
+   and emits **no** Error test (bare `x;` = 2). The old estimate here ("≈7 lines per read",
+   309 typed reads) was a pre-`0d02ef0` reading — the literal read-side hit count is **0**.
+2. **The same lever survives on the operator sites.** `emitLocatedError` wraps every
+   `BinaryOp`/`UnaryOp`/`Call`/`MemberAccess`/`IndexAccess` result; those blocks are dead when
+   the result provably cannot be an Error.
 
-Then the read's test is dead. Stamp it on the node in the analysis (e.g. `cannotBeError`,
-carried through a scope stack exactly like `staticRep`), and in the generator remove the
-**whole block** — the tag fetch, the compare, the branch, the cold path and the `phi` — not
-just the `ql_tag` call. `ql_tag` appears at many sites (grep shows ~180, 414, 530, 566–567,
-596, 620, 1057, 1621, 1911, …); the binding-read path is the one to identify explicitly, and
-several of those other sites belong to operator / statement-value paths that must not be
-touched in this step.
+What landed: a per-program, per-binding **fixpoint over the write set** (`typeProneOf` /
+`typeBindingProne` / `typeSolveWrites` in `aot/types.ql`). A binding is *safe* iff its type is a
+builtin scalar **and** every write to it cannot produce an Error; a `BinaryOp` is safe iff the
+operator itself cannot error at the known operand types (`typeOpCreatesError`) and both operands
+are safe. `/`, `%`, `&&`, `||`, mixed-type `+`, unary `-`/`+` on a non-Number, calls, member and
+index access, and anything unproven stay unsafe. Soundness is structural, not a claim about
+static types: `1 / z` and `__op_eq(e, 1)` (zone error on an Error operand) both carry a scalar
+static type yet produce Errors.
 
-Pools on the fixture (pre-runtime-era numbers, i.e. for the code we can actually unbox):
-reads with a known type ≈ 309 (275 Number + 34 String), boxed binops with a known type ≈ 403
-(111 arithmetic + 292 comparisons); the unknown pools (329 reads / 128 binops) keep their
-tests.
+Result: **155 sites** elided on `/tmp/t20.ql`, IR 203 838 → 201 909 (**−1 929**), output 20,
+compile 18 s → 12 s. Both suites green.
 
-Two traps, both paid for already:
+**Trap paid for here — do not repeat.** The binding graph must live in a compiler-internal table
+keyed by a **numeric id stored on the node**; never as node references. `reserveModuleBindings`,
+`loadModuleNode` and `collectModuleExports` walk *every property of every AST node*
+(`std.Object.keys(node)`), so a node-valued property (`node.bindingRef`, `node.bindWrites`)
+builds a cycle and the walk never terminates (18 s → >240 s, nothing emitted).
 
-- **Writes from closures / a different function body.** Judge against the *whole-program*
-  write set (the analysis already tracks writes per namespace — `typeUnknownWrites`), not
-  just the current body. `t35_scoped_modules` is the regression that catches this.
-- **Shadowing.** Use the scope stack; the existing type-free path in the generator does the
-  same thing (`curScope.typeFree`, `qlangc.ql:853–855`, `:901`), so mirror its structure.
-
-Rough estimate of the payoff: ≈8 IR lines per elided test on top of what unboxing removes
-(see §7).
+Next user of the same predicate: `emitPropagateError` (the `?` operator and the aggregate
+assignment paths) is the same tag==8 block.
 
 ### ③ Publish runtime member signatures into the cross-program index
 
@@ -465,6 +469,11 @@ fixed". That is more reliable than guessing fractions, and it is the input for �
   both operands raw — i.e. the fuel for unboxing is exactly why the user's "complete the
   types first" ordering is right.
 - **`stdlib/bundle.ql` must be regenerated** after stdlib edits (§3).
+- **Never put node references on AST nodes.** The generator's `reserveModuleBindings`,
+  `loadModuleNode` and `collectModuleExports` walk every property of every node
+  (`std.Object.keys(node)`), so a node-valued property cycles and the compile never finishes
+  (measured: `18 s → >240 s`, nothing emitted). Keep per-binding analysis state in a
+  compiler-internal table and store only a **number** on the node (§5②).
 - A "silently drop the runtime's diagnostics" reading is wrong: report the count, keep the
   worklist.
 
@@ -558,7 +567,8 @@ In rough priority order — each is a measurement, not an opinion:
 3. **Conversion fraction.** What fraction of "known type" sites actually qualifies for
    unboxing (function-local *and* every write type-known)? This decides whether family (b) is
    worth thousands or hundreds of lines.
-4. **How much family (a) is left on the read side.** Step B4's hit count answers it directly.
+4. **How much family (a) is left on the read side.** *Answered:* 0 — `0d02ef0` already removed
+   the read-side test; the lever moved to the operator sites and landed as `9cceff7` (§5②).
 5. **Call-site check obligations.** As runtime member signatures start being trusted (B5/B6),
    enumerate which call sites owe a `TypeCheck`, so that elided tests stay sound (§6).
 
