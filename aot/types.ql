@@ -24,6 +24,15 @@ let typeErrors = [];
 let typeRepScopes = [];
 // 诊断口径:每个程序里各表示各出现多少个节点(只用于量测,不参与生成)。
 let typeRepCounts = {};
+// 「该值能否是 Error」的编译期结论(传染安全):一个绑定安全,当且仅当每次写入它都不可能
+// 把 Error 存进槽里(除以变量零、调用、成员/索引都可能产出 Error,即使静态类型是标量)。
+// 与表示一样只在分析期算,生成端只读结果 —— 据此省掉 emitLocatedError 的定位测试。
+// 绑定图放在编译器内部表里、节点上只留数字 id:发射器的 reserveModuleBindings 等会遍历
+// 节点的每个属性,若把绑定节点引用挂上去就会走进环(实测会卡死)。
+let typeBindScopes = [];
+let typeBindTable = {};
+let typeBindCount = {};
+let typeCollectWrites = false;
 // 「补类型」的工作清单(按程序分开):推导不出类型的绑定、没有注解的参数。
 // 这两样正是 std 类型信息的主要来源 —— 参数写注解,函数体才能按注解定型。
 let typeUnknownBinds = {};
@@ -58,7 +67,7 @@ let typeLookup = (name) -> {
   if isError(typeBuiltins[name]) { return ""; };
   name;
 };
-let typePush = () -> { typeScopes[typeDepth] = {}; typeFnResults[typeDepth] = {}; typeRepScopes[typeDepth] = {}; typeDepth = typeDepth + 1; null; };
+let typePush = () -> { typeScopes[typeDepth] = {}; typeFnResults[typeDepth] = {}; typeRepScopes[typeDepth] = {}; typeBindScopes[typeDepth] = {}; typeDepth = typeDepth + 1; null; };
 let typePop = () -> { typeDepth = typeDepth - 1; null; };
 // 词法查找:这个名字是不是「返回类型已知的函数绑定」。
 let typeFnLookup = (name) -> {
@@ -82,6 +91,79 @@ let typeRepLookup = (name) -> {
     i = i - 1;
   };
   "";
+};
+// 词法查找:名字 -> 绑定 id。缺失返回 -1(未知一律当「可能是 Error」,保守)。
+let typeBindLookup = (name) -> {
+  let i = typeDepth - 1;
+  while i >= 0 {
+    if !isError(typeBindScopes[i][name]) { return typeBindScopes[i][name]; };
+    i = i - 1;
+  };
+  -1;
+};
+// 两侧静态类型已知时,这个二元运算「本身」会不会造出 Error(不含操作数携带的 Error)。
+// 照生成端实际走的路判定:两侧都是 Number 走内联 fadd/fcmp/位运算,不会;两侧都是 String
+// 的 + 走拼接,不会;==/!= 是标签感知的全函数;其余(混合类型、除/模、短路)都可能报错。
+let typeOpCreatesError = (op, lt, rt) -> {
+  if isError(lt) || isError(rt) { return true; };
+  if isError(typeScalar[lt]) || isError(typeScalar[rt]) { return true; };
+  if op == "==" || op == "!=" { return false; };
+  if op == "+" { return !((lt == "Number" && rt == "Number") || (lt == "String" && rt == "String")); };
+  if op == "-" || op == "*" || op == "&" || op == "|" || op == "^"
+     || op == "<" || op == "<=" || op == ">" || op == ">=" { return !(lt == "Number" && rt == "Number"); };
+  true;
+};
+// 结构上「可能产出 Error」:字面量与 ! 不会;一元 +/- 仅在操作数是 Number 时随操作数;二元
+// 运算在两侧类型已知且该运算本身不会报错时随操作数;其余一律会。Identifier 随其绑定。
+// 这是「能否是 Error」的唯一判据。
+let typeProneOf = (node) -> {
+  if node == null || isError(node) { return true; };
+  let t = node.type;
+  if t == "Number" || t == "Boolean" || t == "Null" || t == "String" || t == "Function" { return false; };
+  if t == "Identifier" {
+    if isError(node.bindId) || node.bindId < 0 { return true; };
+    let st = typeBindTable[typeProgram][node.bindId];
+    if isError(st) { return true; };
+    return typeBindingProne(st);
+  };
+  if t == "UnaryOp" {
+    if node.operator == "!" { return false; };
+    if node.operator == "-" || node.operator == "+" {
+      if node.operand.staticType == "Number" { return typeProneOf(node.operand); };
+      return true;
+    };
+    return true;
+  };
+  if t == "BinaryOp" {
+    if node.operator == "&&" || node.operator == "||" { return true; };
+    if typeOpCreatesError(node.operator, node.left.staticType, node.right.staticType) { return true; };
+    return typeProneOf(node.left) || typeProneOf(node.right);
+  };
+  true;
+};
+// 绑定安全性:带记忆的深度优先 + 环内乐观。QLang 的确定赋值保证环里没有未初始化读,所以
+// 环内没有 Error 来源 —— 乐观假设可靠,且整体是 O(节点数)(全量迭代曾是 O(n²),太慢)。
+let typeBindingProne = (st) -> {
+  if st == null || isError(st) { return true; };
+  if st.done == true { return st.prone; };
+  if st.busy == true { return false; };
+  st.busy = true;
+  let prone = st.base;
+  let j = 0;
+  while j < st.writes.length {
+    if typeProneOf(st.writes[j]) { prone = true; };
+    j = j + 1;
+  };
+  st.busy = false;
+  st.done = true;
+  st.prone = prone;
+  prone;
+};
+// 第一遍收齐写入集后,把每个绑定解到不动点(每个只解一次)。
+let typeSolveWrites = (list) -> {
+  let i = 0;
+  while i < list.length { typeBindingProne(list[i]); i = i + 1; };
+  null;
 };
 // 空串不适合当对象的键,诊断桶里记作 "boxed"。
 let repKey = (rep) -> { if rep == "" { return "boxed"; }; rep; };
@@ -209,12 +291,24 @@ let buildStdTypes = (stmts) -> {
 
 let inferExpr = (node) -> {
   let t = node.type;
-  if t == "Number" { tagType(node, "Number"); return tagRep(node, "Number"); };
-  if t == "Boolean" { tagType(node, "Boolean"); return tagRep(node, ""); };
-  if t == "Null" { tagType(node, "Null"); return tagRep(node, ""); };
-  if t == "String" { tagType(node, "String"); return tagRep(node, ""); };
+  // 默认:可能产出 Error(定位测试必须保留)。只有下面能证明的地方才翻成 true。
+  node.cannotBeError = false;
+  if t == "Number" { tagType(node, "Number"); node.cannotBeError = true; return tagRep(node, "Number"); };
+  if t == "Boolean" { tagType(node, "Boolean"); node.cannotBeError = true; return tagRep(node, ""); };
+  if t == "Null" { tagType(node, "Null"); node.cannotBeError = true; return tagRep(node, ""); };
+  if t == "String" { tagType(node, "String"); node.cannotBeError = true; return tagRep(node, ""); };
   // 标识符的自然表示 = 它解析到的那个绑定的表示(作用域栈上问,遮蔽与捕获自然正确)。
-  if t == "Identifier" { tagType(node, typeLookup(node.name)); return tagRep(node, typeRepLookup(node.name)); };
+  // 读的安全性同样来自绑定:它的每次写入都不可能产出 Error 时才安全。
+  if t == "Identifier" {
+    tagType(node, typeLookup(node.name));
+    let bind = typeBindLookup(node.name);
+    node.bindId = bind;
+    if bind >= 0 {
+      let st = typeBindTable[typeProgram][bind];
+      if !isError(st) && st.prone == false { node.cannotBeError = true; };
+    };
+    return tagRep(node, typeRepLookup(node.name));
+  };
   if t == "Function" {
     // 函数体同样在编译期分析。参数：注解会在调用点被注解检查强制执行（带注解的实参
     // 类型不符时调用返回错误），所以函数体内可以按注解声明的内建类型来用它。
@@ -259,6 +353,7 @@ let inferExpr = (node) -> {
     node.returnType = result;
     typePop();
     tagType(node, "Function");
+    node.cannotBeError = true;
     return tagRep(node, "");
   };
   if t == "Object" { tagType(node, "Object"); return tagRep(node, ""); };
@@ -267,9 +362,12 @@ let inferExpr = (node) -> {
     let inner = inferExpr(node.operand);
     if node.operator == "!" {
       tagType(node, "Boolean");
+      node.cannotBeError = true;
       return tagRep(node, if repOf(node.operand) == "Boolean" { "Boolean"; } else { ""; });
     };
     tagType(node, inner);
+    // 一元 +/- 只在操作数静态类型是 Number 且本身安全时安全(否则 __neg_error/__pos_error)。
+    if (node.operator == "-" || node.operator == "+") && node.operand.staticType == "Number" && !isError(node.operand.cannotBeError) && node.operand.cannotBeError == true { node.cannotBeError = true; };
     return tagRep(node, "");
   };
   if t == "BinaryOp" {
@@ -280,6 +378,13 @@ let inferExpr = (node) -> {
     let lrep = repOf(node.left);
     let rrep = repOf(node.right);
     if op == "&&" || op == "||" { tagType(node, "Boolean"); return tagRep(node, ""); };
+    // 该运算本身不会报错(两侧类型已知且走的是无错路径),且两个操作数都安全 ⇒ 结果不可能
+    // 是 Error。(除/模/混合类型/短路由 typeOpCreatesError 排除。)
+    if !typeOpCreatesError(op, node.left.staticType, node.right.staticType)
+       && !isError(node.left.cannotBeError) && node.left.cannotBeError == true
+       && !isError(node.right.cannotBeError) && node.right.cannotBeError == true {
+      node.cannotBeError = true;
+    };
     if repCmpOp(op) {
       tagType(node, "Boolean");
       return tagRep(node, if lrep == "Number" && rrep == "Number" { "Boolean"; } else { ""; });
@@ -358,6 +463,20 @@ let inferStmts = (stmts) -> {
         typeReport(s, "type mismatch: value of type " + value + " does not match the annotated type " + declared);
       };
       typeScopes[typeDepth - 1][s.name] = if declared != "" { declared; } else { value; };
+      // 安全性的底 + 写入集:类型不是内建标量 → 可能是 Error;否则由写入集在 fixpoint 里定。
+      let bindingType = if declared != "" { declared; } else { value; };
+      let bindId = -1;
+      if typeCollectWrites {
+        bindId = typeBindCount[typeProgram];
+        typeBindCount[typeProgram] = bindId + 1;
+        let st = { base: isError(typeScalar[bindingType]), prone: false, busy: false, done: false, writes: [] };
+        if s.value != null { st.writes[0] = s.value; };
+        typeBindTable[typeProgram][bindId] = st;
+      } else {
+        bindId = s.bindId;
+      };
+      s.bindId = bindId;
+      typeBindScopes[typeDepth - 1][s.name] = bindId;
       // 该绑定是否需要运行期的类型槽与检查:只有当存在「右值静态类型未知」的写入时
       // 才需要兜底。否则每一次写入都在编译期可判定,检查不可能失败。
       if declared != "" {
@@ -387,6 +506,11 @@ let inferStmts = (stmts) -> {
       if !isError(s.target.type) && s.target.type == "Identifier" {
         typeAssignedNames[typeProgram][s.target.name] = true;
         let value = inferExpr(s.value);
+        let targetBind = typeBindLookup(s.target.name);
+        if typeCollectWrites && targetBind >= 0 {
+          let st = typeBindTable[typeProgram][targetBind];
+          if !isError(st) { st.writes[st.writes.length] = s.value; };
+        };
         let declared = typeLookup(s.target.name);
         // 只有「右值类型已知且与声明一致」才可能省掉运行期检查。类型未知,或已知
         // 但不一致(此时运行期必须报 TypeCheck),都保留检查。
@@ -457,17 +581,25 @@ let inferTypes = (stmts) -> {
   typeProgram = typeProgram + 1;
   typeUnknownWrites[typeProgram] = {};
   typeAssignedNames[typeProgram] = {};
+  typeBindTable[typeProgram] = [];
+  typeBindCount[typeProgram] = 0;
   typeScopes[0] = {};
   typeFnResults[0] = {};
   typeRepScopes[0] = {};
+  typeBindScopes[0] = {};
   typeDepth = 1;
   typeReturnDepth = 0;
+  typeCollectWrites = true;
   inferStmts(stmts);
+  typeCollectWrites = false;
+  // 第一遍收齐每次写入的右值后,解「谁可能是 Error」;第二遍据此给每个节点标注。
+  typeSolveWrites(typeBindTable[typeProgram]);
   // 第二遍才是权威口径:第一遍只负责把每次写入的右值类型收齐,第二遍据此判定可解箱性;
   // 计数与两张工作清单也在第二遍重来,免得把两遍的遍历算成两份。
   typeScopes[0] = {};
   typeFnResults[0] = {};
   typeRepScopes[0] = {};
+  typeBindScopes[0] = {};
   typeRepCounts[typeProgram] = {};
   typeUnknownBinds[typeProgram] = [];
   typeUnknownParams[typeProgram] = [];

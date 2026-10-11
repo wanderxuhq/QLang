@@ -703,6 +703,8 @@ let isTopLevel = true;  // main 顶层 ? → __exit_error
 // every call site: this toolchain rejects a forward `declare`).
 let needColdLocated = false;
 let coldHelperAt = 0;
+// 分析期已证明不可能是 Error、因而整块省掉定位测试的节点数(命中数,先于行数报)。
+let locErrorElided = 0;
 // Runtime functions whose body is already emitted, keyed by source name: a call
 // after that point can be direct (this toolchain wants the definition first), and
 // runtime bindings are private, so they cannot be rebound by user code.
@@ -1641,7 +1643,13 @@ let emitValue = (node) -> {
   // checked — reading a binding that holds an Error yields that Error as an
   // ordinary value and it propagates only through `?` or another operation.
   if kind == "BinaryOp" || kind == "UnaryOp" || kind == "Call" || kind == "Import" || kind == "MemberAccess" || kind == "IndexAccess" {
-    value = emitLocatedError(value, node, kind == "Call" || kind == "Import");
+    // 分析期已证明这个值不可能是 Error(操作数/绑定都不携带 Error)⇒ 定位测试连同它的
+    // 冷路径与 phi 全是死代码,整块不发射。只读结论,不做发散猜测。
+    if !inRuntime && !isError(node.location) && !isError(node.cannotBeError) && node.cannotBeError == true {
+      locErrorElided = locErrorElided + 1;
+    } else {
+      value = emitLocatedError(value, node, kind == "Call" || kind == "Import");
+    };
   };
   { reg: value, raw: "" };
 };
@@ -1958,6 +1966,8 @@ let main = (args) -> {
   if compileErrors.length > 0 {
     std.Error.raise("CompileError", compileErrors[0], null)?;
   };
+  // 命中数:分析期证明不可能出错、因而整块省掉定位测试的节点数(主函数体发完之后才知道)。
+  out[out.length] = "; located-error elided: " + std.String.toString(locErrorElided);
   // R10-c: out[0..mainAt) = prelude plus the cold helper, then every function body,
   // then main. Function bodies come before their direct callers because this
   // toolchain has no forward declarations; the closure boxes keep the order
