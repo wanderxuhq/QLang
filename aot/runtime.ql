@@ -33,7 +33,7 @@ let writeU64 = (p, off, v) -> {
   null;
 };
 
-let readU64 = (p, off) -> {
+let readU64 = (p, off): Number -> {
   let acc = 0;
   let mult = 1;
   let i = 0;
@@ -662,7 +662,7 @@ let __type_of = (v) -> {
 
 // Keep the existing exact safe-integer path. Other finite values share the
 // existing shortest-round-trip conversion instead of truncating fractions.
-let __itoa = (n) -> {
+let __itoa = (n): String -> {
   if n != n { return "NaN"; };
   if (n - n) != 0 { if n < 0 { return "-inf"; } else { return "inf"; }; };
   if n == 0 && ql_mem_get(n, 15) >= 128 { return "-0"; };
@@ -1004,7 +1004,7 @@ let __tuple_check = (checks, a) -> {
 };
 
 // 对象键收集(遍历桶表;键为 tag-2 STRING 盒)→ tag-5 数组盒
-let __obj_keys = (o) -> {
+let __obj_keys = (o): Array -> {
   if readU64(o, 0) != 6 { return __err("TypeMismatch", "Object.keys expects Object"); };
   let table = ql_mem_get_ptr(o, 8);
   let cap = readU64(o, 16);
@@ -1359,7 +1359,7 @@ let stdObject = { keys: __obj_keys };
 // Low-level binary64 mechanisms: frexp/ldexp expose the representation only
 // (mantissa in [1,2) and a power-of-two exponent). Every Math algorithm that
 // builds on them lives in the shared QLang library.
-let __num_frexp = (x) -> {
+let __num_frexp = (x): Array -> {
   if readU64(x, 0) != 1 { return __err("TypeMismatch", "Number.frexp expects Number"); };
   if x == 0 || !__num_isfinite(x) { return [x, 0]; };
   let negative = ql_mem_get(x, 15) >= 128;
@@ -1428,7 +1428,7 @@ let __s_at = (s, idx) -> {
 };
 let __s_codepoint = (s) -> {
   if readU64(s, 0) != 2 { return __err("TypeMismatch", "String.codePointAt expects String"); };
-  (idx) -> {
+  (idx): Number -> {
     if readU64(idx, 0) != 1 { return __err("TypeMismatch", "String.codePointAt expects Number"); };
     let buf = ql_mem_get_ptr(s, 8);
     let at = __norm_idx(idx, __s_len(s))?;
@@ -1634,7 +1634,7 @@ let __big_sub = (a, b) -> {
 };
 // Construct the f64 payload directly, including subnormals, NaN/Infinity
 // and signed zero. No temporary heap Number or lossy integer round trip.
-let __number_bits = (mantissa, exponent, negative) -> ql_number_bits(mantissa, exponent, negative);
+let __number_bits = (mantissa, exponent, negative): Number -> ql_number_bits(mantissa, exponent, negative);
 let __json_number_text = (n) -> {
   let high = ql_mem_get(n, 15);
   let negative = high >= 128;

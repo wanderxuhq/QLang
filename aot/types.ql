@@ -200,10 +200,19 @@ let typeBound = (name) -> {
   false;
 };
 // 注解所指的内建类型;不是内建(或被遮蔽、或是组合类型表达式)就是 ""。
+// 运行期程序自己定义了类型单例(`let Number = {check: __pred_number}` 等),在那里面
+// `Number` 是被绑定的 —— 但它就是那个内建类型本身,所以该程序里放行(typeDefinesBuiltins)。
+let typeDefinesBuiltins = false;
+let typeSetDefinesBuiltins = (v) -> { typeDefinesBuiltins = v; null; };
+export typeSetDefinesBuiltins;
 let annotationBuiltinName = (annotation) -> {
   if isError(annotation) || annotation == null { return ""; };
   if isError(annotation.type) || annotation.type != "Identifier" { return ""; };
-  if typeBound(annotation.name) { return ""; };
+  if typeBound(annotation.name) {
+    if !typeDefinesBuiltins { return ""; };
+    if isError(typeBuiltins[annotation.name]) { return ""; };
+    return annotation.name;
+  };
   if isError(typeBuiltins[annotation.name]) { return ""; };
   annotation.name;
 };

@@ -1814,7 +1814,9 @@ let main = (args) -> {
   // 是误报),但条数要报出来,不悄悄丢掉 —— 那是「让运行期干净通过分析」的工作清单。
   let runtimeErrBase = typeErrors.length;
   typeSetStdNamespace(true);
+  typeSetDefinesBuiltins(true);
   inferTypes(program.statements);
+  typeSetDefinesBuiltins(false);
   typeSetStdNamespace(false);
   let runtimeErrCount = typeErrors.length - runtimeErrBase;
   while typeErrors.length > runtimeErrBase { typeErrors.remove(typeErrors.length - 1); };
