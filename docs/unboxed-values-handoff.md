@@ -52,7 +52,7 @@ seed; the accepted baseline is 215 919.
 | Phase | Goal | Deliverable / evidence | Status |
 |---|---|---|---|
 | **A. Infrastructure** (pre-existing, on main) | The analysis exists at all, and the generator consumes only its outputs | self-hosted native compiler; per-binding type slot / check omission **−5830 IR lines**; numeric specialization; parameter and return annotations; stdlib annotations + bundle regeneration **−1086** | done |
-| **B. Make the type information complete** *(this branch)* | Give the analysis everything it needs to say "known" with confidence, so family (a) fires everywhere and family (b) has fuel | B1 runtime program analyzed ✓ **−11 492**; B2 `.length -> Number` ✓ `a3a4120` **−593**; B3 per-program probe ✓ `464f72c`; B4 error-test elision ✓ `9cceff7` **−1 929** (see §5②); B5 return-type signatures ✓ `47a4e97`; B6 declare the runtime signatures *(next — plan Phase 2)*; B7 general module resolution, `std` + user `import` *(plan Phase 3)*; B8 chain-annotate the stdlib | **in progress** |
+| **B. Make the type information complete** *(this branch)* | Give the analysis everything it needs to say "known" with confidence, so family (a) fires everywhere and family (b) has fuel | B1 runtime program analyzed ✓ **−11 492**; B2 `.length -> Number` ✓ `a3a4120` **−593**; B3 per-program probe ✓ `464f72c`; B4 error-test elision ✓ `9cceff7` **−1 929** (see §5②); B5 return-type signatures ✓ `47a4e97`; B6 general module resolution ✓ `0b8e239`; B7 declare the runtime signatures ✓ `d5cc108` **−151**; B8 chain-annotate the stdlib *(next)* | **in progress** |
 | **C. Consumer pass — unboxing** | `emitValue` reads `staticRep` and emits the raw or boxed direct path; `boxIfNeeded` at use sites; the speculative machinery is deleted | unboxing lands; acceptance: raw-comparison count rises from 24 to the hundreds, IR drops further, outputs and both gates unchanged | not started |
 | **D. Widen the unboxing domain** | Extend raw representation to more shapes, only where static evidence exists | raw Boolean slots (`i1` fits in a byte); module-root bindings once the extension-bridge `memcpy` frame ABI problem is solved; array/object payload representations | not started |
 | **E. Keep hunting family (a)** | The check / slot / error-test levers keep proving bigger than unboxing; keep looking for "information ⇒ dead code" | B4 landed (`9cceff7`); the same `cannotBeError` predicate now applies to `emitPropagateError` (`?` / aggregate assignment) and to error tests reachable only through provably-checked call sites (§6) | continuous |
@@ -70,9 +70,9 @@ lines.
 | Item | State |
 |---|---|
 | Branch | `unboxed-values` (working tree = `/root/projects/QLang`) |
-| Last commit | `47a4e97` — function return-type signatures `(params): T -> body`, enforced by both engines |
-| Landed since this doc was written | `a3a4120` `.length -> Number` (−593); `464f72c` per-program probe (B3/①); `9cceff7` error-test elision (B4/②, −1 929); `47a4e97` return-type signatures (③, see §5③) |
-| Verification | both suites green on `/tmp/n26`: interpreter 56 PASS (`ALL CHECKS PASS`), selfhost 47 PASS (`ALL REQUESTED CHECKS PASS`) |
+| Last commit | `d5cc108` — declared runtime member return types (−151 IR lines) |
+| Landed since this doc was written | `a3a4120` `.length -> Number` (−593); `464f72c` per-program probe (B3/①); `9cceff7` error-test elision (B4/②, −1 929); `47a4e97` return-type signatures; `0b8e239` general module resolution; `d5cc108` declared runtime signatures (−151) |
+| Verification | both suites green on `/tmp/n44`: interpreter 56 PASS (`ALL CHECKS PASS`), selfhost 47 PASS (`ALL REQUESTED CHECKS PASS`) |
 | Untracked noise | `_b.ql`, `.commandcode/`, `docs/compiler-next-steps.zh.md` |
 | Merge policy | **Do not merge into `dancing-with-dragon` without explicit approval from the user.** |
 
@@ -85,6 +85,8 @@ IR line metric on the accepted fixture, all points measured on the same seed:
                + per-program probe (464f72c)           203 838   (+4 comment lines; IR otherwise byte-identical)
                + located-error elision (9cceff7)        201 909   (-1 929, hits 155)
                + return-type signatures (47a4e97)       201 909   (no annotations in the corpus → byte-identical)
+               + general module resolution (0b8e239)    201 910   (+1 probe comment; the channel itself is IR-neutral)
+               + declared runtime signatures (d5cc108)  201 758   (-151; probe: ns-resolve resolved 5 / unresolved 23)
 program output unchanged throughout: 20
 ```
 
@@ -355,26 +357,35 @@ it:
 IR-neutral on the existing corpus (no annotations yet): `/tmp/t20.ql` byte-identical, 201909.
 Fixture `t55_return_types` (10 checks, both engines).
 
-The remaining work is Phase 2/3 of the plan
-(`~/.commandcode/plans/unboxed-03-04-std-member-index.zh.md`):
+**Landed as `0b8e239` + `d5cc108`** (plan `~/.commandcode/plans/unboxed-03-04-std-member-index.zh.md`):
 
-- **Phase 2 — declare the runtime signatures.** `readU64 = (p, off): Number -> …` (`:36`) makes the
-  `__pred_*` bodies (`:871-881`) type, so `Number.check … Type.check` derive from the source and
-  `typeRuntimePredicates` (`types.ql:217-221`) **can be deleted** (that is the old ⑤). Then
-  `__number_bits: Number`, `__num_frexp: Array`, `__obj_keys: Array`, `__itoa: String`,
-  `__s_codepoint`'s inner `: Number`, dropping the internal `__err` where the declared type must hold
-  (`fromCodePoint`'s genuine `RangeError` stays undeclared). Fixture fallout to expect:
-  `t28_objects.ql:12`, `t27_native_calls.ql:38`, `t45_native_function_members.ql`.
-- **Phase 3 — general module resolution (`std` + user `import`).** The cross-program index the old ③
-  wanted is **dormant**: `stdScanExports` needs a `Let`, but the library's export object is a bare
-  statement (`build_bundle.ql:60-66`; a statement-position `{` parses to an Object node), and
-  `looksLikeExports` requires every field value to be a known module object — which wrongly drops
-  `Object`/`JSON`/`Result`. Revive it *generally*: export tables taken at face value (a module is a
-  field name, whatever the value's kind), runtime analysed before the library, one name may bind
-  several values, `std.<X>` typed by the exported value (never a forced `"Object"`), members resolved
-  only where that value is statically visible. The **same rule must serve user `import`**, otherwise
-  it is a privilege over ordinary objects — and ordinary objects get none (only a type value's `check`
-  and `.length` are language contracts/mechanisms, and may stay privileged).
+1. **The channel — general module resolution (`0b8e239`).** The index was dormant for *two* reasons,
+   and the second was a real bug: `stdScanExports` needed a shape the bundle does not produce, **and**
+   `inferExpr`'s `Call` branch never inferred its callee (it only read `callee.memberReturn`), so a
+   `std.<X>.<m>(…)` callee was never analysed at all. Both fixed: the `Call` branch now does
+   `inferExpr(node.callee)`; export tables are taken at face value (an Object literal that is a
+   function body's **tail statement**, or `let std = {…}`), the field name is the module name whatever
+   the value's kind, a name may bind several values (library + runtime union), the runtime is analysed
+   first, and `std.<X>` is typed by the exported value — never a forced `"Object"`. Members resolve
+   only where the value is statically visible (factory-built `ObjectLibrary`/`JSONLibrary` stay
+   unknown: a knowability limit, not a privilege). Probe `; ns-resolve: resolved=5 unresolved=23`
+   (28 sites reached). IR-neutral (201 910).
+2. **The signatures — declared runtime return types (`d5cc108`).** `__obj_keys: Array`,
+   `__num_frexp: Array`, `__itoa: String`, `__number_bits: Number`, `__s_codepoint`'s inner `: Number`
+   (which also types `__math_scale` and `Number.ldexp`). **Form measured, not assumed:** the ④ form
+   (parameter annotations + dropping the internal `__err`) moves the failure to a call-site `TypeCheck`
+   (fixtures change) *and* pays a call-site check — only **−58**. Return annotations only, internal
+   `__err` kept, gives **−151** with no semantic change: the declared type is honest for legal inputs
+   and illegal ones are still caught internally. So "signatures derivable from source" is no longer
+   required — declaring suffices, and keeping the internal check is cheaper and safer. Runtime code
+   defines the type singletons (`let Number = {check: …}`), so `typeDefinesBuiltins` lets annotations
+   through there; user code that shadows a builtin name still resolves to unknown.
+
+Still open (measured): unresolved = 23 — dominated by `std.Error.raise` (never a scalar type),
+`fromCodePoint` / `Math.max/min/random` / `fs.*` (genuine value-dependent errors), and the
+factory-built modules. `typeRuntimePredicates` also survives: `Number.check` needs it until the type
+singletons themselves resolve through the index (they are object literals in the runtime, so the
+general rule can eventually cover them).
 
 ### ⑥ Chain-annotate the stdlib
 
@@ -576,6 +587,16 @@ the corrections are the important part — do not re-litigate them.
 - **Privileges stay only for language contracts/mechanisms**: a type value's `check` (it cannot come
   from the index — the predicate bodies are written against the opaque host primitive `readU64`), and
   `.length` on Array/String. Ordinary objects get none.
+- **Return types before unblocking the channel, not after** (2026-10-11, order changed on evidence).
+  Phase 2 (declaring runtime signatures) produced *zero* measurable change while the module index was
+  dormant: `readU64`'s type turned out to be already derived, and the members whose types are not
+  derivable are consumed only through `std.<X>.<m>`. So the index (the *channel*) landed first
+  (`0b8e239`), then the declarations (`d5cc108`, −151). Declarations without a channel are not work.
+- **Declare the return type; keep the internal `__err`** (2026-10-11). Measured on the same fixture:
+  the ④ form (parameter annotations + dropping the internal error return) loses more to call-site
+  checks than it gains and changes fixtures (−58); return annotations alone, internal check kept, give
+  −151 with identical semantics. Once signatures can be declared, "derivable from the source" is no
+  longer a requirement.
 
 ## 12. Vocabulary (use the user's words)
 
