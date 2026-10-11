@@ -1,12 +1,71 @@
 # Handoff — Unboxed values / compile-time reduction of emitted IR
 
 Status: work in progress, branch `unboxed-values`. Not merged. `dancing-with-dragon` untouched.
-Audience: whoever picks this up next (human or agent). Everything below is meant to be
-enough to resume without re-deriving anything.
+Audience: whoever picks this up next (human or agent) — written to be read cold, by someone
+who has never seen this repo. Everything needed to resume is in here; nothing is assumed.
+
+> **Copy-paste prompt for a fresh session**
+>
+> "Read `docs/unboxed-values-handoff.md` in full, especially §11 (plan and decision log).
+> Then: run the two verification suites for the uncommitted `aot/types.ql` change if they are
+> not green yet, commit it if they are, and continue from §5 ① (per-program probe breakdown)
+> and §5 ② (read-side Error-test elision). Report hit counts before IR line counts. Do not
+> merge into `dancing-with-dragon` without asking."
 
 ---
 
-## 0. Where things stand right now (read this first)
+## 0. What QLang is, and what this work is
+
+QLang is a small dynamically-typed language with its own toolchain in this repo. The pipeline is:
+
+    lexer -> parser -> compile-time analysis -> code generation
+
+The current effort is a native (LLVM IR) AOT compiler written **in QLang itself**, which is
+self-hosted: `stage1 --emit-llvm aot/qlangc.ql aot/runtime.ql` -> link -> `stage2`, i.e. the
+compiler compiling itself (see §3). The build/test loop is expected to go through that
+self-hosted native path rather than the older Rust host interpreter — the native path is
+~20x faster and exercises the shipping path.
+
+The theme of the current work, in the user's words:
+
+> "Compile-time provides enough information that code generation can emit fewer instructions."
+
+Concretely: the analysis layer derives, for each node, its **type** and its **natural
+representation** (raw `double` / raw `i1` / boxed `%ql_value`); the generator is a pure
+consumer that reads those facts and emits the direct path. Every IR line saved comes from one
+of two families:
+
+- **(a) "the static type is known, therefore this check / this slot / this error test is
+  dead"** — delete the check and its cold path. Historically the *bigger* win by far.
+- **(b) "the static representation is raw, therefore the box/unbox round-trips are
+  unnecessary"** — unboxing proper.
+
+Family (a) is the main line of work. Family (b) — the thing this branch is named after — is a
+secondary layer that only pays off once the types are complete, and is currently expected to
+be worth a few thousand IR lines, not tens of thousands (§7).
+
+### 0.1 Roadmap
+
+Status per phase. "IR" always means `wc -l` of `/tmp/t20.ql`'s emitted IR on the accepted
+seed; the accepted baseline is 215 919.
+
+| Phase | Goal | Deliverable / evidence | Status |
+|---|---|---|---|
+| **A. Infrastructure** (pre-existing, on main) | The analysis exists at all, and the generator consumes only its outputs | self-hosted native compiler; per-binding type slot / check omission **−5830 IR lines**; numeric specialization; parameter and return annotations; stdlib annotations + bundle regeneration **−1086** | done |
+| **B. Make the type information complete** *(this branch)* | Give the analysis everything it needs to say "known" with confidence, so family (a) fires everywhere and family (b) has fuel | B1 runtime program analyzed ✓ **−11 492**; B2 `.length -> Number` ✓ **−593** (uncommitted); B3 probe per-program breakdown; B4 read-side Error-test elision; B5 publish runtime member signatures; B6 runtime members total + annotated; B7 chain-annotate stdlib | **in progress** |
+| **C. Consumer pass — unboxing** | `emitValue` reads `staticRep` and emits the raw or boxed direct path; `boxIfNeeded` at use sites; the speculative machinery is deleted | unboxing lands; acceptance: raw-comparison count rises from 24 to the hundreds, IR drops further, outputs and both gates unchanged | not started |
+| **D. Widen the unboxing domain** | Extend raw representation to more shapes, only where static evidence exists | raw Boolean slots (`i1` fits in a byte); module-root bindings once the extension-bridge `memcpy` frame ABI problem is solved; array/object payload representations | not started |
+| **E. Keep hunting family (a)** | The check / slot / error-test levers keep proving bigger than unboxing; keep looking for "information ⇒ dead code" | the next one is B4 (read-side Error tests), then the same treatment for error tests whose only reachability is through provably-checked call sites (§6) | continuous |
+
+The ordering rule that drives all of this: **family (a) is representation-agnostic** — eliding
+an Error test helps a boxed slot exactly as much as a raw one — and it is measurably bigger
+(§7). So phase B precedes C, and within B, the runtime analysis (B1) had to come first because
+until it landed, *none* of the family (a) levers had ever fired on the runtime's own 1900
+lines.
+
+---
+
+## 0.2 Where things stand right now (read this first)
 
 | Item | State |
 |---|---|
@@ -426,3 +485,80 @@ fixed". That is more reliable than guessing fractions, and it is the input for �
    blaming a change); prefers static/compile-time detection over runtime checks in generated
    code; is comfortable with breaking semantics when it buys compile-time checking; approves a
    proposed ordering with a terse "可以" and expects the work to simply proceed.
+
+---
+
+## 11. The plan, and the decisions behind it (decision log)
+
+Each entry is a decision that was made deliberately. Several are corrections from the user;
+the corrections are the important part — do not re-litigate them.
+
+- **Compile-time decides representation; the generator only consumes it.** An earlier attempt
+  patched the *generator* (trial emission: emit a raw path, fall back if it does not work,
+  reuse already-emitted operands). The user rejected it and required the compile-time plan.
+  Consequence: `emitValue(node) -> {reg, raw}` answers only "what is this value's natural
+  representation"; there is no `want` parameter, consumers never inspect it, and use sites
+  call `boxIfNeeded`.
+- **Representation belongs to the value; boxing belongs to the use site.** The user's
+  invariant: a raw value may cross a boundary, and if a *particular* consumer needs a box, it
+  boxes *there* — never globally, because a global downgrade would box that value everywhere.
+- **Types before unboxing.** Measured, not assumed: of 897 `fcmp` sites only 2 had both
+  operands raw — the generator already knows how to use raw values and simply has almost no
+  fuel. The user set the order explicitly: finish the standard library's types first, then
+  make one unified consumer-side change.
+- **No duplicate runtime interface table.** The first proposal was to declare an interface for
+  runtime members. The user's objection: the source can *derive* it, so a written copy is a
+  duplicate of the truth and will drift. This was superseded by "analyze the runtime source",
+  which is why B1 exists at all.
+- **Standard-library members must not return errors internally.** The original plan was to
+  annotate declarations while runtime members still returned `__err("TypeMismatch", ...)`.
+  The user's correction: std should simply not do that, so signatures become derivable from
+  the source. That is B6, and it creates the call-site-check obligation in §6.
+- **The runtime program must be analyzed.** It was only ever parsed. Largest single win so far
+  (−11 492) — and note that it is family (a), not unboxing.
+- **Semantics may be broken to buy compile-time checking.** The user explicitly chose "change
+  the semantics" over "keep the semantics and move checks opportunistically", and accepts the
+  fallout on docs, fixtures and retained-host tests.
+- **Failures are root-caused with evidence.** If a suite fails after a change, prove whether
+  it is pre-existing or environmental by re-running against a baseline (older compiler /
+  build / binary) before attributing it to the new work.
+- **Performance is measured, not assumed.** Before/after IR counts and timings, every time;
+  hit counts reported before line counts.
+- **Ask before adding new features unilaterally.** The user prefers being asked, and for
+  multi-step plans he approves a recommended ordering with a terse "可以" and then expects the
+  work to proceed without further check-ins.
+
+## 12. Vocabulary (use the user's words)
+
+- **"类型信息" / "type information"** — the type annotation/information on a binding. Not
+  "annotation".
+- **"裸值" / raw value** — an unboxed representation (`double`, `i1`).
+- **"装箱" / boxing** — converting to `%ql_value`, performed at the use site that needs it.
+- **"消费端" / consumer** — the generator side, as opposed to the analysis.
+- **"分析期" / analysis phase** — the compile-time AST traversal. It is *static*: it does not
+  execute the program and has no side effects, it only annotates AST nodes and fills
+  compiler-internal tables. (This had to be explained to the user once — the phrase "analysis
+  runs over runtime source" sounds like execution, and it is not.)
+- **std** — the standard library, which must be authored in QLang itself, in the
+  pure-language stdlib files. The runtime may only provide low-level language *mechanisms*
+  (e.g. string indexing / length), never std-level helper functions exposed onto std.
+- **M-milestones** — the AOT compiler was built in milestones (M1, M2, M3); design docs live
+  under `docs/superpowers/specs/` and plans under `docs/superpowers/plans/`.
+
+## 13. Open questions / the next measurements
+
+In rough priority order — each is a measurement, not an opinion:
+
+1. **Fuel, per program.** How many reads and binops in the *library and entry* code (not the
+   runtime) are statically typed and unboxable? Step ① (B3) delivers this.
+2. **Unknowns by cause.** Bucket the 457 unknown sites (329 reads + 128 binops) by cause —
+   dynamic index / untyped member access / unsigned runtime member / chain propagation — and
+   mark which are fixable. This is the input that orders B5, B6 and B7 instead of guessing
+   conversion fractions.
+3. **Conversion fraction.** What fraction of "known type" sites actually qualifies for
+   unboxing (function-local *and* every write type-known)? This decides whether family (b) is
+   worth thousands or hundreds of lines.
+4. **How much family (a) is left on the read side.** Step B4's hit count answers it directly.
+5. **Call-site check obligations.** As runtime member signatures start being trusted (B5/B6),
+   enumerate which call sites owe a `TypeCheck`, so that elided tests stay sound (§6).
+
