@@ -127,6 +127,17 @@ let annotationBuiltinName = (annotation) -> {
 };
 let inferAnnotationType = (node) -> annotationBuiltinName(node.annotation);
 
+// ---- 运行期成员的语言侧声明(缺口2 的第一批) ------------------------------------
+// 只收「全的」成员:任何输入都返回同一类型、绝不返回 Error。内建类型上的 check 谓词
+// 正是如此(不是该类型 -> false),所以这条声明可靠,不依赖调用点检查。
+// 其余运行期成员(ldexp/frexp/codePointAt…)在参数不对时会返回 Error,声明其返回类型
+// 只有在调用点能被强制检查时才可靠;运行期成员没有可强制的参数注解,故暂不声明。
+let typeRuntimePredicates = {
+  "Number.check": "Boolean", "String.check": "Boolean", "Boolean.check": "Boolean",
+  "Array.check": "Boolean", "Object.check": "Boolean",
+  "AnyArray.check": "Boolean", "AnyObject.check": "Boolean", "Type.check": "Boolean",
+};
+
 // ---- std 成员类型(供 std.Math.sqrt(x) 之类的调用也在编译期定型) ----------------
 // 标准库源码里,模块对象是普通的对象字面量(如 MathLibrary = { sqrt: squareRoot, PI: 3.14 }),
 // 导出对象把它们挂到模块名上(Math: MathLibrary)。两者都在 AST 上,所以成员类型是纯
@@ -285,6 +296,11 @@ let inferExpr = (node) -> {
     // 先分析对象,std.<模块> 才会带上模块名。
     inferExpr(node.object);
     let obj = node.object;
+    // 内建类型名上的运行期谓词:Number.check / String.check …… 返回 Boolean。
+    if !isError(obj.type) && obj.type == "Identifier" && !typeBound(obj.name) && !isError(typeBuiltins[obj.name]) {
+      let pred = typeRuntimePredicates[obj.name + "." + node.field];
+      if !isError(pred) { node.memberReturn = pred; tagType(node, "Function"); return tagRep(node, ""); };
+    };
     if !isError(obj.type) && obj.type == "Identifier" && obj.name == "std" && !typeBound("std") {
       if !isError(stdModuleBinds[node.field]) { node.moduleName = stdModuleBinds[node.field]; tagType(node, "Object"); return tagRep(node, ""); };
       tagType(node, "");
