@@ -1780,27 +1780,35 @@ let main = (args) -> {
   };
   emitPrelude();
   line("; unboxable bindings: " + std.String.toString(typeUnboxList.length));
-  // 诊断:编译期算出的表示各有多少(节点种类/表示)。燃料 = 裸读(Identifier/Number),
-  // 命中 = 裸比较(BinaryOp/Boolean);两者都只进注释,不进代码。
+  // 诊断:编译期算出的表示各有多少(节点种类/静态类型/表示)。燃料 = 裸读,命中 = 裸比较;
+  // 装箱的一侧按静态类型分层,才能分清「根本不是 Number」和「是 Number 但操作数不裸」。
+  // 只进注释,不进代码。
   let repAll = typeRepReport();
   let repIdx = 1;
   let rLit = 0; let rRead = 0; let rArith = 0; let rCmp = 0; let rNot = 0;
-  let rReadBox = 0; let rBinBox = 0;
+  let rReadNum = 0; let rReadStr = 0; let rReadUnk = 0;
+  let rArithNum = 0; let rCmpNum = 0; let rStr = 0; let rBinUnk = 0;
   while repIdx <= typeRepPrograms() {
     let bucket = repAll[repIdx];
     if !isError(bucket) {
-      let v1 = bucket["Number/Number"]; if !isError(v1) { rLit = rLit + v1; };
-      let v2 = bucket["Identifier/Number"]; if !isError(v2) { rRead = rRead + v2; };
-      let v3 = bucket["BinaryOp/Number"]; if !isError(v3) { rArith = rArith + v3; };
-      let v4 = bucket["BinaryOp/Boolean"]; if !isError(v4) { rCmp = rCmp + v4; };
-      let v5 = bucket["UnaryOp/Boolean"]; if !isError(v5) { rNot = rNot + v5; };
-      let v6 = bucket["Identifier/boxed"]; if !isError(v6) { rReadBox = rReadBox + v6; };
-      let v7 = bucket["BinaryOp/boxed"]; if !isError(v7) { rBinBox = rBinBox + v7; };
+      let v1 = bucket["Number/Number/Number"]; if !isError(v1) { rLit = rLit + v1; };
+      let v2 = bucket["Identifier/Number/Number"]; if !isError(v2) { rRead = rRead + v2; };
+      let v3 = bucket["BinaryOp/Number/Number"]; if !isError(v3) { rArith = rArith + v3; };
+      let v4 = bucket["BinaryOp/Boolean/Boolean"]; if !isError(v4) { rCmp = rCmp + v4; };
+      let v5 = bucket["UnaryOp/Boolean/Boolean"]; if !isError(v5) { rNot = rNot + v5; };
+      let u1 = bucket["Identifier/Number/boxed"]; if !isError(u1) { rReadNum = rReadNum + u1; };
+      let u2 = bucket["Identifier/String/boxed"]; if !isError(u2) { rReadStr = rReadStr + u2; };
+      let u3 = bucket["Identifier//boxed"]; if !isError(u3) { rReadUnk = rReadUnk + u3; };
+      let u4 = bucket["BinaryOp/Number/boxed"]; if !isError(u4) { rArithNum = rArithNum + u4; };
+      let u5 = bucket["BinaryOp/Boolean/boxed"]; if !isError(u5) { rCmpNum = rCmpNum + u5; };
+      let u6 = bucket["BinaryOp/String/boxed"]; if !isError(u6) { rStr = rStr + u6; };
+      let u7 = bucket["BinaryOp//boxed"]; if !isError(u7) { rBinUnk = rBinUnk + u7; };
     };
     repIdx = repIdx + 1;
   };
-  line("; typeRep raw: lit=" + std.String.toString(rLit) + " reads=" + std.String.toString(rRead) + " arith=" + std.String.toString(rArith) + " cmp=" + std.String.toString(rCmp) + " not=" + std.String.toString(rNot));
-  line("; typeRep boxed: reads=" + std.String.toString(rReadBox) + " binops=" + std.String.toString(rBinBox));
+  line("; typeRep raw: lit=" + std.String.toString(rLit) + " read=" + std.String.toString(rRead) + " arith=" + std.String.toString(rArith) + " cmp=" + std.String.toString(rCmp) + " not=" + std.String.toString(rNot));
+  line("; typeRep boxed reads: num=" + std.String.toString(rReadNum) + " str=" + std.String.toString(rReadStr) + " unk=" + std.String.toString(rReadUnk));
+  line("; typeRep boxed binops: num=" + std.String.toString(rArithNum) + " cmp=" + std.String.toString(rCmpNum) + " str=" + std.String.toString(rStr) + " unk=" + std.String.toString(rBinUnk));
   coldHelperAt = out.length;
   if extensionMode { mainAt = out.length; line("define %ql_value @qlang_extension_init_v1(ptr %host_env) {"); }
   else { mainAt = out.length; line("define i32 @main(i32 %argc, ptr %argv) {"); };

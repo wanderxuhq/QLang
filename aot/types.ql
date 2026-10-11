@@ -78,9 +78,12 @@ let tagRep = (node, rep) -> {
   node.staticRep = rep;
   if isError(typeRepCounts[typeProgram]) { typeRepCounts[typeProgram] = {}; };
   let bucket = typeRepCounts[typeProgram];
-  // 键记成「节点种类/表示」:区分「Number 字面量」与「标识符读到了裸 double」,
-  // 也就能一眼看出燃料(裸读)与命中(裸比较)各有多少。
-  let key = node.type + "/" + repKey(rep);
+  // 键记成「节点种类/静态类型/表示」:这样才能把三件事分开 ——
+  // ① 根本不是 Number(String/Object/未知),② 是 Number 但操作数不裸(燃料不够),
+  // ③ 真的走了裸路。只看「种类/表示」会把 ① 和 ② 混成一个"装箱"。
+  let st = node.staticType;
+  if isError(st) { st = "?"; };
+  let key = node.type + "/" + st + "/" + repKey(rep);
   if isError(bucket[key]) { bucket[key] = 0; };
   bucket[key] = bucket[key] + 1;
   // 交回「静态类型」而不是「表示」:调用点一律紧跟 tagType,所以 tagRep 可以直接当
