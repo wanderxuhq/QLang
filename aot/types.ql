@@ -224,14 +224,40 @@ let typeRuntimePredicates = {
 // 标准库源码里,模块对象是普通的对象字面量(如 MathLibrary = { sqrt: squareRoot, PI: 3.14 }),
 // 导出对象把它们挂到模块名上(Math: MathLibrary)。两者都在 AST 上,所以成员类型是纯
 // 编译期信息:字段是函数就取它的返回类型,是字面量就取字面量类型。
-let stdModuleBinds = {};   // 模块名(导出字段)-> 模块对象的绑定名
-let stdFieldCall = {};     // 绑定名 -> { 字段 -> 该成员函数的返回类型 }
-let stdFieldValue = {};    // 绑定名 -> { 字段 -> 该成员值的类型 }
+// 一般模块索引:导出表的字段名就是模块名,与值是什么种类无关(对象、工厂调用、函数都算)。
+// 导出表 = 字段值全为标识符的对象字面量 —— 标准库包装函数的尾对象、运行期的 std 字面量,
+// 将来也包括用户模块的导出。成员类型只在该模块值静态可见(对象字面量)时才有,所以工厂
+// 产出的模块其成员仍是未知 —— 这是可知性限制,不是特权。
+let stdLetValues = {};     // 绑定名 -> 其值节点(判断模块值的种类)
+let stdFieldCall = {};     // 绑定名 -> { 成员 -> 成员函数返回类型 }(静态可见的对象字面量)
+let stdFieldValue = {};    // 绑定名 -> { 成员 -> 成员值类型 }
+let stdModuleType = {};    // 模块名 -> 导出值的类型(Object/Function/"")
+let stdModuleCalls = {};   // 模块名 -> { 成员 -> 成员函数返回类型 }
+let stdModuleValues = {};  // 模块名 -> { 成员 -> 成员值类型 }
 let stdValueBinds = {};    // 库内顶层绑定名 -> 其值节点(用于识别函数成员)
+// 命中数:能解析成已知类型的 std.<模块>.<成员> 有多少,解析不出的有多少(按程序)。
+let typeNsResolved = {};
+let typeNsUnresolved = {};
+// 标准库包装函数把 std 当参数收(`(std) -> …`),运行期则 `let std = {…}`;这两个程序里
+// 被绑定的 `std` 就是命名空间本身,允许解析。用户程序里 `std` 未被绑定,照常解析;若用户
+// 遮蔽了 `std`,仍按未知处理(不开特化)。
+let typeStdNamespaceProgram = false;
+let typeSetStdNamespace = (v) -> { typeStdNamespaceProgram = v; null; };
+export typeSetStdNamespace;
+let typeDbgModules = () -> [std.Object.keys(stdModuleType), std.Object.keys(stdModuleCalls), std.Object.keys(stdLetValues)];
+export typeDbgModules;
 
+let stdModuleValueType = (bindingName) -> {
+  let v = stdLetValues[bindingName];
+  if isError(v) || v == null { return ""; };
+  if !isError(v.type) && v.type == "Object" { return "Object"; };
+  if !isError(v.type) && v.type == "Function" { return "Function"; };
+  "";
+};
 let stdScanLet = (node) -> {
   if isError(node) || node == null { return null; };
   if isError(node.type) || node.type != "Let" || node.value == null { return null; };
+  stdLetValues[node.name] = node.value;
   if !isError(node.value.type) && node.value.type == "Object" {
     let callMap = {}; let valueMap = {}; let fieldIndex = 0;
     while fieldIndex < node.value.fields.length {
@@ -259,25 +285,57 @@ let stdScanLet = (node) -> {
   };
   null;
 };
-// 导出对象:字段值都是「指向对象字面量的标识符」的那个对象字面量。
-let stdScanExports = (node) -> {
-  if isError(node) || node == null { return null; };
-  if isError(node.type) || node.type != "Let" || node.value == null { return null; };
-  if !isError(node.value.type) && node.value.type == "Object" {
-    let fields = node.value.fields; let j = 0; let looksLikeExports = fields.length > 0;
-    while j < fields.length {
-      let fv = fields[j].value;
-      if isError(fv.type) || fv.type != "Identifier" || isError(stdFieldCall[fv.name]) { looksLikeExports = false; };
-      j = j + 1;
-    };
-    if looksLikeExports {
-      j = 0;
-      while j < fields.length { stdModuleBinds[fields[j].name] = fields[j].value.name; j = j + 1; };
-    };
+// 一个对象字面量若字段值全是标识符,就是导出表:字段名 = 模块名,字段值的绑定 = 该模块的值。
+// 值的种类不限(对象 / 工厂调用 / 函数),成员表按「静态可见」并入(同名多来源取并集)。
+let stdScanExportMap = (obj) -> {
+  if isError(obj) || obj == null { return null; };
+  if isError(obj.type) || obj.type != "Object" { return null; };
+  let fields = obj.fields;
+  if fields.length == 0 { return null; };
+  let j = 0; let allIdents = true;
+  while j < fields.length {
+    let fv = fields[j].value;
+    if isError(fv.type) || fv.type != "Identifier" { allIdents = false; };
+    j = j + 1;
   };
-  if !isError(node.value.type) && node.value.type == "Function" && node.value.body != null {
-    let i = 0;
-    while i < node.value.body.statements.length { stdScanExports(node.value.body.statements[i]); i = i + 1; };
+  if !allIdents { return null; };
+  j = 0;
+  while j < fields.length {
+    let moduleName = fields[j].name;
+    let bindingName = fields[j].value.name;
+    let mtype = stdModuleValueType(bindingName);
+    if isError(stdModuleType[moduleName]) { stdModuleType[moduleName] = mtype; }
+    else if stdModuleType[moduleName] == "" && mtype != "" { stdModuleType[moduleName] = mtype; };
+    let calls = stdFieldCall[bindingName];
+    if !isError(calls) {
+      if isError(stdModuleCalls[moduleName]) { stdModuleCalls[moduleName] = {}; };
+      let keys = std.Object.keys(calls); let k = 0;
+      while k < keys.length { stdModuleCalls[moduleName][keys[k]] = calls[keys[k]]; k = k + 1; };
+    };
+    let values = stdFieldValue[bindingName];
+    if !isError(values) {
+      if isError(stdModuleValues[moduleName]) { stdModuleValues[moduleName] = {}; };
+      let vk = std.Object.keys(values); let v = 0;
+      while v < vk.length { stdModuleValues[moduleName][vk[v]] = values[vk[v]]; v = v + 1; };
+    };
+    j = j + 1;
+  };
+  null;
+};
+// 导出表只认两个结构位置,免得把普通的对象字面量误判成模块表:
+//   · 函数体的**尾语句**对象字面量(标准库包装函数 `(std) -> { …; {String: StringLibrary, …}; }`),
+//   · 绑定名恰好是 `std` 的对象字面量(运行期 `let std = {Object: stdObject, …}`)。
+let stdScanExports = (node, isTail) -> {
+  if isError(node) || node == null { return null; };
+  if isError(node.type) { return null; };
+  if node.type == "Object" && isTail { stdScanExportMap(node); };
+  if node.type == "Let" && node.value != null {
+    if node.name == "std" { stdScanExportMap(node.value); };
+    if !isError(node.value.type) && node.value.type == "Function" && node.value.body != null {
+      let stmts = node.value.body.statements;
+      let i = 0;
+      while i < stmts.length { stdScanExports(stmts[i], i == stmts.length - 1); i = i + 1; };
+    };
   };
   null;
 };
@@ -285,7 +343,7 @@ let buildStdTypes = (stmts) -> {
   let i = 0;
   while i < stmts.length { stdScanLet(stmts[i]); i = i + 1; };
   i = 0;
-  while i < stmts.length { stdScanExports(stmts[i]); i = i + 1; };
+  while i < stmts.length { stdScanExports(stmts[i], false); i = i + 1; };
   null;
 };
 
@@ -429,21 +487,39 @@ let inferExpr = (node) -> {
       let pred = typeRuntimePredicates[obj.name + "." + node.field];
       if !isError(pred) { node.memberReturn = pred; tagType(node, "Function"); return tagRep(node, ""); };
     };
-    if !isError(obj.type) && obj.type == "Identifier" && obj.name == "std" && !typeBound("std") {
-      if !isError(stdModuleBinds[node.field]) { node.moduleName = stdModuleBinds[node.field]; tagType(node, "Object"); return tagRep(node, ""); };
+    if !isError(obj.type) && obj.type == "Identifier" && obj.name == "std" && (!typeBound("std") || typeStdNamespaceProgram) {
+      if !isError(stdModuleType[node.field]) {
+        node.moduleName = node.field;
+        tagType(node, stdModuleType[node.field]);
+        return tagRep(node, "");
+      };
       tagType(node, "");
       return tagRep(node, "");
     };
     if !isError(obj.type) && obj.type == "MemberAccess" && !isError(obj.moduleName) {
-      let calls = stdFieldCall[obj.moduleName];
-      let values = stdFieldValue[obj.moduleName];
-      if !isError(calls) && !isError(calls[node.field]) { node.memberReturn = calls[node.field]; tagType(node, "Function"); return tagRep(node, ""); };
-      if !isError(values) && !isError(values[node.field]) && values[node.field] != "" { tagType(node, values[node.field]); return tagRep(node, ""); };
+      let calls = stdModuleCalls[obj.moduleName];
+      let values = stdModuleValues[obj.moduleName];
+      if !isError(calls) && !isError(calls[node.field]) {
+        node.memberReturn = calls[node.field]; tagType(node, "Function");
+        if isError(typeNsResolved[typeProgram]) { typeNsResolved[typeProgram] = 0; };
+        typeNsResolved[typeProgram] = typeNsResolved[typeProgram] + 1;
+        return tagRep(node, "");
+      };
+      if !isError(values) && !isError(values[node.field]) && values[node.field] != "" {
+        tagType(node, values[node.field]);
+        if isError(typeNsResolved[typeProgram]) { typeNsResolved[typeProgram] = 0; };
+        typeNsResolved[typeProgram] = typeNsResolved[typeProgram] + 1;
+        return tagRep(node, "");
+      };
+      if isError(typeNsUnresolved[typeProgram]) { typeNsUnresolved[typeProgram] = 0; };
+      typeNsUnresolved[typeProgram] = typeNsUnresolved[typeProgram] + 1;
     };
     tagType(node, "");
     return tagRep(node, "");
   };
   if t == "Call" {
+    // 先把 callee 分析一遍(成员函数名要在这时定型:std.<模块>.<成员> 的 memberReturn 靠它)。
+    inferExpr(node.callee);
     // 调用结果的类型:callee 是「返回类型已知、绑定稳定」的函数绑定,或是 std 的成员函数。
     if !isError(node.callee.type) && node.callee.type == "Identifier" {
       let rt = typeFnLookup(node.callee.name);
@@ -616,6 +692,8 @@ let inferTypes = (stmts) -> {
   typeRepScopes[0] = {};
   typeBindScopes[0] = {};
   typeRepCounts[typeProgram] = {};
+  typeNsResolved[typeProgram] = 0;
+  typeNsUnresolved[typeProgram] = 0;
   typeUnknownBinds[typeProgram] = [];
   typeUnknownParams[typeProgram] = [];
   typeDepth = 1;
@@ -635,6 +713,8 @@ let checkIsDead = (valueNode, declaredName) -> {
 // 计数与程序数都要经函数交回调用方:模块全局在导入方读到的是拷贝,函数里读的才是模块
 // 自己那份(与 inferTypes 交回 typeErrors 同一个道理)。
 let typeRepReport = () -> typeRepCounts;
+let typeNsReport = () -> [typeNsResolved, typeNsUnresolved];
+export typeNsReport;
 let typeRepPrograms = () -> typeProgram;
 // 补类型的两张工作清单:推导不出类型的绑定、没有注解的参数(每程序最多记 40 条)。
 let typeBindsUnknown = () -> typeUnknownBinds;

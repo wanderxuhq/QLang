@@ -1051,7 +1051,7 @@ let emitFunction = (node, name) -> {
   // 作者声明的返回类型:在入口块求一次类型值,返回边的检查才支配所有返回点。若推导交集
   // 与声明的内建类型一致(每条路径都返回它),整条函数不需要任何检查。
   curReturnActive = false; curReturnType = ""; curReturnTy = "null"; curReturnText = "null";
-  if !isError(node.returnTypeAnnotation) && node.returnTypeAnnotation != null {
+  if !inRuntime && !isError(node.returnTypeAnnotation) && node.returnTypeAnnotation != null {
     let proven = false;
     if !isError(node.declaredReturnType) && node.declaredReturnType != ""
        && !isError(node.derivedReturnType) && node.declaredReturnType == node.derivedReturnType { proven = true; };
@@ -1802,14 +1802,8 @@ let main = (args) -> {
   if isError(path) { std.Error.raise("CompileError", path.message, null)?; };
   let root = loadModuleProgram(source, path, 0)?;
   let userProgram = root.program;
-  // 类型信息在生成代码之前算好。顺序:先分析标准库(它自己的推导结论要用来建 std 成员
-  // 类型索引),再分析用户程序与已加载的 import 模块。
-  let libraryProgram = parseStandardLibrary()?;
-  inferTypes(libraryProgram.statements);
-  buildStdTypes(libraryProgram.statements);
-  let typeErrs = inferTypes(userProgram.statements);
-  let typePaths = std.Object.keys(moduleCache); let typeIndex = 0;
-  while typeIndex < typePaths.length { inferTypes(moduleCache[typePaths[typeIndex]].program.statements); typeIndex = typeIndex + 1; };
+  // 类型信息在生成代码之前算好。顺序:运行期在先(它的成员签名要用来建模块索引),再分析
+  // 标准库(它自己的推导结论同时补齐索引),最后是用户程序与已加载的 import 模块。
   let runtimeParser = Parser(Lexer(runtimeSource).tokenize());
   runtimeParser.setSource(runtimeSource);
   runtimeParser.setSourcePath(if args[0] == "--emit-llvm" || extensionMode { args[2]; } else { "<runtime>"; });
@@ -1819,9 +1813,21 @@ let main = (args) -> {
   // 它自己的静态类型错误不计入面向用户的诊断(底层代码 + 分析不认识宿主原语,现在多半
   // 是误报),但条数要报出来,不悄悄丢掉 —— 那是「让运行期干净通过分析」的工作清单。
   let runtimeErrBase = typeErrors.length;
+  typeSetStdNamespace(true);
   inferTypes(program.statements);
+  typeSetStdNamespace(false);
   let runtimeErrCount = typeErrors.length - runtimeErrBase;
   while typeErrors.length > runtimeErrBase { typeErrors.remove(typeErrors.length - 1); };
+  // 运行期的导出表(std = {...})先进索引,库自己的 std.<模块>.<成员> 才解析得出。
+  buildStdTypes(program.statements);
+  let libraryProgram = parseStandardLibrary()?;
+  typeSetStdNamespace(true);
+  inferTypes(libraryProgram.statements);
+  typeSetStdNamespace(false);
+  buildStdTypes(libraryProgram.statements);
+  let typeErrs = inferTypes(userProgram.statements);
+  let typePaths = std.Object.keys(moduleCache); let typeIndex = 0;
+  while typeIndex < typePaths.length { inferTypes(moduleCache[typePaths[typeIndex]].program.statements); typeIndex = typeIndex + 1; };
   let r = 0;
   while r < program.statements.length {
     let stmt = program.statements[r];
@@ -1838,9 +1844,7 @@ let main = (args) -> {
   let uBinds = typeBindsUnknown();
   let uParams = typeParamsUnknown();
   let repCount = typeRepPrograms();
-  // 逐程序分开报:程序 1 = 标准库,2 = 入口,中间的按加载顺序是各 import 模块,
-  // 最后一个 = 运行期。运行期是个很大的底层程序,不分开的话它的未知读会把库/入口
-  // 那批真正能解箱的燃料数淹掉。
+  // 逐程序分开报:程序 1 = 运行期,2 = 标准库,3 = 入口,之后按加载顺序是各 import 模块。
   let repPaths = std.Object.keys(moduleCache);
   let repIdx = 1;
   let rLit = 0; let rRead = 0; let rArith = 0; let rCmp = 0; let rNot = 0;
@@ -1873,19 +1877,19 @@ let main = (args) -> {
     let lb = uBinds[repIdx];
     if !isError(lb) {
       vB = lb.length; uB = uB + vB;
-      if repIdx == 1 { let uJ = 0; while uJ < lb.length { uB1 = uB1 + lb[uJ] + " "; uJ = uJ + 1; }; };
+      if repIdx == 2 { let uJ = 0; while uJ < lb.length { uB1 = uB1 + lb[uJ] + " "; uJ = uJ + 1; }; };
     };
     let lp = uParams[repIdx];
     if !isError(lp) {
       vP = lp.length; uP = uP + vP;
-      if repIdx == 1 { let uK = 0; while uK < lp.length { uP1 = uP1 + lp[uK] + " "; uK = uK + 1; }; };
+      if repIdx == 2 { let uK = 0; while uK < lp.length { uP1 = uP1 + lp[uK] + " "; uK = uK + 1; }; };
     };
     let pName = "";
-    if repIdx == 1 { pName = "library"; }
-    else if repIdx == 2 { pName = "entry"; }
-    else if repIdx == repCount { pName = "runtime"; }
+    if repIdx == 1 { pName = "runtime"; }
+    else if repIdx == 2 { pName = "library"; }
+    else if repIdx == 3 { pName = "entry"; }
     else {
-      let mi = repIdx - 3;
+      let mi = repIdx - 4;
       if mi >= 0 && mi < repPaths.length { pName = "module:" + repPaths[mi]; }
       else { pName = "program" + std.String.toString(repIdx); };
     };
@@ -1896,6 +1900,9 @@ let main = (args) -> {
   line("; typeRep boxed reads: num=" + std.String.toString(rReadNum) + " str=" + std.String.toString(rReadStr) + " unk=" + std.String.toString(rReadUnk));
   line("; typeRep boxed binops: num=" + std.String.toString(rArithNum) + " cmp=" + std.String.toString(rCmpNum) + " str=" + std.String.toString(rStr) + " unk=" + std.String.toString(rBinUnk));
   line("; typeRep unknown: binds=" + std.String.toString(uB) + " params=" + std.String.toString(uP));
+  // 模块索引命中数:std.<模块>.<成员> 能解析成已知类型的有多少、解析不出的有多少。
+  let nsRep = typeNsReport();
+  line("; ns-resolve: resolved=" + std.String.toString(nsRep[0][2] + nsRep[0][3]) + " unresolved=" + std.String.toString(nsRep[1][2] + nsRep[1][3]) + " (library+entry)");
   line("; typeRep unknown binds[lib]: " + uB1);
   line("; typeRep unknown params[lib]: " + uP1);
   // 运行期那一遍分析报出的静态错误条数(已从用户诊断中移除,这里只报数)。
