@@ -53,7 +53,7 @@ seed; the accepted baseline is 215 919.
 |---|---|---|---|
 | **A. Infrastructure** (pre-existing, on main) | The analysis exists at all, and the generator consumes only its outputs | self-hosted native compiler; per-binding type slot / check omission **−5830 IR lines**; numeric specialization; parameter and return annotations; stdlib annotations + bundle regeneration **−1086** | done |
 | **B. Make the type information complete** *(this branch)* | Give the analysis everything it needs to say "known" with confidence, so family (a) fires everywhere and family (b) has fuel | B1 runtime program analyzed ✓ **−11 492**; B2 `.length -> Number` ✓ `a3a4120` **−593**; B3 per-program probe ✓ `464f72c`; B4 error-test elision ✓ `9cceff7` **−1 929** (see §5②); B5 return-type signatures ✓ `47a4e97`; B6 general module resolution ✓ `0b8e239`; B7 declare the runtime signatures ✓ `d5cc108` **−151**; **B8 analysis completeness** ✓ `4c9f0e2` **−3 150** + `047f390` **−1 274** (see §5⑧) | **in progress** |
-| **C. Consumer pass — unboxing** | `emitValue` reads `staticRep` and emits the raw or boxed direct path; `boxIfNeeded` at use sites; the speculative machinery is deleted | unboxing lands; acceptance: raw-comparison count rises from 24 to the hundreds, IR drops further, outputs and both gates unchanged | not started |
+| **C. Consumer pass — unboxing** | `emitValue` reads `staticRep` and emits the raw or boxed direct path; `boxIfNeeded` at use sites; the speculative machinery is deleted | **C1 landed `2f847f6`**: computed `BinaryOp`/`UnaryOp` nodes keep a raw `double`/`i1`, boxed only at use sites, `if`/`while` conditions `br i1` directly, raw slot writes touch only the payload (tag stays `NUMBER`, so frame/ABI unchanged) — **−871**. Next: raw reads of `unboxType` slots, raw parameters/returns (needs a raw call ABI) | **in progress** |
 | **D. Widen the unboxing domain** | Extend raw representation to more shapes, only where static evidence exists | raw Boolean slots (`i1` fits in a byte); module-root bindings once the extension-bridge `memcpy` frame ABI problem is solved; array/object payload representations | not started |
 | **E. Keep hunting family (a)** | The check / slot / error-test levers keep proving bigger than unboxing; keep looking for "information ⇒ dead code" | B4 landed (`9cceff7`); the same `cannotBeError` predicate now applies to `emitPropagateError` (`?` / aggregate assignment) and to error tests reachable only through provably-checked call sites (§6) | continuous |
 
@@ -70,9 +70,9 @@ lines.
 | Item | State |
 |---|---|
 | Branch | `unboxed-values` (working tree = `/root/projects/QLang`) |
-| Last commit | `047f390` — analysis completeness: literal/aggregate/index/if sub-expressions (−1 274) |
-| Landed since this doc was written | `a3a4120` `.length -> Number` (−593); `464f72c` per-program probe (B3/①); `9cceff7` error-test elision (B4/②, −1 929); `47a4e97` return-type signatures; `0b8e239` general module resolution; `d5cc108` declared runtime signatures (−151); `4c9f0e2` call callee+arguments (−3 150); `047f390` literals/aggregates/index/if (−1 274) |
-| Verification | both suites green on `/tmp/n49`: interpreter 56 PASS (`ALL CHECKS PASS`), selfhost 47 PASS (`ALL REQUESTED CHECKS PASS`) |
+| Last commit | `2f847f6` — consumer pass, first slice: computed nodes keep their raw representation (−871) |
+| Landed since this doc was written | `a3a4120` `.length -> Number` (−593); `464f72c` per-program probe (B3/①); `9cceff7` error-test elision (B4/②, −1 929); `47a4e97` return-type signatures; `0b8e239` general module resolution; `d5cc108` declared runtime signatures (−151); `4c9f0e2` call callee+arguments (−3 150); `047f390` literals/aggregates/index/if (−1 274); `2f847f6` consumer pass C1 (−871) |
+| Verification | both suites green on `/tmp/n51`: interpreter 56 PASS (`ALL CHECKS PASS`), selfhost 47 PASS (`ALL REQUESTED CHECKS PASS`) |
 | Untracked noise | `_b.ql`, `.commandcode/`, `docs/compiler-next-steps.zh.md` |
 | Merge policy | **Do not merge into `dancing-with-dragon` without explicit approval from the user.** |
 
@@ -89,6 +89,7 @@ IR line metric on the accepted fixture, all points measured on the same seed:
                + declared runtime signatures (d5cc108)  201 758   (-151; probe: ns-resolve resolved 5 / unresolved 23)
                + call callee + arguments inferred (4c9f0e2) 198 759   (-3 150!)
                + literals/aggregates/index/if (047f390) 197 485   (-1 274; ns-resolve resolved 8 / unresolved 30)
+               + consumer pass C1 (2f847f6)             196 614   (-871; computed nodes keep their raw rep)
 program output unchanged throughout: 20
 ```
 
