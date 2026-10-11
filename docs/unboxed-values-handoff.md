@@ -52,7 +52,7 @@ seed; the accepted baseline is 215 919.
 | Phase | Goal | Deliverable / evidence | Status |
 |---|---|---|---|
 | **A. Infrastructure** (pre-existing, on main) | The analysis exists at all, and the generator consumes only its outputs | self-hosted native compiler; per-binding type slot / check omission **−5830 IR lines**; numeric specialization; parameter and return annotations; stdlib annotations + bundle regeneration **−1086** | done |
-| **B. Make the type information complete** *(this branch)* | Give the analysis everything it needs to say "known" with confidence, so family (a) fires everywhere and family (b) has fuel | B1 runtime program analyzed ✓ **−11 492**; B2 `.length -> Number` ✓ `a3a4120` **−593**; B3 per-program probe ✓ `464f72c`; B4 error-test elision ✓ `9cceff7` **−1 929** (see §5②); B5 return-type signatures ✓ `47a4e97`; B6 general module resolution ✓ `0b8e239`; B7 declare the runtime signatures ✓ `d5cc108` **−151**; B8 chain-annotate the stdlib *(next)* | **in progress** |
+| **B. Make the type information complete** *(this branch)* | Give the analysis everything it needs to say "known" with confidence, so family (a) fires everywhere and family (b) has fuel | B1 runtime program analyzed ✓ **−11 492**; B2 `.length -> Number` ✓ `a3a4120` **−593**; B3 per-program probe ✓ `464f72c`; B4 error-test elision ✓ `9cceff7` **−1 929** (see §5②); B5 return-type signatures ✓ `47a4e97`; B6 general module resolution ✓ `0b8e239`; B7 declare the runtime signatures ✓ `d5cc108` **−151**; **B8 analysis completeness** ✓ `4c9f0e2` **−3 150** + `047f390` **−1 274** (see §5⑧) | **in progress** |
 | **C. Consumer pass — unboxing** | `emitValue` reads `staticRep` and emits the raw or boxed direct path; `boxIfNeeded` at use sites; the speculative machinery is deleted | unboxing lands; acceptance: raw-comparison count rises from 24 to the hundreds, IR drops further, outputs and both gates unchanged | not started |
 | **D. Widen the unboxing domain** | Extend raw representation to more shapes, only where static evidence exists | raw Boolean slots (`i1` fits in a byte); module-root bindings once the extension-bridge `memcpy` frame ABI problem is solved; array/object payload representations | not started |
 | **E. Keep hunting family (a)** | The check / slot / error-test levers keep proving bigger than unboxing; keep looking for "information ⇒ dead code" | B4 landed (`9cceff7`); the same `cannotBeError` predicate now applies to `emitPropagateError` (`?` / aggregate assignment) and to error tests reachable only through provably-checked call sites (§6) | continuous |
@@ -70,9 +70,9 @@ lines.
 | Item | State |
 |---|---|
 | Branch | `unboxed-values` (working tree = `/root/projects/QLang`) |
-| Last commit | `d5cc108` — declared runtime member return types (−151 IR lines) |
-| Landed since this doc was written | `a3a4120` `.length -> Number` (−593); `464f72c` per-program probe (B3/①); `9cceff7` error-test elision (B4/②, −1 929); `47a4e97` return-type signatures; `0b8e239` general module resolution; `d5cc108` declared runtime signatures (−151) |
-| Verification | both suites green on `/tmp/n44`: interpreter 56 PASS (`ALL CHECKS PASS`), selfhost 47 PASS (`ALL REQUESTED CHECKS PASS`) |
+| Last commit | `047f390` — analysis completeness: literal/aggregate/index/if sub-expressions (−1 274) |
+| Landed since this doc was written | `a3a4120` `.length -> Number` (−593); `464f72c` per-program probe (B3/①); `9cceff7` error-test elision (B4/②, −1 929); `47a4e97` return-type signatures; `0b8e239` general module resolution; `d5cc108` declared runtime signatures (−151); `4c9f0e2` call callee+arguments (−3 150); `047f390` literals/aggregates/index/if (−1 274) |
+| Verification | both suites green on `/tmp/n49`: interpreter 56 PASS (`ALL CHECKS PASS`), selfhost 47 PASS (`ALL REQUESTED CHECKS PASS`) |
 | Untracked noise | `_b.ql`, `.commandcode/`, `docs/compiler-next-steps.zh.md` |
 | Merge policy | **Do not merge into `dancing-with-dragon` without explicit approval from the user.** |
 
@@ -87,6 +87,8 @@ IR line metric on the accepted fixture, all points measured on the same seed:
                + return-type signatures (47a4e97)       201 909   (no annotations in the corpus → byte-identical)
                + general module resolution (0b8e239)    201 910   (+1 probe comment; the channel itself is IR-neutral)
                + declared runtime signatures (d5cc108)  201 758   (-151; probe: ns-resolve resolved 5 / unresolved 23)
+               + call callee + arguments inferred (4c9f0e2) 198 759   (-3 150!)
+               + literals/aggregates/index/if (047f390) 197 485   (-1 274; ns-resolve resolved 8 / unresolved 30)
 program output unchanged throughout: 20
 ```
 
@@ -423,6 +425,27 @@ Then: both suites green → **stop and ask before merging.**
 
 ---
 
+### ⑧ Analysis completeness — *done* (`4c9f0e2` + `047f390`), the biggest remaining lever
+
+Chasing why `std.<X>.<m>` never resolved turned up a family of gaps: **the analysis traverses only
+part of the AST**, so whole sub-expressions are never stamped and the generator can only fall back to
+the generic path.
+
+- `Call` never inferred its **callee** (`0b8e239`) nor its **arguments** (`4c9f0e2`). So everything
+  nested inside a call — `println(std.String.toString(x))`, `f(g(x) + 1)` — was invisible. −3 150.
+- **Literals and aggregates did not recurse** (`047f390`): string interpolation parts, object-literal
+  field values, array-literal elements, `IndexAccess`'s object/index, and expression-position `if`
+  bodies. −1 274.
+- Together with the return-type signatures and the module index, the compiler's own source now shows
+  `ns-resolve: resolved=109 unresolved=44`, and the unresolved 44 are **untypeable by design**:
+  `Error.raise` (42 — always an Error, never a scalar), `String.fromCodePoint` (14 — genuine
+  `RangeError`), `String.codePointAt` (4 — a curried native whose outer application yields a
+  function). So B8 ("chain-annotate the stdlib") needed no bulk annotation pass: the traversal fixes
+  delivered it.
+
+Lesson for the next lever: when a "known type" lever under-delivers, check whether the analysis ever
+*reaches* the node before adding another rule.
+
 ## 6. The design obligation for step ④ (call-site checks)
 
 Removing a member's internal error return is only sound if the *claim* stays honest: the
@@ -597,6 +620,12 @@ the corrections are the important part — do not re-litigate them.
   checks than it gains and changes fixtures (−58); return annotations alone, internal check kept, give
   −151 with identical semantics. Once signatures can be declared, "derivable from the source" is no
   longer a requirement.
+- **"Unknown" can mean the analysis never reached the node** (2026-10-11, the largest lever found).
+  The `Call` branch skipped both its callee and its arguments, and literals/aggregates/`IndexAccess`/
+  expression-`if` did not recurse — so large parts of the AST were never stamped and the generator
+  could only emit the generic path. Two commits: −3 150 and −1 274. Before adding another "known
+  type" rule, check whether the node is analysed at all; and note that this also subsumed the
+  planned stdlib annotation pass.
 
 ## 12. Vocabulary (use the user's words)
 
