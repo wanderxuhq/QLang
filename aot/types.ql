@@ -19,6 +19,11 @@ let typeScopes = [];
 let typeFnResults = [];
 let typeDepth = 0;
 let typeErrors = [];
+// 「表示」栈,与 typeScopes 同深同栈:名字 -> "Number"(裸 double)。缺失即装箱。
+// 表示是「值」的属性(编译期算好、标在节点 staticRep 上),不是发射时才决定的。
+let typeRepScopes = [];
+// 诊断口径:每个程序里各表示各出现多少个节点(只用于量测,不参与生成)。
+let typeRepCounts = {};
 // 存在「右值静态类型未知」写入的名字:这些绑定的运行期注解检查必须保留。
 let typeUnknownWrites = {};
 // 被赋值过的名字:绑定不再稳定,函数返回类型这类推导结论不能落在它上面。
@@ -42,7 +47,7 @@ let typeLookup = (name) -> {
   if isError(typeBuiltins[name]) { return ""; };
   name;
 };
-let typePush = () -> { typeScopes[typeDepth] = {}; typeFnResults[typeDepth] = {}; typeDepth = typeDepth + 1; null; };
+let typePush = () -> { typeScopes[typeDepth] = {}; typeFnResults[typeDepth] = {}; typeRepScopes[typeDepth] = {}; typeDepth = typeDepth + 1; null; };
 let typePop = () -> { typeDepth = typeDepth - 1; null; };
 // 词法查找:这个名字是不是「返回类型已知的函数绑定」。
 let typeFnLookup = (name) -> {
@@ -54,6 +59,39 @@ let typeFnLookup = (name) -> {
   "";
 };
 let tagType = (node, name) -> { node.staticType = name; name; };
+
+// ---- 表示(裸值 / 装箱)的编译期结论 --------------------------------------------
+// 不变式:表示属于「值」,装箱属于「使用点」。这里只算「自然表示」,不看谁消费它;
+// 使用点需要装箱时,由生成端在那一个使用点补一次转换,绝不回头改写本结论。
+//   "Number" 裸 double      "Boolean" 裸 i1      "" 装箱 %ql_value
+let typeRepLookup = (name) -> {
+  let i = typeDepth - 1;
+  while i >= 0 {
+    if !isError(typeRepScopes[i][name]) { return typeRepScopes[i][name]; };
+    i = i - 1;
+  };
+  "";
+};
+// 空串不适合当对象的键,诊断桶里记作 "boxed"。
+let repKey = (rep) -> { if rep == "" { return "boxed"; }; rep; };
+let tagRep = (node, rep) -> {
+  node.staticRep = rep;
+  if isError(typeRepCounts[typeProgram]) { typeRepCounts[typeProgram] = {}; };
+  let bucket = typeRepCounts[typeProgram];
+  // 键记成「节点种类/表示」:区分「Number 字面量」与「标识符读到了裸 double」,
+  // 也就能一眼看出燃料(裸读)与命中(裸比较)各有多少。
+  let key = node.type + "/" + repKey(rep);
+  if isError(bucket[key]) { bucket[key] = 0; };
+  bucket[key] = bucket[key] + 1;
+  // 交回「静态类型」而不是「表示」:调用点一律紧跟 tagType,所以 tagRep 可以直接当
+  // inferExpr 的返回值用。表示只是标注的附带结论,不能顶替静态类型。
+  node.staticType;
+};
+// 读子节点的表示:没分析过或未知一律当装箱。
+let repOf = (n) -> { if isError(n.staticRep) { return ""; }; n.staticRep; };
+// 可裸的算术:与语言语义一致 —— / 与 % 会报错,&& || 短路,都不是纯机器运算。
+let repRawArith = (op) -> op == "+" || op == "-" || op == "*" || op == "&" || op == "|" || op == "^";
+let repCmpOp = (op) -> op == "==" || op == "!=" || op == "<" || op == "<=" || op == ">" || op == ">=";
 
 // 该名字是否真的被某个词法作用域绑定。注意不能用 typeLookup 判断:它对未绑定的
 // 内建名会回退成"返回名字本身",无法区分"用户绑定"和"内建回退"。
@@ -146,11 +184,12 @@ let buildStdTypes = (stmts) -> {
 
 let inferExpr = (node) -> {
   let t = node.type;
-  if t == "Number" { return tagType(node, "Number"); };
-  if t == "Boolean" { return tagType(node, "Boolean"); };
-  if t == "Null" { return tagType(node, "Null"); };
-  if t == "String" { return tagType(node, "String"); };
-  if t == "Identifier" { return tagType(node, typeLookup(node.name)); };
+  if t == "Number" { tagType(node, "Number"); return tagRep(node, "Number"); };
+  if t == "Boolean" { tagType(node, "Boolean"); return tagRep(node, ""); };
+  if t == "Null" { tagType(node, "Null"); return tagRep(node, ""); };
+  if t == "String" { tagType(node, "String"); return tagRep(node, ""); };
+  // 标识符的自然表示 = 它解析到的那个绑定的表示(作用域栈上问,遮蔽与捕获自然正确)。
+  if t == "Identifier" { tagType(node, typeLookup(node.name)); return tagRep(node, typeRepLookup(node.name)); };
   if t == "Function" {
     // 函数体同样在编译期分析。参数：注解会在调用点被注解检查强制执行（带注解的实参
     // 类型不符时调用返回错误），所以函数体内可以按注解声明的内建类型来用它。
@@ -162,9 +201,11 @@ let inferExpr = (node) -> {
       if ptype != "" {
         typeScopes[typeDepth - 1][param.name] = ptype;
         // 参数与注解绑定同一前提:调用点的注解检查保证它只持有该类型,所以同样可解箱。
-        if !isError(typeScalar[ptype]) && isError(typeAssignedNames[typeProgram][param.name]) {
+        // 目前只做 Number(裸 double);String 的裸 ptr 还牵扯生命周期,按既定顺序排在后面。
+        if ptype == "Number" && isError(typeAssignedNames[typeProgram][param.name]) {
           param.unboxType = ptype;
           typeUnboxList[typeUnboxList.length] = param.name;
+          typeRepScopes[typeDepth - 1][param.name] = "Number";
         } else {
           param.unboxType = "";
         };
@@ -189,54 +230,74 @@ let inferExpr = (node) -> {
     };
     node.returnType = result;
     typePop();
-    return tagType(node, "Function");
+    tagType(node, "Function");
+    return tagRep(node, "");
   };
-  if t == "Object" { return tagType(node, "Object"); };
-  if t == "Array" { return tagType(node, "Array"); };
+  if t == "Object" { tagType(node, "Object"); return tagRep(node, ""); };
+  if t == "Array" { tagType(node, "Array"); return tagRep(node, ""); };
   if t == "UnaryOp" {
     let inner = inferExpr(node.operand);
-    if node.operator == "!" { return tagType(node, "Boolean"); };
-    return tagType(node, inner);
+    if node.operator == "!" {
+      tagType(node, "Boolean");
+      return tagRep(node, if repOf(node.operand) == "Boolean" { "Boolean"; } else { ""; });
+    };
+    tagType(node, inner);
+    return tagRep(node, "");
   };
   if t == "BinaryOp" {
     let op = node.operator;
     let left = inferExpr(node.left);
     let right = inferExpr(node.right);
-    if op == "&&" || op == "||" { return tagType(node, "Boolean"); };
-    if op == "==" || op == "!=" || op == "<" || op == "<=" || op == ">" || op == ">=" { return tagType(node, "Boolean"); };
-    if left == "Number" && right == "Number" { return tagType(node, "Number"); };
-    if op == "+" && (left == "String" || right == "String") { return tagType(node, "String"); };
-    return tagType(node, "");
+    // 子节点的表示在分析完它们之后才可读:表示自底向上,一次算定。
+    let lrep = repOf(node.left);
+    let rrep = repOf(node.right);
+    if op == "&&" || op == "||" { tagType(node, "Boolean"); return tagRep(node, ""); };
+    if repCmpOp(op) {
+      tagType(node, "Boolean");
+      return tagRep(node, if lrep == "Number" && rrep == "Number" { "Boolean"; } else { ""; });
+    };
+    if left == "Number" && right == "Number" {
+      tagType(node, "Number");
+      return tagRep(node, if repRawArith(op) && lrep == "Number" && rrep == "Number" { "Number"; } else { ""; });
+    };
+    if op == "+" && (left == "String" || right == "String") { tagType(node, "String"); return tagRep(node, ""); };
+    tagType(node, "");
+    return tagRep(node, "");
   };
   if t == "MemberAccess" {
     // 先分析对象,std.<模块> 才会带上模块名。
     inferExpr(node.object);
     let obj = node.object;
     if !isError(obj.type) && obj.type == "Identifier" && obj.name == "std" && !typeBound("std") {
-      if !isError(stdModuleBinds[node.field]) { node.moduleName = stdModuleBinds[node.field]; return tagType(node, "Object"); };
-      return tagType(node, "");
+      if !isError(stdModuleBinds[node.field]) { node.moduleName = stdModuleBinds[node.field]; tagType(node, "Object"); return tagRep(node, ""); };
+      tagType(node, "");
+      return tagRep(node, "");
     };
     if !isError(obj.type) && obj.type == "MemberAccess" && !isError(obj.moduleName) {
       let calls = stdFieldCall[obj.moduleName];
       let values = stdFieldValue[obj.moduleName];
-      if !isError(calls) && !isError(calls[node.field]) { node.memberReturn = calls[node.field]; return tagType(node, "Function"); };
-      if !isError(values) && !isError(values[node.field]) && values[node.field] != "" { return tagType(node, values[node.field]); };
+      if !isError(calls) && !isError(calls[node.field]) { node.memberReturn = calls[node.field]; tagType(node, "Function"); return tagRep(node, ""); };
+      if !isError(values) && !isError(values[node.field]) && values[node.field] != "" { tagType(node, values[node.field]); return tagRep(node, ""); };
     };
-    return tagType(node, "");
+    tagType(node, "");
+    return tagRep(node, "");
   };
   if t == "Call" {
     // 调用结果的类型:callee 是「返回类型已知、绑定稳定」的函数绑定,或是 std 的成员函数。
     if !isError(node.callee.type) && node.callee.type == "Identifier" {
       let rt = typeFnLookup(node.callee.name);
-      if rt != "" { return tagType(node, rt); };
+      if rt != "" { tagType(node, rt); return tagRep(node, ""); };
     };
     if !isError(node.callee.type) && node.callee.type == "MemberAccess"
         && !isError(node.callee.memberReturn) && node.callee.memberReturn != "" {
-      return tagType(node, node.callee.memberReturn);
+      tagType(node, node.callee.memberReturn);
+      return tagRep(node, "");
     };
-    return tagType(node, "");
+    tagType(node, "");
+    return tagRep(node, "");
   };
   tagType(node, "");
+  return tagRep(node, "");
 };
 
 // 返回本块的「尾值类型」。尾值的判定与发射器一致:表达式语句产生值,If 产生值但类型
@@ -263,12 +324,17 @@ let inferStmts = (stmts) -> {
       } else {
         s.runtimeTypeFree = false;
       };
-      // 可解箱:内建标量,且每次写入右值静态类型已知(与 runtimeTypeFree 同一前提)。
-      if declared != "" && isError(typeUnknownWrites[typeProgram][s.name]) && !isError(typeScalar[declared]) {
-        s.unboxType = declared;
+      // 可解箱:类型是 Number,且每次写入右值静态类型都已知(与 runtimeTypeFree 同一前提)。
+      // 不再要求「写了注解」:推导出 Number 的绑定同样能用 —— 只要每次写入的类型都已知,
+      // 槽里就一直是 double。模块根(深度 1)一律不解箱:扩展桥会把帧 memcpy 给解释器。
+      // 目前只做 Number;String 的裸 ptr 还牵扯生命周期,按既定顺序排在后面。
+      let effective = if declared != "" { declared; } else { value; };
+      s.unboxType = "";
+      if typeDepth > 1 && effective == "Number" && isError(typeUnknownWrites[typeProgram][s.name]) {
+        s.unboxType = "Number";
         typeUnboxList[typeUnboxList.length] = s.name;
-      } else {
-        s.unboxType = "";
+        // 此绑定之后的引用都能在表示栈上问出它是裸 double。
+        typeRepScopes[typeDepth - 1][s.name] = "Number";
       };
       // 返回类型已知、且绑定稳定(从未被赋值)的函数:登记它,调用点才能拿到类型。
       if s.value != null && !isError(s.value.returnType) && s.value.returnType != "" && isError(typeAssignedNames[typeProgram][s.name]) {
@@ -350,11 +416,16 @@ let inferTypes = (stmts) -> {
   typeAssignedNames[typeProgram] = {};
   typeScopes[0] = {};
   typeFnResults[0] = {};
+  typeRepScopes[0] = {};
   typeDepth = 1;
   typeReturnDepth = 0;
   inferStmts(stmts);
+  // 第二遍才是权威口径:第一遍只负责把每次写入的右值类型收齐,第二遍据此判定可解箱性;
+  // 计数也在第二遍重来,免得把两遍的遍历算成两份。
   typeScopes[0] = {};
   typeFnResults[0] = {};
+  typeRepScopes[0] = {};
+  typeRepCounts[typeProgram] = {};
   typeDepth = 1;
   typeReturnDepth = 0;
   inferStmts(stmts);
@@ -369,9 +440,16 @@ let checkIsDead = (valueNode, declaredName) -> {
   valueNode.staticType == declaredName;
 };
 
+// 计数与程序数都要经函数交回调用方:模块全局在导入方读到的是拷贝,函数里读的才是模块
+// 自己那份(与 inferTypes 交回 typeErrors 同一个道理)。
+let typeRepReport = () -> typeRepCounts;
+let typeRepPrograms = () -> typeProgram;
+
 export inferTypes;
 export buildStdTypes;
 export isStaticNumber;
 export checkIsDead;
 export typeErrors;
 export typeUnboxList;
+export typeRepReport;
+export typeRepPrograms;

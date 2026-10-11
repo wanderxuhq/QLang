@@ -1780,6 +1780,27 @@ let main = (args) -> {
   };
   emitPrelude();
   line("; unboxable bindings: " + std.String.toString(typeUnboxList.length));
+  // 诊断:编译期算出的表示各有多少(节点种类/表示)。燃料 = 裸读(Identifier/Number),
+  // 命中 = 裸比较(BinaryOp/Boolean);两者都只进注释,不进代码。
+  let repAll = typeRepReport();
+  let repIdx = 1;
+  let rLit = 0; let rRead = 0; let rArith = 0; let rCmp = 0; let rNot = 0;
+  let rReadBox = 0; let rBinBox = 0;
+  while repIdx <= typeRepPrograms() {
+    let bucket = repAll[repIdx];
+    if !isError(bucket) {
+      let v1 = bucket["Number/Number"]; if !isError(v1) { rLit = rLit + v1; };
+      let v2 = bucket["Identifier/Number"]; if !isError(v2) { rRead = rRead + v2; };
+      let v3 = bucket["BinaryOp/Number"]; if !isError(v3) { rArith = rArith + v3; };
+      let v4 = bucket["BinaryOp/Boolean"]; if !isError(v4) { rCmp = rCmp + v4; };
+      let v5 = bucket["UnaryOp/Boolean"]; if !isError(v5) { rNot = rNot + v5; };
+      let v6 = bucket["Identifier/boxed"]; if !isError(v6) { rReadBox = rReadBox + v6; };
+      let v7 = bucket["BinaryOp/boxed"]; if !isError(v7) { rBinBox = rBinBox + v7; };
+    };
+    repIdx = repIdx + 1;
+  };
+  line("; typeRep raw: lit=" + std.String.toString(rLit) + " reads=" + std.String.toString(rRead) + " arith=" + std.String.toString(rArith) + " cmp=" + std.String.toString(rCmp) + " not=" + std.String.toString(rNot));
+  line("; typeRep boxed: reads=" + std.String.toString(rReadBox) + " binops=" + std.String.toString(rBinBox));
   coldHelperAt = out.length;
   if extensionMode { mainAt = out.length; line("define %ql_value @qlang_extension_init_v1(ptr %host_env) {"); }
   else { mainAt = out.length; line("define i32 @main(i32 %argc, ptr %argv) {"); };
