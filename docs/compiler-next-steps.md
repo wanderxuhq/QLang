@@ -1098,3 +1098,60 @@ parses. Python only appears at the edges:
 
 Rewriting the generators in QLang would make the whole toolchain Python-free. Deferred:
 nothing in a normal build depends on them.
+
+## Unboxed values: representation belongs to the value, boxing to the use site
+
+Invariant (decided): every node has one *natural* representation, computed by the compile
+phase (`aot/types.ql`) and stored on the node. No consumer may change it. A use site that
+needs a boxed value coerces *at that use site* (bitcast + pack, two instructions); a use
+site that can take the raw value uses it directly. Never demote a node to boxed because
+one consumer wanted a box: that boxes the value at every use. Boxing is per use, not per
+value.
+
+Representations: `"Number"` (bare double), `"Boolean"` (bare i1), `""` (boxed
+`%ql_value`). `emitValue(node) -> { reg, raw }` returns the natural representation and
+takes no `want` parameter.
+
+Rules, bottom-up in the analysis' second pass (the second pass already sees every write
+collected by the first, so `runtimeTypeFree` is sound — `inferTypes` runs `inferStmts`
+twice):
+
+  - `Number` literal        -> `"Number"` (zero instructions: `f64lit`)
+  - `Identifier`            -> the resolved binding's representation; needs a
+                               representation scope stack parallel to `typeScopes`, so
+                               shadowing and closure capture come out right
+  - `UnaryOp` `!`           -> `"Boolean"` if the operand is `"Boolean"`
+  - arithmetic `+ - * & | ^`-> `"Number"` if both operands are `"Number"`
+  - comparison              -> `"Boolean"` if both operands are `"Number"`
+  - anything else           -> `""`
+
+Raw-capable use sites (take the bare value, cost zero): raw arithmetic and comparison,
+`if`/`while` conditions, storing into an unboxed slot, and an argument or return whose
+callee representation signature is statically known. Boxed-only use sites (coerce here,
+only when the target is not statically known): object and array stores, arguments and
+returns of unknown callees, string operations.
+
+This replaces the trial emitter tried on this branch and rejects it: `emitMayBeRaw` plus
+emit-then-fall-back measured 897 `fcmp` with only 2 raw hits, and re-emitted the operands
+on every failed attempt (so lines went *up*). With the representation computed once, a
+node has exactly one emission path, so duplicate emission and failed attempts are
+structurally impossible — and the line count becomes monotone, which is what the
+acceptance metric needs.
+
+Slot policy (domain, independent of the above): unboxable = builtin scalar annotation,
+`runtimeTypeFree`, function-local; module-root bindings are never unboxed, because the
+extension bridge memcpys frames to the interpreter (the use site is unknown).
+
+Order: (1) analysis computes `staticRep` plus the representation scope stack — no codegen
+change, verify by counting nodes per representation; (2) emitter consumes `staticRep` for
+reads, arithmetic, comparisons and conditions; (3) raw stores into unboxed slots and for
+annotated parameters; (4) box only at the genuinely unknown use sites.
+
+Acceptance: raw-comparison hits from 2 to hundreds, IR below the 215919-line t20 baseline,
+probe outputs unchanged (20/20/21/4), interpreter 53/53 and selfhost gate 47/47. Report hit
+counts first, line counts second — a change that never executes otherwise reads as no win.
+
+Branch: `unboxed-values`, verified cut 1 at `8f98254` (contract only, IR byte-identical);
+work stays there and stops before merging to `dancing-with-dragon`. Superseded trial
+patches: `cut2-raw-values`, `cut2-raw-arith-and-cmp`, `cut2-D-rawboolean`,
+`arm2-only-whitelist`.
