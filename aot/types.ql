@@ -247,6 +247,9 @@ let stdValueBinds = {};    // 库内顶层绑定名 -> 其值节点(用于识别
 // 命中数:能解析成已知类型的 std.<模块>.<成员> 有多少,解析不出的有多少(按程序)。
 let typeNsResolved = {};
 let typeNsUnresolved = {};
+// 解析不出的 std.<模块>.<成员> 名字(补签名的工作清单,截断以免刷屏)。
+let typeNsUnresolvedNames = [];
+let typeNsPushName = (s) -> { if typeNsUnresolvedNames.length >= 60 { return null; }; typeNsUnresolvedNames[typeNsUnresolvedNames.length] = s; null; };
 // 标准库包装函数把 std 当参数收(`(std) -> …`),运行期则 `let std = {…}`;这两个程序里
 // 被绑定的 `std` 就是命名空间本身,允许解析。用户程序里 `std` 未被绑定,照常解析;若用户
 // 遮蔽了 `std`,仍按未知处理(不开特化)。
@@ -522,6 +525,7 @@ let inferExpr = (node) -> {
       };
       if isError(typeNsUnresolved[typeProgram]) { typeNsUnresolved[typeProgram] = 0; };
       typeNsUnresolved[typeProgram] = typeNsUnresolved[typeProgram] + 1;
+      typeNsPushName(obj.moduleName + "." + node.field);
     };
     tagType(node, "");
     return tagRep(node, "");
@@ -529,6 +533,9 @@ let inferExpr = (node) -> {
   if t == "Call" {
     // 先把 callee 分析一遍(成员函数名要在这时定型:std.<模块>.<成员> 的 memberReturn 靠它)。
     inferExpr(node.callee);
+    // 实参也要分析 —— 否则嵌在调用实参里的表达式永远不会被定型。
+    let argIdx = 0;
+    while argIdx < node.arguments.length { inferExpr(node.arguments[argIdx]); argIdx = argIdx + 1; };
     // 调用结果的类型:callee 是「返回类型已知、绑定稳定」的函数绑定,或是 std 的成员函数。
     if !isError(node.callee.type) && node.callee.type == "Identifier" {
       let rt = typeFnLookup(node.callee.name);
@@ -724,6 +731,8 @@ let checkIsDead = (valueNode, declaredName) -> {
 let typeRepReport = () -> typeRepCounts;
 let typeNsReport = () -> [typeNsResolved, typeNsUnresolved];
 export typeNsReport;
+let typeNsUnknownNames = () -> typeNsUnresolvedNames;
+export typeNsUnknownNames;
 let typeRepPrograms = () -> typeProgram;
 // 补类型的两张工作清单:推导不出类型的绑定、没有注解的参数(每程序最多记 40 条)。
 let typeBindsUnknown = () -> typeUnknownBinds;

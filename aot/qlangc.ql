@@ -1905,6 +1905,7 @@ let main = (args) -> {
   // 模块索引命中数:std.<模块>.<成员> 能解析成已知类型的有多少、解析不出的有多少。
   let nsRep = typeNsReport();
   line("; ns-resolve: resolved=" + std.String.toString(nsRep[0][2] + nsRep[0][3]) + " unresolved=" + std.String.toString(nsRep[1][2] + nsRep[1][3]) + " (library+entry)");
+  line("; ns-unresolved: " + std.Array.join(typeNsUnknownNames())(" "));
   line("; typeRep unknown binds[lib]: " + uB1);
   line("; typeRep unknown params[lib]: " + uP1);
   // 运行期那一遍分析报出的静态错误条数(已从用户诊断中移除,这里只报数)。
