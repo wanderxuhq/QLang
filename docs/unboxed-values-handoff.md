@@ -566,6 +566,46 @@ counters, exactly like the ②a probe), then implement only the ones with large 
   emitted (285/309 on t20, 287/312 on a mutual-recursion sample). Whole module: **23 025 direct vs 307
   indirect calls (98.7 %)** — the "no forward `declare`" constraint is essentially already absorbed.
 
+### ⑫ No NaN, no Infinity — *decided, staged, not started*
+
+**Author's decision (this session):** NaN and ±∞ must be **unreachable** in the language — "绝对不要
+nan 和无穷这两个沙雕东西,任何理由都不要". The chain that gets there: division by zero is *already*
+an error (`aot/runtime.ql:144`, `__op_div0`); if **overflow is also an error**, ±∞ becomes unreachable;
+NaN can only come from an ∞ operand (`∞-∞`, `∞/∞`, `0*∞`) or `0/0`, so it goes with them.
+
+Stages, and what each costs:
+
+1. **Cut the sources in std** (approved; attempted and reverted this session because it cannot land
+   alone — the fixture/`.expected` rewrite is part of it). Measured scope:
+   - `stdlib/number.ql`: delete `invalidNumber`; non-String ⇒ `TypeMismatch`; malformed text — **and the
+     `"inf"`/`"infinity"`/`"NaN"` spellings** — ⇒ `RangeError` (5 sites; the `i`/`N` word branch goes
+     away entirely).
+   - `stdlib/math.ql`: delete `nanNumber`/`infiniteNumber`/`signedInfinity`; `exponential` (64),
+     `integerPower` (90), `power` (106/110/117/122/124/135/140), `trig` (195) ⇒ `RangeError`; `sqrt`'s
+     non-finite path ⇒ `RangeError`. **Careful:** the two assignment-style sites inside `power`
+     (135/140) must become early `return`s, or the later `-result` turns the Error into a TypeMismatch.
+   - **Runtime** (reached only in the later stages, but note it now): `Math.max`/`min` are runtime
+     natives and use **∓∞ as the empty-argument sentinel and NaN as the IEEE propagation rule** ⇒ under
+     this decision they must raise instead (a small API decision to make explicitly).
+2. **Language-level trapping arithmetic**: `+ - * / %` on Numbers whose result is ±∞/NaN ⇒ error.
+   Literal/constant overflow ⇒ **compile-time** error (static detection, per the author's preference).
+3. **Delete what becomes dead**: `Number.isNaN`/`isFinite`, the `"NaN"`/`"Infinity"` branches of
+   `Number.toString`, the runtime's `__num_nan` and its NaN detection, the saturating bit-conversion
+   paths for NaN/∞; mirror all of it in the interpreter; rewrite `t26_extrema`'s NaN/∞ cases.
+4. **Offset the cost**: stage 2 makes "arithmetic cannot produce an Error" false ⇒ the located-error
+   elision (worth **−1 929** lines / 155 sites, `9cceff7`) comes back. Offsetting it needs magnitude
+   reasoning, staged cheaply: (4a) constant folding + literal diagnostics (free), (4b) bounded domains
+   (loop counters, indices — the bulk of real sites), (4c) a fallback `fcmp`+branch on the Number path
+   only, with the cold path going through the existing outlined helper.
+
+Fixture fallout measured for stage 1 (before revert): `t19_literals` and `t54_json_stringify` unaffected;
+`t25_numeric` 83→53 checks, `t26_extrema` 51→37, `t34_numeric_syntax` 70→67, `t43_number_library` aborts
+at 11:2. The rewrite pattern is mechanical where the case survives — a *failing* std call yields an
+Error **value** you can inspect inline (`check(parse("bad").type == "RangeError", …)`, like `t25`'s
+existing `std.Math.sqrt(-1).type == "TypeMismatch"`) — and cases whose *input or output is itself*
+NaN/∞ (all of `t26`'s NaN min/max, `t25`'s `nan | 0` / `inf & 1` / `sqrt(inf)`) simply disappear, i.e.
+that coverage is knowingly given up.
+
 ## 6. The design obligation for step ④ (call-site checks)
 
 Removing a member's internal error return is only sound if the *claim* stays honest: the
