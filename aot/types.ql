@@ -10,6 +10,19 @@
 let typeBuiltins = { Number: true, String: true, Boolean: true, Null: true, Array: true, Object: true, AnyArray: true, AnyObject: true };
 // 内建「标量」类型:可解箱(一个机器字即可表示);Array/Object 是引用,另算。
 let typeScalar = { Number: true, String: true, Boolean: true, Null: true };
+// 类型名归属的「族」:对象/数组的**基构造器名**与**具体名**同族。
+// 族内不做静态比较(两个 AnyObject 不可互换,`Object(schema)` 比它更窄 ⇒ 更窄的判断留给运行期
+// check);只有族与族之间(以及标量之间)的不一致才是编译期可判的。详见 docs/object-array-type-names.md。
+let typeNameFamily = (name) -> {
+  if isError(name) || name == "" { return ""; };
+  if name == "Array" || name == "AnyArray" { return "Array"; };
+  if name == "Object" || name == "AnyObject" { return "Object"; };
+  name;
+};
+let typeMismatch = (declared, value) -> {
+  let fd = typeNameFamily(declared); let fv = typeNameFamily(value);
+  fd != "" && fv != "" && fd != fv;
+};
 let typeUnboxList = [];   // 标量全局在导入方只是拷贝,列表才共享引用
 // 按程序(库/入口/各模块)分开命名空间:同名绑定分布在不同程序里,不能互相污染。
 let typeProgram = 0;
@@ -79,6 +92,18 @@ let typeFnLookup = (name) -> {
   "";
 };
 let tagType = (node, name) -> { node.staticType = name; name; };
+
+// 裸构造器不是类型值(`Array`/`Object` 是 `__arr_ctor`/`__obj_ctor`,没有 `check`),当注解写是错的:
+// 具体类型写 `AnyArray`/`AnyObject`,或用构造式 `Array(T)`/`Object(...)`。这一条把「注解名写错」
+// 从「运行期才炸」变成「编译期报错」—— 它正是 §5⑥a 那个错误的成因。
+let annotationRejectConstructor = (annNode) -> {
+  if annNode == null || isError(annNode) { return null; };
+  if isError(annNode.type) || annNode.type != "Identifier" { return null; };
+  if annNode.name != "Array" && annNode.name != "Object" { return null; };
+  if typeLookup(annNode.name) != annNode.name { return null; };
+  typeReport(annNode, annNode.name + " is a constructor, not a type: use Any" + annNode.name + " for any " + annNode.name + ", or a constructed form like " + annNode.name + "(Number)");
+  null;
+};
 
 // ---- ②a 量测:裸 ABI(参数与返回都是 Number)的覆盖面 ------------------------------
 // 只计数,不改变任何生成决策 —— 目的是先拿到「有多少调用点吃得到裸签名」这个数,
@@ -421,11 +446,13 @@ let inferExpr = (node) -> {
     // 类型不符时调用返回错误），所以函数体内可以按注解声明的内建类型来用它。
     // 作者声明的返回类型:像参数注解一样在定义处的外层上下文里求值,并且是权威结论。
     let declaredReturn = annotationBuiltinName(node.returnTypeAnnotation);
+    annotationRejectConstructor(node.returnTypeAnnotation);
     typePush();
     let p = 0;
     while p < node.parameters.length {
       let param = node.parameters[p];
       let ptype = annotationBuiltinName(param.annotation);
+      annotationRejectConstructor(param.annotation);
       // 参数也登记「绑定」:解箱判断必须问「这一个绑定自己有没有写入」,不能问「同一程序里
       // 是否出现过同名赋值」—— 后者会让一个毫不相干的同名绑定把已有注解全部作废(实测:
       // stdlib/math.ql 的 (a/b/n: Number) 因为 stdlib 里别处写过 a/n/b 而收益变成 0)。
@@ -482,7 +509,7 @@ let inferExpr = (node) -> {
     // 类型」才是编译错误 —— 交集非空正说明每条路径都是那个类型,不会把不可达分支里的
     // return 误判成错误。
     if declaredReturn != "" {
-      if result != "" && result != declaredReturn {
+      if result != "" && typeMismatch(declaredReturn, result) {
         typeReport(node, "return type mismatch: function declares " + declaredReturn + " but returns " + result);
       };
       node.returnType = declaredReturn;
@@ -582,7 +609,7 @@ let inferExpr = (node) -> {
     // 长度数字,绝不返回 Error。所以这条声明可靠(与 check 谓词同一性质),不依赖调用点
     // 检查。Object 上的 length 可能是用户字段(任意值),故不声明。
     let recvType = obj.staticType;
-    if !isError(recvType) && node.field == "length" && (recvType == "Array" || recvType == "String") {
+    if !isError(recvType) && node.field == "length" && (typeNameFamily(recvType) == "Array" || recvType == "String") {
       tagType(node, "Number");
       return tagRep(node, "");
     };
@@ -706,10 +733,11 @@ let inferStmts = (stmts) -> {
     let t = s.type;
     if t == "Let" {
       let declared = inferAnnotationType(s);
+      annotationRejectConstructor(s.annotation);
       s.annotationType = declared;
       let value = if s.value == null { ""; } else { inferExpr(s.value); };
       // 两边在编译期都有确定类型却对不上 —— 这就是编译期错误,不必留到运行期。
-      if declared != "" && value != "" && value != declared {
+      if declared != "" && value != "" && typeMismatch(declared, value) {
         typeReport(s, "type mismatch: value of type " + value + " does not match the annotated type " + declared);
       };
       typeScopes[typeDepth - 1][s.name] = if declared != "" { declared; } else { value; };

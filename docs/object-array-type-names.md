@@ -1,66 +1,86 @@
 # Object/array type names — what the analysis may conclude
 
-Status: research note (pre-implementation). Motivates the `.length`-style member rules and the
-declared-vs-derived consistency check. See `unboxed-values-handoff.md` §5⑥a/§5⑨ for how this came up:
-annotating a library helper `: Object` made the **interpreter** reject a plain object, while the
-compiler only *looked* fine because it proves the return-edge check dead when the declared name equals
-the derived name.
+Status: design note, settled with the author. Supersedes the earlier "lattice" framing.
+Background: `unboxed-values-handoff.md` §5⑥a/§5⑨ (annotating a helper `: Object` made the
+**interpreter** reject a plain object; the compiler only *looked* fine because it proves the return-edge
+check dead when the declared name equals the derived name).
 
-## 1. The forms (as they exist in the runtime and in the language)
+## 1. The forms
 
 | form | runtime entity | is a type value? | notes |
 |---|---|---|---|
-| `Array`, `Object` | `__arr_ctor`, `__obj_ctor` (`aot/runtime.ql:1907-1908`) | **no** | *constructors*: applied to derive a type — `Array(T)`, `Object(schema)`, `Object(pred)` (`aot/runtime.ql:1033/1064/1099`) |
-| `AnyArray`, `AnyObject` | `{check: __pred_array}` / `{check: __pred_object}` (`aot/runtime.ql:1347-1348`) | **yes** | *concrete* types, on the same footing as `Number`: members may be of any type |
-| `Array(T)` / `Object(...)` | a fresh type value built by the constructor | yes | each application yields a **distinct** type; its `check` enforces the element type / schema / predicate |
-| `[1, 2]` / `{a: 1}` | a plain array/object value | — | belongs to the *family*; today the analysis names it `Array` / `Object` — i.e. it reuses the **constructor's** name for a value type |
+| `Array`, `Object` | `__arr_ctor`, `__obj_ctor` (`aot/runtime.ql:1907-1908`) | **no** | *constructors*. Having no `check` is **expected**. They exist to derive types: `Array(T)`, `Object(schema)`, `Object(pred)` (`aot/runtime.ql:1033/1064/1099`) |
+| `Array(T)` / `Object(...)` | a fresh type value built by the constructor | **yes — required** | **what a constructor produces must be a type** (it carries the `check` that enforces element type / schema / predicate) |
+| `AnyArray`, `AnyObject` | `{check: __pred_array}` / `{check: __pred_object}` (`aot/runtime.ql:1347-1348`) | yes | *concrete* types, on the same footing as `Number`: members may be of any type |
+| `[1, 2]` / `{a: 1}` | a plain array/object value | — | belongs to the *family*; the analysis tags it with a family label (today `Array` / `Object`) |
 | `Number` `String` `Boolean` `Null` | `typeScalar` (`aot/types.ql:12`) | yes | scalars: single machine word, unboxable |
 
-Consequence of the third row: `Object.check`/`Array.check` do not exist — that is why `Object.check(o)`
-returns an *error* in **both** engines (verified with a minimal repro), and why it is not an
-interpreter bug.
+So `Object.check` not existing is not a defect — it is what a constructor is. The defect would be a
+constructor whose *product* lacks `check`, and that is not the case.
 
-## 2. Are two `AnyObject`s interchangeable? (the open question)
+## 2. The rule (the simplification that settles this)
 
-**No — and the same for `AnyArray`.** "Any members" describes what is accepted, not what is *known*:
-two values the analysis both calls `AnyObject` may hold different member types, and a value that came
-from `Object(schema)`/`Object(pred)` is *narrower* than `AnyObject`. The direction matters:
+**Only the designated types get special treatment; everything else is boxed.**
 
-- `AnyObject` **accepts** a derived object value (it is still an object) — so a declared `: AnyObject`
-  is satisfied by any object.
-- A derived type does **not** accept an `AnyObject` value in general — its `check` may reject it. That
-  rejection is a *runtime* verdict; it must not be a compile-time error.
+- *Representation*: a small designated set gets the raw/unboxed treatment (today: `Number`). Every
+  other type — `AnyArray`, `Object(schema)`, `Array(Number)`, anything derived — is **boxed, always**.
+  No ordering, no lattice, no interchangeability question. This is already the shape of
+  `staticRep` / `unboxType`.
+- *Static consistency*: the declared-vs-derived comparison is meaningful **only among designated
+  types** (there, name equality means something). Inside the object/array family it must **not** fire:
+  two `AnyObject`s are not interchangeable (member types differ; `Object(schema)`/`Object(pred)` are
+  narrower than `AnyObject`), so the only statically knowable fact is *family membership* — everything
+  narrower is a runtime verdict.
 
-So the object/array family is **not a lattice of interchangeable names**; the only compile-time fact
-available for a family value is *"it belongs to the family"*.
+## 3. What still needs a judgement, and which one
 
-## 3. What the analysis may therefore conclude
+1. **Family label for member rules.** `.length -> Number` on an array receiver (`aot/types.ql:585`)
+   needs to know the receiver is an array. It needs a *family label* only — not a type lattice — and the
+   label the literal already gets is enough.
+2. **Applied constructors are types.** `Array(Number)` / `Object({a: Number})` are valid annotations and
+   must be recognised as types (so their `check` runs). Today `annotationBuiltinName` resolves only
+   *bare* builtin names, so these become "" — the annotation is **inert** (no check, no information).
+   That is the gap to close; it is also the precondition for point 1 to be usable on annotated values.
+3. **Bare constructors are not annotations.** `: Array` / `: Object` name a constructor, not a type, so
+   they are **invalid** as annotations → **compile-time diagnostic** ("`Array` is a constructor, not a
+   type; use `AnyArray` or a constructed form"), rather than a silently inert annotation or a runtime
+   surprise. This is the mistake that produced §5⑥a, and a diagnostic catches it at once.
 
-1. **Family membership only.** From a literal, or from any value whose type is an object/array family
-   member, the analysis may conclude "array" or "object" — nothing narrower. Member rules keyed on the
-   family (`.length -> Number` on arrays, key indexing on objects) may fire on that basis.
-2. **No narrow comparisons.** The declared-vs-derived *mismatch* check is sound for scalars (equality
-   of names is meaningful there) but **must not** fire inside the object/array family: a derived
-   annotation and a literal, or two different concrete members, are compatible-as-family and the
-   runtime check decides the rest. Reporting a compile error there would reject valid programs (and it
-   would have rejected `stdlib`'s own annotations).
-3. **Applied annotations must be recognised as family members.** `annotationBuiltinName` only resolves
-   *bare* builtin names, so `Array(Number)` / `Object({a: Number})` currently resolve to "" — the
-   annotation is inert (no check, no information). Whatever the family predicate becomes, the
-   annotation reader must classify applied constructors as family members before any rule can use them.
+## 4. Implementation list
 
-## 4. Implementation consequences (not yet done)
+1. *(removed — renaming the literal's derived label to `AnyObject`/`AnyArray` is **not** needed: the
+   family is never compared statically.)*
+2. Confine the declared-vs-derived consistency check (`aot/types.ql:675`) to designated types.
+3. Recognise applied constructors as type annotations (annotation reader), so `Array(T)`/`Object(...)`
+   are no longer inert.
+4. Diagnostic for a bare-constructor annotation (`: Array` / `: Object`).
+5. Fix `aot/runtime.ql`'s four `: Array` returns → `: AnyArray`; re-audit `t13_bindings.ql:56/60`
+   (`: Array(Number)` / `: Object({a: Number})` — the design's intended spelling, must keep working).
+6. Member rules (`.length`) keep using the family label from derivation.
 
-1. Literal derivation names: `tagType(node, "AnyObject")` / `"AnyArray"` instead of the constructor
-   names `Object` / `Array` (`aot/types.ql:529/535`) — so that annotating with the *concrete* types is
-   consistent with what the analysis derives.
-2. A family predicate (`isArrayType(name)` / `isObjectType(name)`), used instead of name equality by:
-   - the `.length -> Number` rule (`aot/types.ql:585`);
-   - the declared-vs-derived consistency check (`aot/types.ql:675`);
-   - the annotation reader, extended to cover applied constructors (§3.3).
-3. Re-audit the existing annotations on this chain: `aot/runtime.ql`'s four `: Array` returns
-   (`__obj_keys`, `__num_frexp`, …) and the fixtures using `: Array(Number)` / `: Object({a: Number})`
-   (`aot/tests/t13_bindings.ql:56/60`), which are the design's intended spelling and must keep working.
+**Empirical note (measured, both engines):** the four `: Array` returns break nothing *today* —
+`std.Object.keys({a:1,b:2})` returns a real array (`isError` false, `.length` 2) under both the
+interpreter and the compiler — because the analysis derives `Array` for the return value, so the
+declared name equals the derived name and the return-edge check is proven dead and never emitted. They
+are therefore *inert*, not effective, which is exactly why §3.3 applies.
 
-Sequencing: this note first, then 1–3, then resume the std annotation campaign (object/array returns
-become annotatable, and the concrete `AnyObject`/`AnyArray` names become referenceable).
+Sequencing: 2 → 4 (small, self-contained) → 3 → 5 → resume the std annotation campaign (object/array
+returns become annotatable).
+
+## 5. Measured status after rules 2/4/5/6 + the next cost to remove
+
+Landed: family-aware consistency (2), the constructor diagnostic (4), the four `: Array` returns →
+`: AnyArray` (5), the family label in `.length -> Number` (6). IR **±0** (`194812`), and:
+
+- `let x: Array = [1, 2];` ⇒ **CompileError** "Array is a constructor, not a type: use AnyArray for any
+  Array, or a constructed form like Array(Number)" (position points at the annotation).
+- `: AnyArray` / `: AnyObject` are accepted; the interpreter's always-on return check now *passes* for
+  them (`AnyObject.check` exists — verified: `t19_literals` prints `true` again with the annotated
+  library).
+- **But** annotating object returns costs **+164 IR** (`194812` → `194976` for two functions): the
+  declared name (`AnyObject`) never equals the derived name (`Object`), so the return-edge check is
+  never proven dead and is emitted at each return edge (~82 lines each).
+- **Next step to make object/array annotations free:** extend the emitter's `proven` rule to the
+  family — `declared == "Any" + X && derived ∈ family(X)` ⇒ the check is dead, which is sound because
+  `AnyX` accepts *every* member of the family (that is what `__pred_object`/`__pred_array` mean). This
+  is the family analogue of the scalar rule and removes the +164.

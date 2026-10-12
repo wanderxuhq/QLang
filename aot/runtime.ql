@@ -1004,7 +1004,7 @@ let __tuple_check = (checks, a) -> {
 };
 
 // 对象键收集(遍历桶表;键为 tag-2 STRING 盒)→ tag-5 数组盒
-let __obj_keys = (o): Array -> {
+let __obj_keys = (o): AnyArray -> {
   if readU64(o, 0) != 6 { return __err("TypeMismatch", "Object.keys expects Object"); };
   let table = ql_mem_get_ptr(o, 8);
   let cap = readU64(o, 16);
@@ -1359,7 +1359,7 @@ let stdObject = { keys: __obj_keys };
 // Low-level binary64 mechanisms: frexp/ldexp expose the representation only
 // (mantissa in [1,2) and a power-of-two exponent). Every Math algorithm that
 // builds on them lives in the shared QLang library.
-let __num_frexp = (x): Array -> {
+let __num_frexp = (x): AnyArray -> {
   if readU64(x, 0) != 1 { return __err("TypeMismatch", "Number.frexp expects Number"); };
   if x == 0 || !__num_isfinite(x) { return [x, 0]; };
   let negative = ql_mem_get(x, 15) >= 128;
