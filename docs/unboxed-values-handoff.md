@@ -566,7 +566,29 @@ counters, exactly like the ②a probe), then implement only the ones with large 
   emitted (285/309 on t20, 287/312 on a mutual-recursion sample). Whole module: **23 025 direct vs 307
   indirect calls (98.7 %)** — the "no forward `declare`" constraint is essentially already absorbed.
 
-### ⑫ No NaN, no Infinity — *decided, staged, not started*
+### ⑫ No NaN, no Infinity — **attempted, landed, then REVERTED by decision**
+
+**Status:** the author first decided "绝对不要 nan 和无穷", then reversed it in the same session
+("算了,把 nan 和 infinity 加回来吧"). The removal was landed as `4903d57` (+ `35257b3` for the literal
+diagnostic) and then undone with `git reset --hard 4903d57^`; **all three commits are preserved on the
+branch `backup/nan-removal-stage1` (→ `35257b3`)**, so the attempt is fully recoverable. The design
+reasoning below is kept for the case the decision is ever revisited.
+
+What the attempt established, and what stays valid regardless of the reversal:
+
+- the **five producers** and their exact sites — `stdlib/number.ql` (5), **`stdlib/decimal.ql`** (4, on
+  the *parse* path, plus the exponent-range guard the general branch needs), `stdlib/math.ql` (10), and
+  the runtime's `__math_extreme` **±∞ sentinel** for the empty `Math.max`/`min` case;
+- **an Error as a call argument is rejected** (`TypeMismatch: attempt to pass error value as
+  argument`) ⇒ a `check(<call that now errors>)` silently stops counting (t34's 67 vs 70) — a
+  fixture-side rule that applies to *any* future std change;
+- the **stage-2 sizing**: 685 Number-typed arithmetic sites would need a trap (602 fast-path + 83 raw)
+  and **`constFoldable=0`** — their operands are never literals — ⇒ ≈ **+1.4–2.7 k IR**, with 4b
+  (bounded domains) as the only offset. So the price of "no NaN/∞" is IR *size* (the repo's metric),
+  not runtime speed;
+- and ⑬'s builder lesson, which was the real blocker for the first three attempts.
+
+**The original decision text (kept for reference):**
 
 **Author's decision (this session):** NaN and ±∞ must be **unreachable** in the language — "绝对不要
 nan 和无穷这两个沙雕东西,任何理由都不要". The chain that gets there: division by zero is *already*
