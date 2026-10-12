@@ -47,15 +47,17 @@ be worth a few thousand IR lines, not tens of thousands (§7).
 ### 0.1 Roadmap
 
 Status per phase. "IR" always means `wc -l` of `/tmp/t20.ql`'s emitted IR on the accepted
-seed; the accepted baseline is 215 919.
+seed; the accepted baseline is **215 919** and the **current total is 194 812 ⇒ −21 107 lines
+(−9.8 %)**. (The pre-branch work already on `main` — phase A — accounts for roughly another
+−6 900, so the "compile-time information ⇒ fewer instructions" line as a whole is ≈ −28 k.)
 
 | Phase | Goal | Deliverable / evidence | Status |
 |---|---|---|---|
 | **A. Infrastructure** (pre-existing, on main) | The analysis exists at all, and the generator consumes only its outputs | self-hosted native compiler; per-binding type slot / check omission **−5830 IR lines**; numeric specialization; parameter and return annotations; stdlib annotations + bundle regeneration **−1086** | done |
-| **B. Make the type information complete** *(this branch)* | Give the analysis everything it needs to say "known" with confidence, so family (a) fires everywhere and family (b) has fuel | B1 runtime program analyzed ✓ **−11 492**; B2 `.length -> Number` ✓ `a3a4120` **−593**; B3 per-program probe ✓ `464f72c`; B4 error-test elision ✓ `9cceff7` **−1 929** (see §5②); B5 return-type signatures ✓ `47a4e97`; B6 general module resolution ✓ `0b8e239`; B7 declare the runtime signatures ✓ `d5cc108` **−151**; **B8 analysis completeness** ✓ `4c9f0e2` **−3 150** + `047f390` **−1 274** (see §5⑧) | **in progress** |
-| **C. Consumer pass — unboxing** | `emitValue` reads `staticRep` and emits the raw or boxed direct path; `boxIfNeeded` at use sites; the speculative machinery is deleted | **C1 landed `2f847f6`**: computed `BinaryOp`/`UnaryOp` nodes keep a raw `double`/`i1`, boxed only at use sites, `if`/`while` conditions `br i1` directly, raw slot writes touch only the payload (tag stays `NUMBER`, so frame/ABI unchanged) — **−871**. Next: raw reads of `unboxType` slots, raw parameters/returns (needs a raw call ABI) | **in progress** |
-| **D. Widen the unboxing domain** | Extend raw representation to more shapes, only where static evidence exists | raw Boolean slots (`i1` fits in a byte); module-root bindings once the extension-bridge `memcpy` frame ABI problem is solved; array/object payload representations | not started |
-| **E. Keep hunting family (a)** | The check / slot / error-test levers keep proving bigger than unboxing; keep looking for "information ⇒ dead code" | B4 landed (`9cceff7`); the same `cannotBeError` predicate now applies to `emitPropagateError` (`?` / aggregate assignment) and to error tests reachable only through provably-checked call sites (§6) | continuous |
+| **B. Make the type information complete** *(this branch)* | Give the analysis everything it needs to say "known" with confidence, so family (a) fires everywhere and family (b) has fuel | B1 runtime program analyzed ✓ **−11 492**; B2 `.length -> Number` ✓ `a3a4120` **−593**; B3 per-program probe ✓ `464f72c`; B4 error-test elision ✓ `9cceff7` **−1 929** (see §5②); B5 return-type signatures ✓ `47a4e97`; B6 general module resolution ✓ `0b8e239`; B7 declare the runtime signatures ✓ `d5cc108` **−151**; **B8 analysis completeness** ✓ `4c9f0e2` **−3 150** + `047f390` **−1 274** (see §5⑧); **B9 bind-level keying** ✓ `6b3a4cf` **−1 258** (§5⑨); `74019f4` family-aware consistency + a compile-time diagnostic for `: Array`/`: Object` (constructors are not types) — IR ±0; `69d36a8` scalar std annotations **−1** | **in progress — only §5⑥ (annotate std) is left** |
+| **C. Consumer pass — unboxing** | `emitValue` reads `staticRep` and emits the raw or boxed direct path; `boxIfNeeded` at use sites; the speculative machinery is deleted | **C1 landed `2f847f6`**: computed `BinaryOp`/`UnaryOp` nodes keep a raw `double`/`i1`, boxed only at use sites, `if`/`while` conditions `br i1` directly, raw slot writes touch only the payload (tag stays `NUMBER`, so frame/ABI unchanged) — **−871**; `aceb23a` div/mod fast path **−543**. Raw reads of `unboxType` slots measured as a *loss* (boxed read is 1 line); raw parameters/returns are **measured and deferred** (§5⑪: ②b ≈ 170–251 sites, ②c 0 today because no parameter annotation is effective — it needs §5⑥) | **in progress (C1 done, rest measured & deferred)** |
+| **D. Widen the unboxing domain** | Extend raw representation to more shapes, only where static evidence exists | raw Boolean slots (`i1` fits in a byte); module-root bindings once the extension-bridge `memcpy` frame ABI problem is solved; array/object payload representations. **Not needed for the annotated-family work**: per §5⑨/`docs/object-array-type-names.md`, anything that is not a *designated* type stays boxed | not started |
+| **E. Keep hunting family (a)** | The check / slot / error-test levers keep proving bigger than unboxing; keep looking for "information ⇒ dead code" | B4 landed (`9cceff7`); the same `cannotBeError` predicate now applies to `emitPropagateError` (`?` / aggregate assignment) and to error tests reachable only through provably-checked call sites (§6). **Counted but not yet taken (§5⑩):** the div/mod-by-a-non-zero-literal cold path, one-side-known dispatch, and `ql_truthy` on a known Boolean | continuous |
 
 The ordering rule that drives all of this: **family (a) is representation-agnostic** — eliding
 an Error test helps a boxed slot exactly as much as a raw one — and it is measurably bigger
@@ -70,9 +72,12 @@ lines.
 | Item | State |
 |---|---|
 | Branch | `unboxed-values` (working tree = `/root/projects/QLang`) |
-| Last commit | `1ef3e41` — docs: record the decision to defer the `proven` family extension |
-| Landed since this doc was written | `a3a4120` `.length -> Number` (−593); `464f72c` per-program probe (B3/①); `9cceff7` error-test elision (B4/②, −1 929); `47a4e97` return-type signatures; `0b8e239` general module resolution; `d5cc108` declared runtime signatures (−151); `4c9f0e2` call callee+arguments (−3 150); `047f390` literals/aggregates/index/if (−1 274); `2f847f6` consumer pass C1 (−871); `aceb23a` div/mod fast path (−543); `6b3a4cf` bind-level keying (⑨, −1 258); `69d36a8` scalar std annotations (−1); `74019f4` family-aware consistency + constructor diagnostic |
-| Verification | both suites green on `/tmp/n67`: interpreter 56 PASS (`ALL CHECKS PASS`), selfhost 47 PASS (`ALL REQUESTED CHECKS PASS`) |
+| Last commit | `d24a9ac` — docs: ⑫ recorded as attempted/landed/reverted |
+| IR total | **215 919 → 194 812 = −21 107 lines (−9.8 %)** on `/tmp/t20.ql` (program output still `20`); phase A on `main` adds ≈ −6 900, so the whole line is ≈ −28 k. Per-step numbers are in the block below |
+| Landed since this doc was written | `a3a4120` `.length -> Number` (−593); `464f72c` per-program probe (B3/①); `9cceff7` error-test elision (B4/②, −1 929); `47a4e97` return-type signatures; `0b8e239` general module resolution; `d5cc108` declared runtime signatures (−151); `4c9f0e2` call callee+arguments (−3 150); `047f390` literals/aggregates/index/if (−1 274); `2f847f6` consumer pass C1 (−871); `aceb23a` div/mod fast path (−543); `6b3a4cf` bind-level keying (⑨, −1 258); `69d36a8` scalar std annotations (−1); `74019f4` family-aware consistency + constructor diagnostic (IR ±0) |
+| Verification | both suites green on `/tmp/nk`: interpreter `ALL CHECKS PASS` (56 PASS), selfhost `ALL REQUESTED CHECKS PASS` (47 PASS) |
+| Backup branch | `backup/nan-removal-stage1` (→ `35257b3`) — the NaN/∞ removal attempt (`4903d57` stage 1 + `35257b3` literal diagnostic); see §5⑫, the decision was reversed |
+| Next (see §5) | **⑥ annotate std** (mandatory per the author; rules measured: return annotations free, parameter annotations only where the argument type is proven, object/array returns deferred — see §5⑥a); **⑩** count the three family (a) candidates; **⑪** raw ABI (②b/②c) |
 | Untracked noise | `_b.ql`, `.commandcode/`, `docs/compiler-next-steps.zh.md` |
 | Merge policy | **Do not merge into `dancing-with-dragon` without explicit approval from the user.** |
 
@@ -91,8 +96,10 @@ IR line metric on the accepted fixture, all points measured on the same seed:
                + literals/aggregates/index/if (047f390) 197 485   (-1 274; ns-resolve resolved 8 / unresolved 30)
                + consumer pass C1 (2f847f6)             196 614   (-871; computed nodes keep their raw rep)
                + div/mod fast path (aceb23a)            196 071   (-543; both sides statically Number)
-               + bind-level keying (6b3a4cf)            194 813   (-1 258; std annotations start to bite)
-               + scalar std annotations (69d36a8)       194 812   (-1)
+                + bind-level keying (6b3a4cf)            194 813   (-1 258; std annotations start to bite)
+                + scalar std annotations (69d36a8)       194 812   (-1)
+                + family rules + constructor diagnostic (74019f4) 194 812   (±0)
+                (the NaN/∞ removal 4903d57/35257b3 measured 194 636, then was reverted — §5⑫)
 program output unchanged throughout: 20
 ```
 
