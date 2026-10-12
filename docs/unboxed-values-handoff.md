@@ -575,18 +575,31 @@ NaN can only come from an ∞ operand (`∞-∞`, `∞/∞`, `0*∞`) or `0/0`, 
 
 Stages, and what each costs:
 
-1. **Cut the sources in std** (approved; attempted and reverted this session because it cannot land
-   alone — the fixture/`.expected` rewrite is part of it). Measured scope:
+1. **Cut the sources in std** (approved; attempted twice and reverted this session because it cannot
+   land alone — the fixture/`.expected` rewrite is part of it). Measured scope:
    - `stdlib/number.ql`: delete `invalidNumber`; non-String ⇒ `TypeMismatch`; malformed text — **and the
      `"inf"`/`"infinity"`/`"NaN"` spellings** — ⇒ `RangeError` (5 sites; the `i`/`N` word branch goes
      away entirely).
+   - **`stdlib/decimal.ql` — the fifth producer, found on the second attempt** (it is on the parse
+     path: `Number.parseFloat` → `decimalNumber`/`decimalCompose`): line 65 `value = 1e308 * 1e308;`
+     (the `biasedExponent == 2047` branch) and lines 76/97/121 `return decimalCompose(0, 2047, …)`
+     (overflow ⇒ ∞). These must raise too, or `parseFloat("1e400")` still manufactures ∞.
    - `stdlib/math.ql`: delete `nanNumber`/`infiniteNumber`/`signedInfinity`; `exponential` (64),
      `integerPower` (90), `power` (106/110/117/122/124/135/140), `trig` (195) ⇒ `RangeError`; `sqrt`'s
      non-finite path ⇒ `RangeError`. **Careful:** the two assignment-style sites inside `power`
      (135/140) must become early `return`s, or the later `-result` turns the Error into a TypeMismatch.
-   - **Runtime** (reached only in the later stages, but note it now): `Math.max`/`min` are runtime
-     natives and use **∓∞ as the empty-argument sentinel and NaN as the IEEE propagation rule** ⇒ under
-     this decision they must raise instead (a small API decision to make explicitly).
+   - `aot/runtime.ql` — `__math_extreme` (1509): the running extreme was seeded with
+     `__number_bits(0, 2047, maximum)` = **±∞**, i.e. the empty-argument sentinel. Per the decision the
+     empty call is an `RangeError` and the seed becomes the first *checked* argument (the NaN branch
+     below stays until stage 3 makes NaN unreachable). **Not landed yet** — see below.
+   - **Unresolved, must be explained before landing:** with the std edits applied, `t34_numeric_syntax`
+     reported **67 checks instead of 70** with `cases=38`/`bad=8` unchanged and **no FAIL line**, i.e.
+     three `check` calls vanished silently while the fixture ran to the end. Hypothesis to test first: an
+     **Error argument to `check(...)`** makes the whole call be rejected (Error-argument policy), so
+     `check`'s counter never increments — a silent coverage loss. If so, the fixture rewrites must wrap
+     such calls (`check(isError(parse(x)) …)` / inspect `.type` on the call result) rather than pass the
+     Error as an argument. **Do not land stage 1 until this is root-caused** — an unexplained coverage
+     loss is exactly what we do not want to bake in.
 2. **Language-level trapping arithmetic**: `+ - * / %` on Numbers whose result is ±∞/NaN ⇒ error.
    Literal/constant overflow ⇒ **compile-time** error (static detection, per the author's preference).
 3. **Delete what becomes dead**: `Number.isNaN`/`isFinite`, the `"NaN"`/`"Infinity"` branches of
