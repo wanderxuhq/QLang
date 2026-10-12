@@ -443,11 +443,14 @@ Consequence for the campaign:
   `has`, `casing`, `matches` + `finite(n: Number)`, IR −1, both engines verified on `t19_literals` and
   `t55_return_types`).
 - **Object/array returns are blocked on a naming/semantics question**: the analysis *derives* `Object`
-  for an object literal (structural sense), while `Object.check` at runtime is nominal and rejects it.
-  Declaring `: AnyObject` instead is **rejected by the analysis as a return-type mismatch** (compile
-  error), so neither spelling works today. This needs a decision (align the analysis's derived names
-  with the runtime singletons, or make `Object.check` accept plain objects) before object/array
-  annotations can be added.
+  for an object literal, but `Object` is a **constructor** (`__obj_ctor`, used to derive
+  `Object(schema)`/`Object(pred)`), not a type value — `AnyObject`/`AnyArray` are the *concrete* types
+  (`{check: __pred_object}`/`{check: __pred_array}`), on the same footing as `Number`. So the literal's
+  derived name should be `AnyObject`/`AnyArray`, the family rules (`.length`) must key on the family
+  rather than on a name, and the declared-vs-derived mismatch check must not fire *inside* the family
+  (two `AnyObject`s are not interchangeable — only family membership is statically knowable).
+  **See `docs/object-array-type-names.md` (+ `.zh.md`) for the full note**; implement that before
+  adding object/array annotations.
 
 Original plan's rules, kept:
 
