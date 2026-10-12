@@ -587,6 +587,41 @@ counters, exactly like the ②a probe), then implement only the ones with large 
 3. **`ql_truthy` on a statically-known Boolean** condition (boxed case; the raw `i1` case is already
    done in C1).
 
+### ⑭ The `lifetime` experiment — a **measured rejection** (and what forced the `-O2` gate)
+
+Motivation: `llvm.lifetime.start/end` is **10 442 IR lines (5.4 %)** — half of all call lines — and looks
+like pure noise, so it was candidate #1 for deletion. The experiment needs **no rebuild**: the calls are
+pure hints, so they can be stripped from the emitted text and the result is exactly "as if not emitted".
+
+| | IR lines | `-O2` AArch64 instructions |
+|---|---|---|
+| as emitted | 194 812 | 130 505 |
+| `lifetime` stripped | 184 368 (**−10 444, −5.4 %**) | 134 366 (**+3 861, +2.96 %**) |
+
+The stripped build **links and runs correctly (prints `20`)** ⇒ this is not a bug, it is a genuine loss:
+LLVM uses the lifetime markers to merge stack slots. **REJECTED — do not re-open without new evidence.**
+This single experiment *proves the measurement rule* now in the handover §5: an IR-line win that removes
+slot/box movement can be **absorbed by LLVM, or even come back as a loss**. Count **machine instructions
+after `-O2`**, not lines.
+
+Counts taken at the same time (all read-only, IR-neutral):
+
+- **⑦ whole-stdlib linking**: 280 functions defined, 107 directly called ⇒ **189 (67.5 %)** are reached
+  only through closure code pointers ⇒ *statically undroppable*; only real laziness could drop them.
+  Sizes the "on-demand stdlib" lever (feature-sized; recorded, not started).
+- **③ error edge after a call**: the "is this an Error?" test is `call @ql_tag` + `icmp eq i64 …`, but it
+  is **not adjacent** to the call in the text, so adjacency counting is invalid — a count needs an
+  **emitter-side counter** at the site that emits the check.
+- **IR composition** (194 812 lines): slot/frame traffic **51.3 %**, calls 11.9 % (of which `lifetime`
+  **5.4 %**), control flow 10.2 %, labels/non-instructions 9.2 %, boxing/unboxing **7.3 %**,
+  pointer/number casts 6.3 %, type tests 2.8 %, arithmetic **0.9 %**.
+- **`-O2` machine composition** (130 206): memory **43.7 %**, `mov`/immediates 12.8 %, branches 9.7 %,
+  `bl` 3.0 %; and O0→O2 removes 61.5 % of all instructions, **76 % of the removals being memory traffic**.
+- **Hand-written vs generated**: `aot/runtime.c` compiles to **559** instructions (0.4 % of the module)
+  ⇒ ~99.6 % of the artifact is QLang-emitted. Density ≈ **17 instructions per analysed operation**
+  (7 472 operations) vs ~1–2 for a typed C-like language and **56 instructions for V8/TurboFan's
+  optimized `add(a,b)`** — i.e. we sit at V8's *optimizing-tier order*, not C's.
+
 ### ⑪ Status of the raw-ABI work (②b / ②c) — measured, not started
 
 - **②b raw returns**: **340** call sites, all pointing at the 6 functions that *declare* `: Number`.

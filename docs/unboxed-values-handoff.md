@@ -120,6 +120,23 @@ established pattern), then implement only what has a large hit count:
 - the **dispatch** when one operand's type is known (`"a" + b` cannot be the numeric path);
 - `ql_truthy` on a condition whose value is a **known Boolean** (the raw-`i1` case is already done).
 
+**② b — MEASURED AND REJECTED: do not remove the `llvm.lifetime.start/end` calls.** They are 10 442
+lines of IR (5.4 %, half of all call lines) and look like pure noise, but they are what lets LLVM merge
+stack slots: stripping them takes the IR from 194 812 to 184 368 lines and yet takes the **machine**
+instruction count from 130 505 to **134 366 (+3 861, +2.96 %)** — with the program still printing `20`.
+This is the cleanest demonstration of the measurement rule in §5: **an IR-line win can be a machine-code
+loss.** Do not re-open it without new evidence.
+
+**② c — the "error edge" after a call (counted next, not yet).** If the callee's declared return type
+excludes `Error`, the caller's test of the returned tag is dead. The shape is now identified in the IR
+(`call @ql_tag` + `icmp eq i64 …`) but a real count needs an **emitter-side counter** at the site that
+emits the check (adjacency in the text does not work — the check is not the next line after the call).
+
+**⑤ §5⑦ — the whole stdlib is linked: 189 of 280 functions (67.5 %) are reached only through closure
+code pointers.** They are therefore *statically* undroppable (no analysis can remove them); only genuine
+laziness/on-demand instantiation could. That is the ceiling of this lever, and it is a feature-sized
+change — record it, don't start it.
+
 **③ §5⑪ — the raw ABI (measured, needs a decision).** Declaring `: Number` parameters/returns raw
 requires an ABI change; the numbers are already measured: ②b (raw returns) ≈ 170 call sites on declared
 returns / 251 counting derived ones; ②c (raw parameters) is 0 today *because no parameter annotation is
@@ -136,6 +153,11 @@ See §0's commands. Two conventions worth calling out:
 
 - **Never pipe the gates through `| tail`** — a `tail` pipeline buffers, so the log stays empty for the
   whole run and you cannot distinguish progress from a hang. Run them plain and read the log file.
+- **Validate every lever at `-O2` as well as at the IR line count.** Measured facts: `clang -O2` takes the
+  same emitted IR from 337 828 to **130 206** AArch64 instructions (−61.5 %), and 76 % of what it removes
+  is memory traffic — so an IR-line win that only removes slot/box movement is largely *absorbed* by
+  LLVM, and can even come back as a loss (see §4②b). The number that matters is
+  `clang -O2 -S <ir> | grep -c '^\s\+[a-z]'`-style counting of **machine instructions**, not `wc -l`.
 - The fixture's **program output must not change** (it is `20`); if it does, the change is wrong
   regardless of the line count.
 
