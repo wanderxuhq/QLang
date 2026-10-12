@@ -422,14 +422,32 @@ Measured per batch (regenerate the bundle, rebuild the compiler, count `/tmp/t20
   conservative). So: annotate a parameter only where the call sites' argument types are proven
   (the `numargs=315` criterion); treat the rest as net-negative and skip, per the rule.
 
-**Blocker found (and why the batch was reverted):** the 6 return annotations in `string.ql` broke
-the **interpreter**, not the compiler. `t19_literals` went from `true`×16 to `false`×16 under the
-interpreter suite, while the same fixture compiled by `qlangc` prints `true`×16 correctly. So the
-bug is in `bootstrapped/interpreter.ql`'s return-type check (evaluated at definition, checked on
-return — `bootstrapped/interpreter.ql:641-649`), triggered by these particular declared types
-(`Boolean`/`Object`/`String` returns on library-internal helpers). **Diagnose that before
-resuming the campaign.** The batch is reverted to keep both gates green; nothing is lost, the
-findings above are the useful output.
+**Blocker — diagnosed, and it was NOT an interpreter bug.** The 6 return annotations in `string.ql`
+made `t19_literals` print `false`×16 under the interpreter while the compiled binary printed `true`×16.
+Root cause, confirmed by a minimal repro run through *both* engines:
+
+```
+let o = {}; o["a"] = true;
+println(Object.check(o));      // ?Error  <-- in BOTH engines
+println(AnyObject.check(o));   // true
+```
+
+So `Object.check` (the runtime type singleton) **rejects a plain object**; the "any object" type is
+`AnyObject`. The compiler only *looked* fine because it elides the return-edge check when the declared
+type equals the derived type (`proven`), whereas the interpreter — which has no analysis — always runs
+the check. Hence the asymmetry.
+
+Consequence for the campaign:
+
+- **Scalars are safe and consistent** (`Number`/`Boolean`/`String`) — annotate those (done: `finite`,
+  `has`, `casing`, `matches` + `finite(n: Number)`, IR −1, both engines verified on `t19_literals` and
+  `t55_return_types`).
+- **Object/array returns are blocked on a naming/semantics question**: the analysis *derives* `Object`
+  for an object literal (structural sense), while `Object.check` at runtime is nominal and rejects it.
+  Declaring `: AnyObject` instead is **rejected by the analysis as a return-type mismatch** (compile
+  error), so neither spelling works today. This needs a decision (align the analysis's derived names
+  with the runtime singletons, or make `Object.check` accept plain objects) before object/array
+  annotations can be added.
 
 Original plan's rules, kept:
 
