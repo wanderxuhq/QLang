@@ -630,6 +630,37 @@ existing `std.Math.sqrt(-1).type == "TypeMismatch"`) — and cases whose *input 
 NaN/∞ (all of `t26`'s NaN min/max, `t25`'s `nan | 0` / `inf & 1` / `sqrt(inf)`) simply disappear, i.e.
 that coverage is knowingly given up.
 
+### ⑬ Bootstrap divergence: a compiler built from the same sources cannot compile `t34_numeric_syntax`
+
+**Found while trying to land ⑫, and it is a *separate*, more basic defect.** Baseline test (clean tree,
+no working-tree edits):
+
+```
+/tmp/nb  = built BY /tmp/n70 FROM the committed sources  -> compiling t34: CompileError …:1:1:
+                                                           Expected ']' after array
+/tmp/n70 = built earlier in the session from an earlier source state -> compiling t34: OK
+```
+
+So **the same committed sources produce a compiler whose behaviour depends on which compiler built it** —
+this toolchain is currently **not faithfully self-reproducing**. Consequences:
+
+- every attempt to land ⑫ ran into this same wall (three attempts, each reverted);
+- a per-file bisect of the stdlib edits is **useless** until this is fixed: with all four edited files
+  reverted one at a time (rebuilding each step) the failure persisted, and it also persists on a
+  **fully clean tree** — hence not caused by the stdlib edits at all;
+- the gate coverage question: `run_selfhost_tests.py:152` *does* use `t34_numeric_syntax`, and the
+  selfhost gate was green at `74019f4` — with the compiler built *then*. So the divergence is
+  **generation-dependent**, not a simple one-commit regression walk.
+
+Next diagnostic (cheap, decisive): **bisect by generation** — rebuild in a chain (`n70 → n71 → n72 …`)
+from one fixed source state and find the generation at which compiling t34 starts failing, then diff the
+two neighbouring compilers. That pins whether the cause is in the analysis (the probe counters, the
+family/`typeMismatch` change) or in the emitter, and whether the parser itself is being *miscompiled*
+(the message is a *parse* error with a bogus position).
+
+Do this **before** resuming ⑫: an unreproducible bootstrap will keep eating every attempt at landing
+anything, and a silently miscompiled parser is a correctness problem in its own right.
+
 ## 6. The design obligation for step ④ (call-site checks)
 
 Removing a member's internal error return is only sound if the *claim* stays honest: the
