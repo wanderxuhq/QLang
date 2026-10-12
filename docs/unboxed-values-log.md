@@ -52,6 +52,11 @@ be worth a few thousand IR lines, not tens of thousands (§7).
 
 ### 0.1 Roadmap
 
+> Vocabulary, so the two documents line up: **"the roadmap"** = this phase table (§0.1, phases A–E) plus
+> the numbered worklist in **§5** (`①`–`⑬`, item-by-item reasoning and measurements). The handover
+> carries the same two things in condensed form: its **§3 "Roadmap — the phases and the IR ledger"** and
+> its **§4 "The ordered worklist — what to do next"**.
+
 Status per phase. "IR" always means `wc -l` of `/tmp/t20.ql`'s emitted IR on the accepted
 seed; the accepted baseline is **215 919** and the **current total is 194 812 ⇒ −21 107 lines
 (−9.8 %)**. (The pre-branch work already on `main` — phase A — accounts for roughly another

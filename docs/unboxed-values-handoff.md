@@ -71,7 +71,7 @@ Two families of levers, and the measured fact that drove the ordering:
 7. **Workflow per step:** report **hit counts first, then line counts**; commit only when **both** gates
    are green; keep the metric honest (the fixture's output must not change: it is `20` throughout).
 
-## 3. Where the IR stands
+## 3. Roadmap — the phases and the IR ledger
 
 Metric: `wc -l` of `/tmp/t20.ql`'s emitted IR on the accepted seed. **Accepted baseline 215 919;
 current 194 812 (−21 107, −9.8 %).** Phase A (already on `main`) accounts for ≈ another −6 900, so the
@@ -93,7 +93,7 @@ whole "compile-time information ⇒ fewer instructions" line is ≈ **−28 k**.
 | family rules + a constructor diagnostic | `74019f4` | ±0 |
 | scalar std annotations | `69d36a8` | −1 |
 
-## 4. What to do next, in order
+## 4. The ordered worklist — what to do next
 
 **① §5⑥ — annotate `std` (the author's standing requirement).** `std` must carry author-declared
 parameter *and* return annotations, even where that buys no IR; the only exception is a *net-negative*
