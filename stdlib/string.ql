@@ -5,7 +5,7 @@ let requireString = (s, name) -> {
   if !String.check(s) { return std.Error.raise("TypeMismatch", name + " expects String", null); };
   s;
 };
-let finite = (n): Boolean -> n == n && n - n == 0;
+let finite = (n: Number): Boolean -> n == n && n - n == 0;
 let propertyTable = (chunks): Object -> {
   let table = {}; let i = 0;
   while i < chunks.length {
