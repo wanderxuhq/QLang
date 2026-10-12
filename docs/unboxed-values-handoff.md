@@ -592,14 +592,25 @@ Stages, and what each costs:
      `__number_bits(0, 2047, maximum)` = **±∞**, i.e. the empty-argument sentinel. Per the decision the
      empty call is an `RangeError` and the seed becomes the first *checked* argument (the NaN branch
      below stays until stage 3 makes NaN unreachable). **Not landed yet** — see below.
-   - **Unresolved, must be explained before landing:** with the std edits applied, `t34_numeric_syntax`
-     reported **67 checks instead of 70** with `cases=38`/`bad=8` unchanged and **no FAIL line**, i.e.
-     three `check` calls vanished silently while the fixture ran to the end. Hypothesis to test first: an
-     **Error argument to `check(...)`** makes the whole call be rejected (Error-argument policy), so
-     `check`'s counter never increments — a silent coverage loss. If so, the fixture rewrites must wrap
-     such calls (`check(isError(parse(x)) …)` / inspect `.type` on the call result) rather than pass the
-     Error as an argument. **Do not land stage 1 until this is root-caused** — an unexplained coverage
-     loss is exactly what we do not want to bake in.
+   - **Confirmed mechanism for the silent coverage loss (root-caused):** with the std edits applied,
+     `t43_number_library` fails with exactly this chain — `TypeMismatch: attempt to pass error value as
+     argument` ⊂ `stdlib/number.ql` `RangeError: Number.parseFloat cannot parse` — i.e. when a std call
+     now *returns* an Error and that Error is used as a **call argument** (`check(parseFloat(x), …)`),
+     the whole call is **rejected** and never runs, so `check`'s counter silently does not increment
+     (that is the t34 67-vs-70). Fixture rewrites must therefore never pass the Error as an argument:
+     inspect it inline (`parse(x).type == "RangeError"`, `isError(parse(x))`) — `isError`/`print` are on
+     the runtime's exempt list, so those forms work.
+   - **Unresolved, blocks landing:** compiling `aot/tests/t34_numeric_syntax.ql` against a compiler built
+     with the edited library fails with `CompileError …:1:1: Expected ']' after array` — a *parse*
+     error at a bogus position. Narrowed but not explained: the edited library parses fine in other
+     contexts (t25/t26/t43 compile; minimal programs using `parseFloat`, the odd literals `.5`/`5.`/
+     `1.e2`/`00012`, and `let Infinity = 7; let NaN = 8;` all parse), and t34 is unchanged and parses
+     against the old library. Since the library is embedded at *compiler build* time, per-file bisects
+     must **rebuild the compiler each step** (the earlier attempt was invalid: the stale compiler still
+     embedded the edited bundle). Next diagnostic: rebuild per-file, or add a parse-only mode that
+     reports the position inside the parsed text rather than in the entry program.
+   - **Do not land stage 1 until that parse failure is explained** — an unexplained compile failure is
+     worse than the NaN/∞ it removes.
 2. **Language-level trapping arithmetic**: `+ - * / %` on Numbers whose result is ±∞/NaN ⇒ error.
    Literal/constant overflow ⇒ **compile-time** error (static detection, per the author's preference).
 3. **Delete what becomes dead**: `Number.isNaN`/`isFinite`, the `"NaN"`/`"Infinity"` branches of
