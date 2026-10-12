@@ -222,7 +222,21 @@ python3 aot/native_link.py /tmp/ir20_nN.ll -o /tmp/run20_nN && /tmp/run20_nN
 # 4. regenerate the stdlib bundle after ANY stdlib/*.ql edit
 ./target/release/qlang stdlib/build_bundle.ql > stdlib/bundle.ql
 #    (--check validates freshness; see stdlib/README.md)
+#    a native alternative: build stdlib/build_bundle.ql with the compiler under test and run it —
+#    verified to produce a byte-identical bundle, and it exercises the shipping path
 ```
+
+**Builder hygiene (learned the hard way — see §5⑬).** The library text is embedded at *compiler build*
+time, so a stale or mis-built compiler produces failures that are not in the sources. Before believing a
+failure:
+
+- rebuild the compiler under test from the current tree **with a builder that is itself verified** (the
+  last compiler whose gates were green), and keep using that chain;
+- if the failure looks bizarre — in particular `CompileError …:1:1: Expected ']' after array`, a *parse*
+  error at a bogus position, which is the signature of a failure *inside the embedded library* text —
+  **reproduce it with a second, independently built compiler before investigating**. Three attempts at
+  §5⑫ were wasted on exactly this.<br>Verified chains used this session: `/tmp/n67 → nc → nd` (good),
+  whereas `/tmp/n70` was a bad builder.
 
 Gate suites (both must pass; the gate takes ~40 min, the interpreter suite a few minutes):
 
