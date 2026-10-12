@@ -70,9 +70,9 @@ lines.
 | Item | State |
 |---|---|
 | Branch | `unboxed-values` (working tree = `/root/projects/QLang`) |
-| Last commit | `2f847f6` — consumer pass, first slice: computed nodes keep their raw representation (−871) |
-| Landed since this doc was written | `a3a4120` `.length -> Number` (−593); `464f72c` per-program probe (B3/①); `9cceff7` error-test elision (B4/②, −1 929); `47a4e97` return-type signatures; `0b8e239` general module resolution; `d5cc108` declared runtime signatures (−151); `4c9f0e2` call callee+arguments (−3 150); `047f390` literals/aggregates/index/if (−1 274); `2f847f6` consumer pass C1 (−871) |
-| Verification | both suites green on `/tmp/n51`: interpreter 56 PASS (`ALL CHECKS PASS`), selfhost 47 PASS (`ALL REQUESTED CHECKS PASS`) |
+| Last commit | `1ef3e41` — docs: record the decision to defer the `proven` family extension |
+| Landed since this doc was written | `a3a4120` `.length -> Number` (−593); `464f72c` per-program probe (B3/①); `9cceff7` error-test elision (B4/②, −1 929); `47a4e97` return-type signatures; `0b8e239` general module resolution; `d5cc108` declared runtime signatures (−151); `4c9f0e2` call callee+arguments (−3 150); `047f390` literals/aggregates/index/if (−1 274); `2f847f6` consumer pass C1 (−871); `aceb23a` div/mod fast path (−543); `6b3a4cf` bind-level keying (⑨, −1 258); `69d36a8` scalar std annotations (−1); `74019f4` family-aware consistency + constructor diagnostic |
+| Verification | both suites green on `/tmp/n67`: interpreter 56 PASS (`ALL CHECKS PASS`), selfhost 47 PASS (`ALL REQUESTED CHECKS PASS`) |
 | Untracked noise | `_b.ql`, `.commandcode/`, `docs/compiler-next-steps.zh.md` |
 | Merge policy | **Do not merge into `dancing-with-dragon` without explicit approval from the user.** |
 
@@ -90,6 +90,9 @@ IR line metric on the accepted fixture, all points measured on the same seed:
                + call callee + arguments inferred (4c9f0e2) 198 759   (-3 150!)
                + literals/aggregates/index/if (047f390) 197 485   (-1 274; ns-resolve resolved 8 / unresolved 30)
                + consumer pass C1 (2f847f6)             196 614   (-871; computed nodes keep their raw rep)
+               + div/mod fast path (aceb23a)            196 071   (-543; both sides statically Number)
+               + bind-level keying (6b3a4cf)            194 813   (-1 258; std annotations start to bite)
+               + scalar std annotations (69d36a8)       194 812   (-1)
 program output unchanged throughout: 20
 ```
 
@@ -519,7 +522,7 @@ the generic path.
 Lesson for the next lever: when a "known type" lever under-delivers, check whether the analysis ever
 *reaches* the node before adding another rule.
 
-### ⑨ Bind-level keying for the unbox decisions — *in progress (this session)*
+### ⑨ Bind-level keying for the unbox decisions — *done* (`6b3a4cf`, −1 258)
 
 **The blocker this fixes: today `std`'s existing annotations have zero effect.** Both unbox decisions
 are keyed by *name within a program*, not by binding:
