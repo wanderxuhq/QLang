@@ -80,6 +80,27 @@ let typeFnLookup = (name) -> {
 };
 let tagType = (node, name) -> { node.staticType = name; name; };
 
+// ---- ②a 量测:裸 ABI(参数与返回都是 Number)的覆盖面 ------------------------------
+// 只计数,不改变任何生成决策 —— 目的是先拿到「有多少调用点吃得到裸签名」这个数,
+// 再决定要不要动调用约定。函数体保持盒约定时这些计数完全不影响输出。
+let rawAbiFuncTotal = 0;
+let rawAbiFuncParams = 0;
+let rawAbiFuncAll = 0;
+let rawAbiFuncRet = 0;
+let rawAbiFuncAny = 0;
+let rawAbiParamCount = 0;
+let rawAbiCallTotal = 0;
+let rawAbiCallKnown = 0;
+let rawAbiCallArity = 0;
+let rawAbiCallRaw = 0;
+let rawAbiCallRet = 0;
+let rawAbiSigCount = {};
+let rawAbiSigAll = {};
+let rawAbiSigRet = {};
+let rawAbiKey = (name) -> std.String.toString(typeProgram) + ":" + name;
+let rawAbiReport = () -> [rawAbiFuncTotal, rawAbiFuncParams, rawAbiFuncAll, rawAbiCallTotal, rawAbiCallKnown, rawAbiCallArity, rawAbiCallRaw, rawAbiFuncRet, rawAbiFuncAny, rawAbiParamCount, rawAbiCallRet];
+export rawAbiReport;
+
 // ---- 表示(裸值 / 装箱)的编译期结论 --------------------------------------------
 // 不变式:表示属于「值」,装箱属于「使用点」。这里只算「自然表示」,不看谁消费它;
 // 使用点需要装箱时,由生成端在那一个使用点补一次转换,绝不回头改写本结论。
@@ -448,6 +469,29 @@ let inferExpr = (node) -> {
     // 给生成端区分「作者声明的类型」(权威、要强制)与「推导出的类型」(只是近似)。
     node.declaredReturnType = declaredReturn;
     node.derivedReturnType = result;
+    // ②a:裸 ABI 候选 —— 参数全部「可裸」(注解 Number 且函数体内未被重赋值)。
+    let rawAllParams = node.parameters.length > 0;
+    let rpi = 0;
+    while rpi < node.parameters.length {
+      if isError(node.parameters[rpi].unboxType) || node.parameters[rpi].unboxType != "Number" { rawAllParams = false; };
+      rpi = rpi + 1;
+    };
+    node.rawAbiAll = rawAllParams;
+    node.rawAbiRet = declaredReturn == "Number";
+    // ②a:也数「至少一个可裸参数」与「声明返回 Number」—— 分别对应 ②c(裸参数)与 ②b(裸返回)。
+    let rawAnyParam = false;
+    let rawPc = 0;
+    let rpj = 0;
+    while rpj < node.parameters.length {
+      if !isError(node.parameters[rpj].unboxType) && node.parameters[rpj].unboxType == "Number" { rawAnyParam = true; rawPc = rawPc + 1; };
+      rpj = rpj + 1;
+    };
+    rawAbiParamCount = rawAbiParamCount + rawPc;
+    rawAbiFuncTotal = rawAbiFuncTotal + 1;
+    if rawAllParams { rawAbiFuncParams = rawAbiFuncParams + 1; };
+    if rawAllParams && node.rawAbiRet { rawAbiFuncAll = rawAbiFuncAll + 1; };
+    if rawAnyParam { rawAbiFuncAny = rawAbiFuncAny + 1; };
+    if node.rawAbiRet { rawAbiFuncRet = rawAbiFuncRet + 1; };
     typePop();
     tagType(node, "Function");
     node.cannotBeError = true;
@@ -558,6 +602,28 @@ let inferExpr = (node) -> {
     // 实参也要分析 —— 否则嵌在调用实参里的表达式永远不会被定型。
     let argIdx = 0;
     while argIdx < node.arguments.length { inferExpr(node.arguments[argIdx]); argIdx = argIdx + 1; };
+    // ②a:这个调用点能不能发裸调用 —— 被调者是静态已知函数绑定、实参数与形参数相等
+    // (无部分应用)、签名全裸、且每个实参静态都是 Number(⇒ 注解检查与 Error 实参策略是死代码)。
+    rawAbiCallTotal = rawAbiCallTotal + 1;
+    if !isError(node.callee.type) && node.callee.type == "Identifier" && typeFnLookup(node.callee.name) != "" {
+      let rawKey = rawAbiKey(node.callee.name);
+      if !isError(rawAbiSigCount[rawKey]) {
+        rawAbiCallKnown = rawAbiCallKnown + 1;
+        // ②b 的燃料:被调者声明返回 Number ⇒ 裸返回可以在不改实参缓冲的前提下先做。
+        if rawAbiSigRet[rawKey] == true { rawAbiCallRet = rawAbiCallRet + 1; };
+        if rawAbiSigCount[rawKey] == node.arguments.length {
+          rawAbiCallArity = rawAbiCallArity + 1;
+          if rawAbiSigAll[rawKey] == true && rawAbiSigRet[rawKey] == true {
+            let rawAllNum = true; let rawA = 0;
+            while rawA < node.arguments.length {
+              if node.arguments[rawA].staticType != "Number" { rawAllNum = false; };
+              rawA = rawA + 1;
+            };
+            if rawAllNum { rawAbiCallRaw = rawAbiCallRaw + 1; };
+          };
+        };
+      };
+    };
     // 调用结果的类型:callee 是「返回类型已知、绑定稳定」的函数绑定,或是 std 的成员函数。
     if !isError(node.callee.type) && node.callee.type == "Identifier" {
       let rt = typeFnLookup(node.callee.name);
@@ -648,6 +714,10 @@ let inferStmts = (stmts) -> {
       // 返回类型已知、且绑定稳定(从未被赋值)的函数:登记它,调用点才能拿到类型。
       if s.value != null && !isError(s.value.returnType) && s.value.returnType != "" && isError(typeAssignedNames[typeProgram][s.name]) {
         typeFnResults[typeDepth - 1][s.name] = s.value.returnType;
+        // ②a:连同签名一起登记,调用点才能判断能否发裸调用。
+        rawAbiSigCount[rawAbiKey(s.name)] = s.value.parameters.length;
+        rawAbiSigAll[rawAbiKey(s.name)] = s.value.rawAbiAll;
+        rawAbiSigRet[rawAbiKey(s.name)] = s.value.rawAbiRet;
       };
     } else if t == "Assign" {
       if !isError(s.target.type) && s.target.type == "Identifier" {

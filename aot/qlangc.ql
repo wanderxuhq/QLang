@@ -2006,6 +2006,9 @@ let main = (args) -> {
   line("; typeRep unknown params[lib]: " + uP1);
   // 运行期那一遍分析报出的静态错误条数(已从用户诊断中移除,这里只报数)。
   line("; typeRep runtime: analysisErrors=" + std.String.toString(runtimeErrCount));
+  // ②a:裸 ABI 的覆盖面(纯量测,不影响生成)。
+  let ra = rawAbiReport();
+  line("; rawABI: funcs total=" + std.String.toString(ra[0]) + " allparams=" + std.String.toString(ra[1]) + " allraw=" + std.String.toString(ra[2]) + " anyparam=" + std.String.toString(ra[8]) + " rawparams=" + std.String.toString(ra[9]) + " retnum=" + std.String.toString(ra[7]) + " | calls total=" + std.String.toString(ra[3]) + " known=" + std.String.toString(ra[4]) + " arity=" + std.String.toString(ra[5]) + " rawable=" + std.String.toString(ra[6]) + " retfuel=" + std.String.toString(ra[10]));
   coldHelperAt = out.length;
   if extensionMode { mainAt = out.length; line("define %ql_value @qlang_extension_init_v1(ptr %host_env) {"); }
   else { mainAt = out.length; line("define i32 @main(i32 %argc, ptr %argv) {"); };
