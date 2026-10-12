@@ -447,9 +447,10 @@ let emitShortCircuit = (node) -> {
 };
 
 // 数值路径(内联):仅当调用方已确认左右 tag 均 == 1(NUMBER)。除零检查内联。
+// 操作数用 {reg, raw} 传入 —— 已是裸 double 的直接用,别先装箱再解箱。
 // 位运算:差异项 3 —— fptosi → and/or/xor → sitofp(与算术同构)。
-let emitNumOp = (op, L, R) -> {
-  let f1 = emitFloat(L); let f2 = emitFloat(R);
+let emitNumOp = (op, lv, rv) -> {
+  let f1 = emitRawDouble(lv); let f2 = emitRawDouble(rv);
   if op == "+" || op == "-" || op == "*" {
     let rr = temp();
     let fop = if op == "+" { "fadd" } else if op == "-" { "fsub" } else { "fmul" };
@@ -465,7 +466,7 @@ let emitNumOp = (op, L, R) -> {
     curLbl = lOk;
     let rr = temp();
     if op == "%" {
-      let value = emitCallRegs("__num_rem", [L, R]);
+      let value = emitCallRegs("__num_rem", [emitBoxedV(lv), emitBoxedV(rv)]);
       let bits = emitBits(value);
       line("  " + rr + " = bitcast i64 " + bits + " to double");
     } else {
@@ -554,11 +555,10 @@ let emitBinaryOp = (node) -> {
     let op = node.operator;
     // 类型信息来自生成代码之前的那一遍推导(节点上的 staticType)。
     let bothNum = isStaticNumber(node.left) && isStaticNumber(node.right);
-    let isDivMod = op == "/" || op == "%";
-    if bothNum && !isDivMod {
-      let L = emitExpr(node.left);
-      let R = emitExpr(node.right);
-      emitNumOp(op, L, R);
+    if bothNum {
+      // 两侧静态已知是 Number ⇒ 派发的标签测试是死代码。除/模也走这里:emitNumOp 自带
+      // 除零检查(那是运行期值的错误,与类型无关)。
+      emitNumOp(op, emitValue(node.left), emitValue(node.right));
     } else {
       let L = emitExpr(node.left);
       let R = emitExpr(node.right);
@@ -572,7 +572,7 @@ let emitBinaryOp = (node) -> {
       line("  br i1 " + c3 + ", label %" + lNum + ", label %" + lDisp);
       line(lNum + ":");
       curLbl = lNum;
-      let numRes = emitNumOp(op, L, R);
+      let numRes = emitNumOp(op, { reg: L, raw: "" }, { reg: R, raw: "" });
       let numLbl = curLbl;
       line("  br label %" + lMerge);
       line(lDisp + ":");
@@ -613,9 +613,18 @@ let emitPropagateError = (O) -> {
 
 // Unary operations produce inline scalar results; ? propagates Errors.
 let emitUnaryOp = (node) -> {
-  let value = emitExpr(node.operand);
-  if node.operator == "?" { return emitPropagateError(value); };
+  let ov = emitValue(node.operand);
+  if node.operator == "?" {
+    let value = if ov.raw == "Number" { emitFloatValue(ov.reg); } else if ov.raw == "Boolean" { emitBoolResult(ov.reg); } else { ov.reg; };
+    return emitPropagateError(value);
+  };
   if node.operator == "-" || node.operator == "+" {
+    // 操作数已是裸 double ⇒ 已经是 Number,标签测试与装箱都不需要。
+    if ov.raw == "Number" {
+      if node.operator == "-" { let neg = temp(); line("  " + neg + " = fneg double " + ov.reg); return emitFloatValue(neg); };
+      return emitFloatValue(ov.reg);
+    };
+    let value = ov.reg;
     let tag = temp(); let numeric = temp();
     line("  " + tag + " = call i64 @ql_tag(%ql_value " + value + ")");
     line("  " + numeric + " = icmp eq i64 " + tag + ", 1");
@@ -639,12 +648,13 @@ let emitUnaryOp = (node) -> {
     return merged;
   };
   if node.operator == "!" {
+    let bv = emitBoxedV(ov);
     let truth = temp(); let inverse = temp();
-    line("  " + truth + " = call i1 @ql_truthy(%ql_value " + value + ")");
+    line("  " + truth + " = call i1 @ql_truthy(%ql_value " + bv + ")");
     line("  " + inverse + " = xor i1 " + truth + ", true");
     return emitBoolResult(inverse);
   };
-  value;
+  emitBoxedV(ov);
 };
 
 // ---- 编译期作用域模型(Task 5)----
@@ -1705,6 +1715,7 @@ let emitNaturalRep = (node) -> if isError(node.staticRep) { ""; } else { node.st
 let emitRepCmpOp = (op) -> op == "==" || op == "!=" || op == "<" || op == "<=" || op == ">" || op == ">=";
 // 裸 double 操作数:裸的直接用,装箱的解箱;字面量直接给 LLVM double 常量(零指令)。
 let emitRawDouble = (v) -> if v.raw == "Number" { v.reg; } else { emitFloat(v.reg); };
+let emitBoxedV = (v) -> if v.raw == "Number" { emitFloatValue(v.reg); } else if v.raw == "Boolean" { emitBoolResult(v.reg); } else { v.reg; };
 let emitRawArith = (node) -> {
   let kind = node.type;
   if kind == "Number" { return f64lit(node.value); };
@@ -1775,12 +1786,7 @@ let emitValue = (node) -> {
   { reg: value, raw: "" };
 };
 // 薄包装:取装箱后的寄存器(裸值在使用点这里装箱,且只在这里)。
-let emitExpr = (node) -> {
-  let v = emitValue(node);
-  if v.raw == "Number" { return emitFloatValue(v.reg); };
-  if v.raw == "Boolean" { return emitBoolResult(v.reg); };
-  v.reg;
-};
+let emitExpr = (node) -> emitBoxedV(emitValue(node));
 let emitExprInner = (node) -> {
   let t = node.type;
   if t == "Number" {
