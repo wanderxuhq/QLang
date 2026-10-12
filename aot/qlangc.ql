@@ -730,6 +730,13 @@ let assignedRuntime = {};
 // helper's own __err_at call indirect (it is emitted ahead of the runtime blocks).
 let mainAt = 0;
 let inColdHelper = false;
+// ②a 补充量测:发射序折扣 —— 用户调用点里「被调者符号已经先发出」的有多少(纯计数)。
+let ordFnEmitted = {};
+let ordFnRetNum = {};
+let ordCallsTotal = 0;
+let ordCallsEmitted = 0;
+let ordCallsRetRaw = 0;
+let ordCallsNotYet = 0;
 
 // Frames reserve slots ahead of time, but declarations become visible in
 // source order. An all-zero internal value is binding state, never QLang null.
@@ -1136,6 +1143,11 @@ let emitFunction = (node, name) -> {
   fnBlocks[fnBlocks.length] = blk;
   // Its body is defined from here on: later calls to it may be direct.
   if name != "" && !isError(runtimeFunctions[name]) { runtimeFnIr[name] = fname; };
+  // ②a 补充量测:登记用户函数「已发出」与「声明返回 Number」,供发射序折扣统计。
+  if name != "" && isError(runtimeFunctions[name]) {
+    ordFnEmitted[name] = true;
+    ordFnRetNum[name] = !isError(node.declaredReturnType) && node.declaredReturnType == "Number";
+  };
   // 恢复调用方上下文;闭包盒指令写回调用方当前块/当前 sink。
   moduleExportsReg = savedExports;
   curSink = savedSink;
@@ -1538,6 +1550,14 @@ let emitCall = (node) -> {
   };
   let FN = emitExpr(node.callee); let values = []; let i = 0;
   while i < node.arguments.length { values.add(emitExpr(node.arguments[i])); i = i + 1; };
+  // ②a 补充量测:这个用户调用点能不能在发射序上变成直接调用(⇒ 才能吃裸签名)。
+  if calleeIsId && isError(runtimeFunctions[cname]) {
+    ordCallsTotal = ordCallsTotal + 1;
+    if !isError(ordFnEmitted[cname]) {
+      ordCallsEmitted = ordCallsEmitted + 1;
+      if ordFnRetNum[cname] == true { ordCallsRetRaw = ordCallsRetRaw + 1; };
+    } else { ordCallsNotYet = ordCallsNotYet + 1; };
+  };
   let trusted = false;
   if inRuntime && calleeIsId && !isError(runtimeFunctions[cname]) {
     let hit = lookupSlot(cname); trusted = hit != null && hit.scope == globalScope;
@@ -2009,6 +2029,7 @@ let main = (args) -> {
   // ②a:裸 ABI 的覆盖面(纯量测,不影响生成)。
   let ra = rawAbiReport();
   line("; rawABI: funcs total=" + std.String.toString(ra[0]) + " allparams=" + std.String.toString(ra[1]) + " allraw=" + std.String.toString(ra[2]) + " anyparam=" + std.String.toString(ra[8]) + " rawparams=" + std.String.toString(ra[9]) + " retnum=" + std.String.toString(ra[7]) + " | calls total=" + std.String.toString(ra[3]) + " known=" + std.String.toString(ra[4]) + " arity=" + std.String.toString(ra[5]) + " rawable=" + std.String.toString(ra[6]) + " retfuel=" + std.String.toString(ra[10]));
+  // ②a 补充:发射序折扣在主线末尾补发(见下文),因为函数体是在 main 发射过程中才发出的。
   coldHelperAt = out.length;
   if extensionMode { mainAt = out.length; line("define %ql_value @qlang_extension_init_v1(ptr %host_env) {"); }
   else { mainAt = out.length; line("define i32 @main(i32 %argc, ptr %argv) {"); };
@@ -2113,6 +2134,8 @@ let main = (args) -> {
   };
   // 命中数:分析期证明不可能出错、因而整块省掉定位测试的节点数(主函数体发完之后才知道)。
   out[out.length] = "; located-error elided: " + std.String.toString(locErrorElided);
+  // ②a 补充:发射序折扣(同样要等主函数体发完 —— 函数体是在 main 发射过程中才发现并发出的)。
+  out[out.length] = "; rawABI order: usercalls=" + std.String.toString(ordCallsTotal) + " emitted=" + std.String.toString(ordCallsEmitted) + " notyet=" + std.String.toString(ordCallsNotYet) + " retraw=" + std.String.toString(ordCallsRetRaw);
   // R10-c: out[0..mainAt) = prelude plus the cold helper, then every function body,
   // then main. Function bodies come before their direct callers because this
   // toolchain has no forward declarations; the closure boxes keep the order
