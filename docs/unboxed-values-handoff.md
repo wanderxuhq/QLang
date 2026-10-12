@@ -402,6 +402,35 @@ delta per batch, and keep both gates green.
 
 **Prerequisite: ⑨ must land first** — today every annotation added here is inert.
 
+### ⑥a First batch result (measured): returns are free, params are not — and a blocker
+
+Measured per batch (regenerate the bundle, rebuild the compiler, count `/tmp/t20.ql`):
+
+| variant | t20 IR | |
+|---|---|---|
+| baseline | 194 813 | |
+| 6 return annotations + 9 param annotations (`string.ql`) | 195 923 | **+1 110** ✗ |
+| the 6 return annotations alone | 194 813 | ±0 ✓ |
+| `finite(n: Number)` alone | 194 812 | −1 ✓ |
+
+- **Return annotations are free** (the return-edge check is proven dead once the derived type
+  matches) ⇒ annotate returns freely.
+- **A parameter annotation costs an inline check at every call site** (~18 lines per
+  parameter×callsite) **unless the argument's static type is already proven** — `finite(n: Number)`
+  is free because both call sites pass known Numbers; `casing(s: String)`/`matches(s: String…)`/
+  `has(c: String)` are not, because their arguments come from `s[i]` (index results stay
+  conservative). So: annotate a parameter only where the call sites' argument types are proven
+  (the `numargs=315` criterion); treat the rest as net-negative and skip, per the rule.
+
+**Blocker found (and why the batch was reverted):** the 6 return annotations in `string.ql` broke
+the **interpreter**, not the compiler. `t19_literals` went from `true`×16 to `false`×16 under the
+interpreter suite, while the same fixture compiled by `qlangc` prints `true`×16 correctly. So the
+bug is in `bootstrapped/interpreter.ql`'s return-type check (evaluated at definition, checked on
+return — `bootstrapped/interpreter.ql:641-649`), triggered by these particular declared types
+(`Boolean`/`Object`/`String` returns on library-internal helpers). **Diagnose that before
+resuming the campaign.** The batch is reverted to keep both gates green; nothing is lost, the
+findings above are the useful output.
+
 Original plan's rules, kept:
 
 `stdlib/string.ql` (29/29 functions unannotated), `array.ql` (24/24), `json.ql` (15/15),
