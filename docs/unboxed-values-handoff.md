@@ -452,6 +452,16 @@ Consequence for the campaign:
   **See `docs/object-array-type-names.md` (+ `.zh.md`) for the full note**; implement that before
   adding object/array annotations.
 
+  **Update — the note's rules 2/4/5/6 have landed (`74019f4`, IR ±0, both gates green):** family-aware
+  consistency (a mismatch *inside* the family is no longer reported), a compile-error diagnostic for
+  a bare-constructor annotation (`: Array`/`: Object` — "use `AnyArray` … or a constructed form"),
+  `: AnyArray` on the runtime's four array-returning functions, and a family label for
+  `.length -> Number`. **Deliberately NOT done:** the `proven` family extension that would make
+  object/array return annotations free — the author is not yet sure that equating the base names
+  (`Object`/`Array`) with the widest concrete types (`AnyObject`/`AnyArray`) is safe as the type system
+  grows ("以后加功能会不会出事"). Consequence: object/array return annotations cost **+164** today ⇒
+  net-negative ⇒ **deferred**; the std campaign continues with **scalars only** (free, verified).
+
 Original plan's rules, kept:
 
 `stdlib/string.ql` (29/29 functions unannotated), `array.ql` (24/24), `json.ql` (15/15),

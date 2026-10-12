@@ -84,3 +84,25 @@ Landed: family-aware consistency (2), the constructor diagnostic (4), the four `
   family — `declared == "Any" + X && derived ∈ family(X)` ⇒ the check is dead, which is sound because
   `AnyX` accepts *every* member of the family (that is what `__pred_object`/`__pred_array` mean). This
   is the family analogue of the scalar rule and removes the +164.
+
+## 6. Decision: do **not** implement the `proven` family extension yet
+
+*(Author, this session: "Object和Array绑到Any我不确定以后加功能会不会出事".)* The concern is
+forward-looking: equating the *base* names (`Object`/`Array`) with the *widest concrete* types
+(`AnyObject`/`AnyArray`) in order to elide checks bakes an equivalence into the compiler that a future
+feature may invalidate. So:
+
+- the `proven` predicate stays **name equality** (`declared == derived`) — no family case;
+- **object/array return annotations stay deferred** (they cost +164 today ⇒ net-negative ⇒ skipped per
+  the rule); the std campaign proceeds with scalars, which are free and verified;
+- what *did* land (rules 2/4/5/6) is deliberately **weaker** than that equivalence, and does not assert
+  the two names are the same type:
+  - rule 2 only **abstains** from reporting a mismatch *inside* the family (the runtime check decides);
+  - rule 6 uses a **family label** so member rules (`.length`) still fire on the concrete name;
+  - rule 4 turns the invalid spelling (`: Array` as an annotation) into a compile error;
+  - rule 5 gives the runtime's array-returning functions a *valid* annotation (`AnyArray`); note
+    `Array(String)` would be **more precise** and would cost, because its check would run.
+
+If the type system later settles that the base/concrete pairing is stable, this decision can be
+revisited — the note keeps both the mechanism and its measured price (+164) so the trade-off is not
+re-derived from scratch.
