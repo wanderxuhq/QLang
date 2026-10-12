@@ -390,7 +390,19 @@ factory-built modules. `typeRuntimePredicates` also survives: `Number.check` nee
 singletons themselves resolve through the index (they are object literals in the runtime, so the
 general rule can eventually cover them).
 
-### ⑥ Chain-annotate the stdlib
+### ⑥ Chain-annotate the stdlib — **mandatory, per the user's directive**
+
+**User decision (this session):** `std` must carry author-declared type information — parameter *and*
+return annotations — **even where it shows no IR gain**. It is the language-declared interface, not an
+optimization switch. The single exception: an annotation that is **net-negative** is reported and
+skipped, not kept.
+
+Scale: `stdlib/*.ql` = 62 functions, `aot/runtime.ql` = 132 functions. Do it in batches, report the IR
+delta per batch, and keep both gates green.
+
+**Prerequisite: ⑨ must land first** — today every annotation added here is inert.
+
+Original plan's rules, kept:
 
 `stdlib/string.ql` (29/29 functions unannotated), `array.ql` (24/24), `json.ql` (15/15),
 `object.ql` (11/11), `math.ql` (17 of 29), `decimal.ql` (8/8), `number.ql` (4/4),
@@ -446,6 +458,50 @@ the generic path.
 
 Lesson for the next lever: when a "known type" lever under-delivers, check whether the analysis ever
 *reaches* the node before adding another rule.
+
+### ⑨ Bind-level keying for the unbox decisions — *in progress (this session)*
+
+**The blocker this fixes: today `std`'s existing annotations have zero effect.** Both unbox decisions
+are keyed by *name within a program*, not by binding:
+
+- parameters — `aot/types.ql:408`: `isError(typeAssignedNames[typeProgram][param.name])`
+- `let` bindings — `aot/types.ql:708`: `isError(typeUnknownWrites[typeProgram][s.name])`
+
+So a single assignment (or one unknown-typed write) to *any* same-named binding anywhere in the same
+program disables unboxing for all of them. Measured: `stdlib/math.ql` annotates
+`(a: Number) (b: Number) (n: Number)`, while stdlib assigns `a` 9×, `n` 2×, `b` 1× ⇒ the probe reports
+`anyparam=0 rawparams=0` over 1300 analysed functions.
+
+The bind-level machinery already exists (`s.bindId`, `typeBindTable[program][bindId] =
+{ base, prone, busy, done, writes: [...] }`, two passes via `typeCollectWrites`) — the fix is to decide
+from each binding's own collected writes.
+
+Direct IR effect is **small** (the only visible change is fewer lines on unboxed `let` stores, because
+C1 deliberately keeps *reads* boxed). The point is the information itself — per the user's rule, and it
+is the prerequisite for ②c.
+
+### ⑩ family (a): count first, then elide
+
+The biggest levers have been "information ⇒ dead code". Three candidates to **count first** (IR-neutral
+counters, exactly like the ②a probe), then implement only the ones with large hit counts:
+
+1. **Div/mod by a statically non-zero literal** ⇒ the `fcmp oeq %f2, 0.0` test, its branch and the
+   `__op_div0` cold path are all dead. The corpus is full of `% 2` (hashing, UTF-8, string ops).
+2. **Dispatch when one side's type is known** (`"a" + b`) ⇒ the two tag tests, the branch and the phi
+   are dead; go straight to `__op_add`.
+3. **`ql_truthy` on a statically-known Boolean** condition (boxed case; the raw `i1` case is already
+   done in C1).
+
+### ⑪ Status of the raw-ABI work (②b / ②c) — measured, not started
+
+- **②b raw returns**: **340** call sites, all pointing at the 6 functions that *declare* `: Number`.
+  **Measurement gap to close:** only *declared* returns were counted; re-count with *derived* `Number`
+  returns too — the generator is allowed to consume derived conclusions, so the real fuel is likely
+  larger than 340.
+- **②c raw parameters**: **0** today — blocked on ⑨ + ⑥ (no parameter annotation takes effect).
+- **Emit-order discount** (measured): 92 % of user/library-internal calls have their callee already
+  emitted (285/309 on t20, 287/312 on a mutual-recursion sample). Whole module: **23 025 direct vs 307
+  indirect calls (98.7 %)** — the "no forward `declare`" constraint is essentially already absorbed.
 
 ## 6. The design obligation for step ④ (call-site checks)
 
