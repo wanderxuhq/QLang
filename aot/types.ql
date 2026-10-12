@@ -96,11 +96,13 @@ let rawAbiCallRaw = 0;
 let rawAbiCallRet = 0;
 let rawAbiAnnotParams = 0;
 let rawAbiNoWriteParams = 0;
+let rawAbiCallRetAny = 0;
+let rawAbiCallNumArgs = 0;
 let rawAbiSigCount = {};
 let rawAbiSigAll = {};
 let rawAbiSigRet = {};
 let rawAbiKey = (name) -> std.String.toString(typeProgram) + ":" + name;
-let rawAbiReport = () -> [rawAbiFuncTotal, rawAbiFuncParams, rawAbiFuncAll, rawAbiCallTotal, rawAbiCallKnown, rawAbiCallArity, rawAbiCallRaw, rawAbiFuncRet, rawAbiFuncAny, rawAbiParamCount, rawAbiCallRet, rawAbiAnnotParams, rawAbiNoWriteParams];
+let rawAbiReport = () -> [rawAbiFuncTotal, rawAbiFuncParams, rawAbiFuncAll, rawAbiCallTotal, rawAbiCallKnown, rawAbiCallArity, rawAbiCallRaw, rawAbiFuncRet, rawAbiFuncAny, rawAbiParamCount, rawAbiCallRet, rawAbiAnnotParams, rawAbiNoWriteParams, rawAbiCallRetAny, rawAbiCallNumArgs];
 export rawAbiReport;
 
 // ---- 表示(裸值 / 装箱)的编译期结论 --------------------------------------------
@@ -632,8 +634,18 @@ let inferExpr = (node) -> {
     // 只数第二遍(权威口径),免得两遍都记成两份。
     if !typeCollectWrites && !isError(node.callee.type) && node.callee.type == "Identifier" && typeFnLookup(node.callee.name) != "" {
       let rawKey = rawAbiKey(node.callee.name);
+      // ②b 的真实口径:被调者登记的类型是 Number(声明优先,否则用推导)就算燃料。
+      if typeFnLookup(node.callee.name) == "Number" { rawAbiCallRetAny = rawAbiCallRetAny + 1; };
       if !isError(rawAbiSigCount[rawKey]) {
         rawAbiCallKnown = rawAbiCallKnown + 1;
+        // ②c 的上限:元数相符时,静态已知是 Number 的实参位置数(若这些形参标注 Number 即可裸传)。
+        if rawAbiSigCount[rawKey] == node.arguments.length {
+          let na = 0;
+          while na < node.arguments.length {
+            if node.arguments[na].staticType == "Number" { rawAbiCallNumArgs = rawAbiCallNumArgs + 1; };
+            na = na + 1;
+          };
+        };
         // ②b 的燃料:被调者声明返回 Number ⇒ 裸返回可以在不改实参缓冲的前提下先做。
         if rawAbiSigRet[rawKey] == true { rawAbiCallRet = rawAbiCallRet + 1; };
         if rawAbiSigCount[rawKey] == node.arguments.length {
