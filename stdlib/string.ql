@@ -5,8 +5,8 @@ let requireString = (s, name) -> {
   if !String.check(s) { return std.Error.raise("TypeMismatch", name + " expects String", null); };
   s;
 };
-let finite = (n) -> n == n && n - n == 0;
-let propertyTable = (chunks) -> {
+let finite = (n): Boolean -> n == n && n - n == 0;
+let propertyTable = (chunks): Object -> {
   let table = {}; let i = 0;
   while i < chunks.length {
     let chunk = chunks[i]; let j = 0; let size = chunk.length;
@@ -15,7 +15,7 @@ let propertyTable = (chunks) -> {
   };
   table;
 };
-let mappingTable = (chunks) -> {
+let mappingTable = (chunks): Object -> {
   let table = {}; let i = 0;
   while i < chunks.length {
     let chunk = chunks[i]; let j = 0; let size = chunk.length;
@@ -34,8 +34,8 @@ let lowerMap = null;
 let cased = null;
 let ignorable = null;
 let whitespace = null;
-let has = (table, c) -> !isError(table[c]);
-let casing = (s, up) -> {
+let has = (table, c): Boolean -> !isError(table[c]);
+let casing = (s, up): String -> {
   s = requireString(s, if up { "String.toUpperCase" } else { "String.toLowerCase" })?;
   if up && upperMap == null { upperMap = mappingTable(unicodeData.upper); };
   if !up && lowerMap == null { lowerMap = mappingTable(unicodeData.lower); };
@@ -56,7 +56,7 @@ let casing = (s, up) -> {
   };
   out;
 };
-let matches = (s, size, at, pattern, width) -> {
+let matches = (s, size, at, pattern, width): Boolean -> {
   if at + width > size { return false; };
   let j = 0;
   while j < width {
