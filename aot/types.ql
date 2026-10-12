@@ -94,11 +94,13 @@ let rawAbiCallKnown = 0;
 let rawAbiCallArity = 0;
 let rawAbiCallRaw = 0;
 let rawAbiCallRet = 0;
+let rawAbiAnnotParams = 0;
+let rawAbiNoWriteParams = 0;
 let rawAbiSigCount = {};
 let rawAbiSigAll = {};
 let rawAbiSigRet = {};
 let rawAbiKey = (name) -> std.String.toString(typeProgram) + ":" + name;
-let rawAbiReport = () -> [rawAbiFuncTotal, rawAbiFuncParams, rawAbiFuncAll, rawAbiCallTotal, rawAbiCallKnown, rawAbiCallArity, rawAbiCallRaw, rawAbiFuncRet, rawAbiFuncAny, rawAbiParamCount, rawAbiCallRet];
+let rawAbiReport = () -> [rawAbiFuncTotal, rawAbiFuncParams, rawAbiFuncAll, rawAbiCallTotal, rawAbiCallKnown, rawAbiCallArity, rawAbiCallRaw, rawAbiFuncRet, rawAbiFuncAny, rawAbiParamCount, rawAbiCallRet, rawAbiAnnotParams, rawAbiNoWriteParams];
 export rawAbiReport;
 
 // ---- 表示(裸值 / 装箱)的编译期结论 --------------------------------------------
@@ -422,16 +424,35 @@ let inferExpr = (node) -> {
     while p < node.parameters.length {
       let param = node.parameters[p];
       let ptype = annotationBuiltinName(param.annotation);
+      // 参数也登记「绑定」:解箱判断必须问「这一个绑定自己有没有写入」,不能问「同一程序里
+      // 是否出现过同名赋值」—— 后者会让一个毫不相干的同名绑定把已有注解全部作废(实测:
+      // stdlib/math.ql 的 (a/b/n: Number) 因为 stdlib 里别处写过 a/n/b 而收益变成 0)。
+      let pbind = -1;
+      if typeCollectWrites {
+        pbind = typeBindCount[typeProgram];
+        typeBindCount[typeProgram] = pbind + 1;
+        typeBindTable[typeProgram][pbind] = { base: isError(typeScalar[ptype]), prone: false, busy: false, done: false, writes: [], unk: false };
+      } else {
+        pbind = param.bindId;
+        if isError(pbind) { pbind = -1; };
+      };
+      param.bindId = pbind;
+      if pbind >= 0 { typeBindScopes[typeDepth - 1][param.name] = pbind; };
       if ptype != "" {
         typeScopes[typeDepth - 1][param.name] = ptype;
         // 参数与注解绑定同一前提:调用点的注解检查保证它只持有该类型,所以同样可解箱。
         // 目前只做 Number(裸 double);String 的裸 ptr 还牵扯生命周期,按既定顺序排在后面。
-        if ptype == "Number" && isError(typeAssignedNames[typeProgram][param.name]) {
-          param.unboxType = ptype;
-          typeUnboxList[typeUnboxList.length] = param.name;
-          typeRepScopes[typeDepth - 1][param.name] = "Number";
-        } else {
-          param.unboxType = "";
+        // 判定只在第二遍做 —— 第一遍的写入集还没收齐。
+        param.unboxType = "";
+        if !typeCollectWrites && ptype == "Number" {
+          rawAbiAnnotParams = rawAbiAnnotParams + 1;
+          let pst = typeBindTable[typeProgram][pbind];
+          if !isError(pst) && pst.writes.length == 0 {
+            rawAbiNoWriteParams = rawAbiNoWriteParams + 1;
+            param.unboxType = ptype;
+            typeUnboxList[typeUnboxList.length] = param.name;
+            typeRepScopes[typeDepth - 1][param.name] = "Number";
+          };
         };
       } else {
         // 没注解(或注解不是内建类型)的参数:函数体里只能当未知,补类型时优先看这里。
@@ -487,11 +508,14 @@ let inferExpr = (node) -> {
       rpj = rpj + 1;
     };
     rawAbiParamCount = rawAbiParamCount + rawPc;
-    rawAbiFuncTotal = rawAbiFuncTotal + 1;
-    if rawAllParams { rawAbiFuncParams = rawAbiFuncParams + 1; };
-    if rawAllParams && node.rawAbiRet { rawAbiFuncAll = rawAbiFuncAll + 1; };
-    if rawAnyParam { rawAbiFuncAny = rawAbiFuncAny + 1; };
-    if node.rawAbiRet { rawAbiFuncRet = rawAbiFuncRet + 1; };
+    // 只数第二遍(权威口径):第一遍参数还不会解箱,两遍都数会重复。
+    if !typeCollectWrites {
+      rawAbiFuncTotal = rawAbiFuncTotal + 1;
+      if rawAllParams { rawAbiFuncParams = rawAbiFuncParams + 1; };
+      if rawAllParams && node.rawAbiRet { rawAbiFuncAll = rawAbiFuncAll + 1; };
+      if rawAnyParam { rawAbiFuncAny = rawAbiFuncAny + 1; };
+      if node.rawAbiRet { rawAbiFuncRet = rawAbiFuncRet + 1; };
+    };
     typePop();
     tagType(node, "Function");
     node.cannotBeError = true;
@@ -605,7 +629,8 @@ let inferExpr = (node) -> {
     // ②a:这个调用点能不能发裸调用 —— 被调者是静态已知函数绑定、实参数与形参数相等
     // (无部分应用)、签名全裸、且每个实参静态都是 Number(⇒ 注解检查与 Error 实参策略是死代码)。
     rawAbiCallTotal = rawAbiCallTotal + 1;
-    if !isError(node.callee.type) && node.callee.type == "Identifier" && typeFnLookup(node.callee.name) != "" {
+    // 只数第二遍(权威口径),免得两遍都记成两份。
+    if !typeCollectWrites && !isError(node.callee.type) && node.callee.type == "Identifier" && typeFnLookup(node.callee.name) != "" {
       let rawKey = rawAbiKey(node.callee.name);
       if !isError(rawAbiSigCount[rawKey]) {
         rawAbiCallKnown = rawAbiCallKnown + 1;
@@ -682,7 +707,7 @@ let inferStmts = (stmts) -> {
       if typeCollectWrites {
         bindId = typeBindCount[typeProgram];
         typeBindCount[typeProgram] = bindId + 1;
-        let st = { base: isError(typeScalar[bindingType]), prone: false, busy: false, done: false, writes: [] };
+        let st = { base: isError(typeScalar[bindingType]), prone: false, busy: false, done: false, writes: [], unk: (value == "" || isError(value)) };
         if s.value != null { st.writes[0] = s.value; };
         typeBindTable[typeProgram][bindId] = st;
       } else {
@@ -705,7 +730,15 @@ let inferStmts = (stmts) -> {
       // 类型推不出来的绑定(常来自「返回类型未知的调用」):补类型清单的头一批。
       if effective == "" { typeUnknownPush(typeUnknownBinds[typeProgram], s.name); };
       s.unboxType = "";
-      if typeDepth > 1 && effective == "Number" && isError(typeUnknownWrites[typeProgram][s.name]) {
+      // 按绑定判断「每次写入的类型都已知」(原来是按「程序+名字」,同名绑定会互相毒化)。
+      let lub = false;
+      if s.bindId >= 0 {
+        let lst = typeBindTable[typeProgram][s.bindId];
+        lub = !isError(lst) && lst.unk != true;
+      } else {
+        lub = isError(typeUnknownWrites[typeProgram][s.name]);
+      };
+      if typeDepth > 1 && effective == "Number" && lub {
         s.unboxType = "Number";
         typeUnboxList[typeUnboxList.length] = s.name;
         // 此绑定之后的引用都能在表示栈上问出它是裸 double。
@@ -714,10 +747,12 @@ let inferStmts = (stmts) -> {
       // 返回类型已知、且绑定稳定(从未被赋值)的函数:登记它,调用点才能拿到类型。
       if s.value != null && !isError(s.value.returnType) && s.value.returnType != "" && isError(typeAssignedNames[typeProgram][s.name]) {
         typeFnResults[typeDepth - 1][s.name] = s.value.returnType;
-        // ②a:连同签名一起登记,调用点才能判断能否发裸调用。
-        rawAbiSigCount[rawAbiKey(s.name)] = s.value.parameters.length;
-        rawAbiSigAll[rawAbiKey(s.name)] = s.value.rawAbiAll;
-        rawAbiSigRet[rawAbiKey(s.name)] = s.value.rawAbiRet;
+        // ②a:连同签名一起登记,调用点才能判断能否发裸调用(只记第二遍的权威判定)。
+        if !typeCollectWrites {
+          rawAbiSigCount[rawAbiKey(s.name)] = s.value.parameters.length;
+          rawAbiSigAll[rawAbiKey(s.name)] = s.value.rawAbiAll;
+          rawAbiSigRet[rawAbiKey(s.name)] = s.value.rawAbiRet;
+        };
       };
     } else if t == "Assign" {
       if !isError(s.target.type) && s.target.type == "Identifier" {
@@ -727,6 +762,11 @@ let inferStmts = (stmts) -> {
         if typeCollectWrites && targetBind >= 0 {
           let st = typeBindTable[typeProgram][targetBind];
           if !isError(st) { st.writes[st.writes.length] = s.value; };
+        };
+        // 这次写入的右值类型未知(或与声明不符)⇒ 这个**绑定**不能解箱(与名字无关)。
+        if typeCollectWrites && targetBind >= 0 {
+          let st2 = typeBindTable[typeProgram][targetBind];
+          if !isError(st2) && (value == "" || isError(value)) { st2.unk = true; };
         };
         let declared = typeLookup(s.target.name);
         // 只有「右值类型已知且与声明一致」才可能省掉运行期检查。类型未知,或已知
