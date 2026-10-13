@@ -730,6 +730,27 @@ clang: /tmp/ir_nz.ll:1498:39: error: use of undefined value '%t1006'
 未定义临时量 —— 怀疑点在 `emitNumOp` 的**调用者契约**(它期待一个值)与该 `return` 的交互,而不是盖章
 条件本身 ✓。回滚前的一切都留在 `/tmp/ir_nz_BROKEN.ll` 供比对 ✓。
 
+**第二次试做(去 `return` + 字段永远存在)的结果 —— 也是否决,但原因完全不同 ✗:**
+
+合法性与健全性都过了 ✓(`clang` 0 error ✓;动态除数用例仍有 106 处零比较且**仍报 `DivisionByZero`** ✓),
+可是数字是负的:IR **194 640 → 194 964(+324)** ✗,`-O2` 机器指令 **129 040 → 130 697(+1 657,+1.28 %)** ✗。
+
+查探针才看清:**动因不在发射器,而在分析** ✗:
+
+| 探针 | 改动前 | 改动后 |
+|---|---|---|
+| `unboxable bindings` | **528** | **519** ✗(少 9 个) |
+| `typeRep boxed binops num` | 70 | **102** ✗ |
+| `fcmp oeq …, 0.0` / `= fdiv` | 105 / 48 | **105 / 48**(完全相同 ✓) |
+
+⇒ 快速路径在 t20 里**一次都没触发** ✓(菱形计数未变 ✓),变大全部来自**解箱判定被扰动** ✓(9 个绑定从
+可解箱变成装箱 ⇒ 多出 32 处装箱 ✓)。
+
+**由此立第三条口径** ✓:**对 `types.ql` 的任何改动都必须先看探针**(`unboxable` / `typeRep boxed` /
+`located-error elided`)—— 分析是**全局耦合**的 ✓,往里塞一个「纯语法事实」也会移动解箱的 fixpoint ✗。
+下次的做法:要么把该事实**在发射端就地判定**(它是字面量的性质,不依赖推导 ✓),要么让它在**所有推导
+结束后的独立后置遍历**里盖章 ✓ —— 不要在 `inferExpr` 的主分支里顺手写字段 ✗。
+
 ### ⑪ Status of the raw-ABI work (②b / ②c) — measured, not started
 
 - **②b raw returns**: **340** call sites, all pointing at the 6 functions that *declare* `: Number`.
