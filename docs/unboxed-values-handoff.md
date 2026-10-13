@@ -147,6 +147,20 @@ entry cannot work are in the log, §5⑦/⑪.**
 **④ §5⑬ — keep the builder hygiene** (§7.1) — it is not optional, it is what makes any of the above
 debuggable.
 
+**⑤ §5⑮ — the Error design (settled direction, not implemented).** Error may only be **carried** (by
+`Result`/`Option`), never accepted by ordinary types ⇒ types are exact ⇒ the checks at every consumer are
+provably dead (this is the only way the measured ~31 % error machinery becomes *systematically*
+removable). Syntactic forms are made **total** instead of fallible (`/0` ⇒ IEEE, absence ⇒ `Null`,
+interpolation ⇒ default rendering, type/annotation problems ⇒ compile-time rejection) ⇒ **no syntax ever
+produces an Error value**, so neither "value poisoning" nor "invisible early exit" can arise. Errors then
+exist only at the calls in the (c) set — parsing/conversion plus host I/O, ~8 primitives — with an
+explicit exit (`?` to pass through, a test to settle). Criterion, the full failure inventory (9 syntactic
+forms / 7 runtime primitives / 26 library `raise`s / 6 host primitives), the three-tier comparison and
+②'s defects and premises are in the log §5⑮. **Its two premises:** full totality, and *declared
+boundaries* (function signatures, module exports, FFI) — which is the real reason `std` must carry
+author-declared type information. **Decisions still open:** `/0` as IEEE (drop `__op_div0`), absence via
+`Null`, one name for the carriers, and the one global choice of propagation sugar.
+
 ## 5. How to build, measure and verify
 
 See §0's commands. Two conventions worth calling out:
