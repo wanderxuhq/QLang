@@ -74,7 +74,7 @@ Two families of levers, and the measured fact that drove the ordering:
 ## 3. Roadmap — the phases and the IR ledger
 
 Metric: `wc -l` of `/tmp/t20.ql`'s emitted IR on the accepted seed. **Accepted baseline 215 919;
-current 194 812 (−21 107, −9.8 %).** Phase A (already on `main`) accounts for ≈ another −6 900, so the
+current 194 640 (−21 279, −9.9 %).** Phase A (already on `main`) accounts for ≈ another −6 900, so the
 whole "compile-time information ⇒ fewer instructions" line is ≈ **−28 k**.
 
 | step | commit | lines |
@@ -92,6 +92,7 @@ whole "compile-time information ⇒ fewer instructions" line is ≈ **−28 k**.
 | B9 bind-level keying for the unbox decisions | `6b3a4cf` | −1 258 |
 | family rules + a constructor diagnostic | `74019f4` | ±0 |
 | scalar std annotations | `69d36a8` | −1 |
+| guard post-fall-through narrowing (Error design, slice 1) | `2cbc2e5` | −172 (machine −1 465, −1.12 %) |
 
 ## 4. The ordered worklist — what to do next
 
@@ -159,14 +160,20 @@ forms / 7 runtime primitives / 26 library `raise`s / 6 host primitives), the thr
 ②'s defects and premises are in the log §5⑮. **Its two premises:** full totality, and *declared
 boundaries* (function signatures, module exports, FFI) — which is the real reason `std` must carry
 author-declared type information. **Decisions still open:** `/0` as IEEE (drop `__op_div0`), absence via
-`Null`, one name for the carriers, and the one global choice of propagation sugar.
+`Null`, one name for the carriers, and the one global choice of propagation sugar. **Slice 1 has landed**
+(`2cbc2e5`, −172 IR / −1 465 machine instructions): guard post-fall-through narrowing — `if !X.check(v) {
+…always exits… }` narrows `v` to `X` and clears its error flag on the fall-through, so the checks that
+were already dead are now emitted as nothing. The remaining slices (`/0` ⇒ IEEE, absence ⇒ `Null`) touch
+written contracts and existing assertions, so they need an explicit decision first.
 
 ## 5. How to build, measure and verify
 
 See §0's commands. Two conventions worth calling out:
 
-- **Never pipe the gates through `| tail`** — a `tail` pipeline buffers, so the log stays empty for the
-  whole run and you cannot distinguish progress from a hang. Run them plain and read the log file.
+- **Never pipe the gates through `| tail`** — this is now a *must*, not advice: it bit us on `2cbc2e5`,
+  where a `tail -5` pipeline buffered everything, the log stayed empty for the whole run, and a *stuck*
+  suite was indistinguishable from a *slow* one (only a kill + an unbuffered re-run revealed that it had
+  in fact been hung). Redirect to a file, or use `tee`; never `tail` a long-running gate.
 - **Validate every lever at `-O2` as well as at the IR line count.** Measured facts: `clang -O2` takes the
   same emitted IR from 337 828 to **130 206** AArch64 instructions (−61.5 %), and 76 % of what it removes
   is memory traffic — so an IR-line win that only removes slot/box movement is largely *absorbed* by

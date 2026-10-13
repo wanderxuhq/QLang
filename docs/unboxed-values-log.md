@@ -681,6 +681,26 @@ FFI)⇒ 这就是「`std` 必须携带作者声明的类型信息」那条规则
 **待决**:`/0` 改 IEEE 并去掉 `__op_div0` ✓;缺失统一用 `Null` ✓;命名统一(`Result(T)`/`Option(T)` 都
 只是普通类型,`Error` 是 `Null` 的有信息形式)✓;传播糖**全局一次性选择**(全用 `?` 或全显式)✓。
 
+### ⑯ 收窄(守卫后的落到点)—— 切片 1 落地(`2cbc2e5`)
+
+§5⑮ 设计的第一步实现。语料里的惯用法是「守卫 + 提前返回」(`if !Number.check(v) { return raise };`),
+所以收窄必须落在**落到点**上,而不是分支体内。
+
+- `types.ql` 五处:新增收窄事实栈 `typeNarrowScopes`(与 `typeScopes` 同深同栈 ✓)+ 查询 ✓;
+  `branchAlwaysExits`(末句 `return` ⟺ 必然退出 ✓);`narrowAfterGuard`(`!X.check(v)` 为假 ⇒ 落到点
+  `v` 是 `X` ✓;`isError(v)` 为假 ⇒ 落到点 `v` 不是 Error ✓;**「不是 X」无法用现有类型表达 ⇒ 忽略,
+  不假装** ✓);语句位置 `If` 在 `typePop()` **之后**把事实写进**外层**作用域(即落到点所在者 ✓);
+  `Identifier` 分支把被收窄的名字置 `cannotBeError` ✓(错误边随之成为死代码 ✓);`Assign` 作废收窄事实 ✓。
+- **量测**(t20):IR **194 812 → 194 640(−172,−0.09 %)** ✓;`-O2` 机器指令 **130 505 → 129 040
+  (−1 465,−1.12 %)** ✓;输出仍为 `20` ✓;两套门禁全绿 ✓(interpreter / selfhost ✓)。
+- **比例教训(值得记住)**:IR 只降 0.09 %,机器码降 1.12 % ⇒ 收窄删掉的是**非访存**代码(检查 +
+  分支 ✓),O2 不会把它们变回来 ✓ —— 对比 ⑭ 的 lifetime:IR −5.4 % 而机器码 **+3 %** ✗。
+- **踩坑记录**:门禁第一次跑看起来「卡住」且日志为空 —— 原因是我把输出管进了 `tail -5`(缓冲 ⇒ 整套
+  跑完前无输出 ✓),于是**无法区分「慢」与「卡」** ✗。规则升级:**门禁输出禁止管道缓冲**,直接重定向
+  或用 `tee`,后台任务不要带 `tail` ✓。
+- 下一步(仍待决):`/0` ⇒ IEEE 并去掉 `__op_div0` ✓;缺失 ⇒ `Null` ✓ —— 两者都要先动成文契约与
+  既有断言(`docs/numeric-semantics.md` + `t14`/`t25`/`t36`)✓。
+
 ### ⑪ Status of the raw-ABI work (②b / ②c) — measured, not started
 
 - **②b raw returns**: **340** call sites, all pointing at the 6 functions that *declare* `: Number`.
