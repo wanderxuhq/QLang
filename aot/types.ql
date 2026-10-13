@@ -80,7 +80,7 @@ let typeLookup = (name) -> {
   if isError(typeBuiltins[name]) { return ""; };
   name;
 };
-let typePush = () -> { typeScopes[typeDepth] = {}; typeFnResults[typeDepth] = {}; typeRepScopes[typeDepth] = {}; typeBindScopes[typeDepth] = {}; typeDepth = typeDepth + 1; null; };
+let typePush = () -> { typeScopes[typeDepth] = {}; typeFnResults[typeDepth] = {}; typeRepScopes[typeDepth] = {}; typeBindScopes[typeDepth] = {}; typeNarrowScopes[typeDepth] = {}; typeDepth = typeDepth + 1; null; };
 let typePop = () -> { typeDepth = typeDepth - 1; null; };
 // 词法查找:这个名字是不是「返回类型已知的函数绑定」。
 let typeFnLookup = (name) -> {
@@ -92,6 +92,58 @@ let typeFnLookup = (name) -> {
   "";
 };
 let tagType = (node, name) -> { node.staticType = name; name; };
+
+// ---- 收窄(「守卫之后的落到点」)----------------------------------------------------------
+// 事实栈与 typeScopes 同深同栈:名字 → 该作用域内是否已知「不是 Error」。由守卫
+// (if !X.check(v) { …必然退出… } / if isError(v) { …必然退出… })在落到点上建立,被赋值作废。
+// 它不产生新语义,只让发射端能把本已死掉的检查判为死代码。
+let typeNarrowScopes = {};
+let typeNarrowed = (name) -> {
+  let i = typeDepth - 1;
+  while i >= 0 {
+    if !isError(typeNarrowScopes[i][name]) && typeNarrowScopes[i][name] == true { return true; };
+    i = i - 1;
+  };
+  false;
+};
+// 语句序列是否「必然退出」(末句 return)。
+let branchAlwaysExits = (stmts) -> {
+  if isError(stmts) || stmts.length == 0 { return false; };
+  let last = stmts[stmts.length - 1];
+  !isError(last.type) && last.type == "Return";
+};
+// 守卫取反后的事实:if <cond> { …必然退出… } ⇒ 落到点知道 <cond> 为假。
+// !X.check(v) 为假 ⇒ v 是 X;isError(v) 为假 ⇒ v 不是 Error。其余(如 X.check(v) 为假 ⇒
+// 「不是 X」)无法用现有类型表达,忽略。写入的是**当前(外层)**作用域,即落到点所在者。
+let narrowAfterGuard = (cond, exits) -> {
+  if !exits { return null; };
+  if cond == null || isError(cond) || isError(cond.type) { return null; };
+  let inner = cond;
+  let negated = false;
+  if cond.type == "UnaryOp" && (cond.operator == "!" || cond.operator == "not") {
+    inner = cond.operand; negated = true;
+  };
+  if inner == null || isError(inner) || isError(inner.type) || inner.type != "Call" { return null; };
+  let callee = inner.callee;
+  if isError(callee) || isError(callee.type) { return null; };
+  if isError(inner.arguments) || inner.arguments.length != 1 { return null; };
+  let av = inner.arguments[0];
+  if isError(av) || isError(av.type) || av.type != "Identifier" { return null; };
+  if callee.type == "Identifier" && callee.name == "isError" && !negated {
+    typeNarrowScopes[typeDepth - 1][av.name] = true;
+    return null;
+  };
+  if callee.type != "MemberAccess" { return null; };
+  let base = callee.object;
+  if isError(base) || isError(base.type) || base.type != "Identifier" { return null; };
+  if callee.field != "check" { return null; };
+  if typeBound(base.name) || isError(typeBuiltins[base.name]) { return null; };
+  if negated {
+    typeScopes[typeDepth - 1][av.name] = base.name;
+    typeNarrowScopes[typeDepth - 1][av.name] = true;
+  };
+  null;
+};
 
 // 裸构造器不是类型值(`Array`/`Object` 是 `__arr_ctor`/`__obj_ctor`,没有 `check`),当注解写是错的:
 // 具体类型写 `AnyArray`/`AnyObject`,或用构造式 `Array(T)`/`Object(...)`。这一条把「注解名写错」
@@ -439,6 +491,7 @@ let inferExpr = (node) -> {
       let st = typeBindTable[typeProgram][bind];
       if !isError(st) && st.prone == false { node.cannotBeError = true; };
     };
+    if typeNarrowed(node.name) { node.cannotBeError = true; };
     return tagRep(node, typeRepLookup(node.name));
   };
   if t == "Function" {
@@ -813,6 +866,8 @@ let inferStmts = (stmts) -> {
         // 但不一致(此时运行期必须报 TypeCheck),都保留检查。
         if value == "" || isError(value) { typeUnknownWrites[typeProgram][s.target.name] = true; }
         else if declared != "" && value != declared { typeUnknownWrites[typeProgram][s.target.name] = true; };
+        // 写入会作废此前的收窄事实(该名字可能又被赋成别的类型)。
+        typeNarrowScopes[typeDepth - 1][s.target.name] = false;
         // 写入目标声明的内建类型(供发射器判定重检查是否为死代码)。
         s.declaredType = if isError(typeBuiltins[declared]) { ""; } else { declared; };
         // 有注解的绑定写入时会重新检查,所以它保持自己的类型;推导出来的类型一旦
@@ -832,10 +887,13 @@ let inferStmts = (stmts) -> {
       let joined = ""; let first = true; let mixed = false;
       let b = 0;
       while b < s.branches.length {
-        inferExpr(s.branches[b].condition);
+        let guardCond = s.branches[b].condition;
+        inferExpr(guardCond);
         typePush();
         let branchTail = inferStmts(s.branches[b].body.statements);
         typePop();
+        // 守卫的落到点收窄:该分支必然退出时,后续代码继承「条件为假」的事实。
+        narrowAfterGuard(guardCond, branchAlwaysExits(s.branches[b].body.statements));
         if first { joined = branchTail; first = false; }
         else if branchTail != joined { mixed = true; };
         b = b + 1;
