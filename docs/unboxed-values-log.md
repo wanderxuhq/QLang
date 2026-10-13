@@ -701,6 +701,35 @@ FFI)⇒ 这就是「`std` 必须携带作者声明的类型信息」那条规则
 - 下一步(仍待决):`/0` ⇒ IEEE 并去掉 `__op_div0` ✓;缺失 ⇒ `Null` ✓ —— 两者都要先动成文契约与
   既有断言(`docs/numeric-semantics.md` + `t14`/`t25`/`t36`)✓。
 
+### ⑰ 「除数可证明非零 ⇒ 去菱形」—— 试做**失败**,已回滚(被 `-O2` 与健全性检查逮住)
+
+动机:⑩ 的第一条候选 —— 除数是非零字面量(语料里 `% 2` 遍地)⇒ 除零菱形不可能走 ⇒ 纯减少。
+
+做法:`types.ql` 在 `BinaryOp` 推导里,对 `/`·`%` 且右操作数为**非零 `Number` 字面量**者盖章
+`divisorNonZero`;`qlangc.ql` 的 `emitNumOp` 加第 4 参,命中时直接 `fdiv` / `__num_rem` 并 `return`,
+跳过整个菱形(标签、比较、phi)。
+
+**结果:失败,已回滚(未提交)。** 发射出的 IR 是**坏的**:
+
+```text
+clang: /tmp/ir_nz.ll:1498:39: error: use of undefined value '%t1006'
+       %t1007 = call i64 @ql_tag(%ql_value %t1006)
+```
+
+并且 `fcmp oeq …, 0.0` **0 处**、`__num_rem` **0 处**、`@__op_div0` **定义 0 处** ⇒ 运行期那些函数
+**根本没被发射** ⇒ 模块是**被截断**的 ⇒ 先前看到的「IR −15 739(−8.1 %)」是**截断假象**,不是减少 ✗。
+
+**两条教训(都当场验证过):**
+
+1. **IR 行数骤降要当可疑信号**:先验证模块**合法**(`clang -O2 -S` 会说话),再谈收益 ✓ —— 只看
+   `wc -l` 会把「发射器中途失败」当成 −8.1 % 的胜利收下 ✗;
+2. **健全性检查必须是行为级的**:动态除数用例(`let z = 0; println(1 / z);`)在坏版本里**连零比较都
+   没有** ✗ ⇒ 若它侥幸链接成功,就是一个**静默语义 bug**;报错反而救了我们 ✓。
+
+**待查(下一轮)**:为什么加了「提前 `return` + `emitFloatValue`」的那条路径后,发射器从这里开始产出
+未定义临时量 —— 怀疑点在 `emitNumOp` 的**调用者契约**(它期待一个值)与该 `return` 的交互,而不是盖章
+条件本身 ✓。回滚前的一切都留在 `/tmp/ir_nz_BROKEN.ll` 供比对 ✓。
+
 ### ⑪ Status of the raw-ABI work (②b / ②c) — measured, not started
 
 - **②b raw returns**: **340** call sites, all pointing at the 6 functions that *declare* `: Number`.
