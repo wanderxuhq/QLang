@@ -786,6 +786,28 @@ clang: /tmp/ir_nz.ll:1498:39: error: use of undefined value '%t1006'
 ——一个带 `: Number` 返回注解的普通函数 + 对它的返回值做运算 —— 数调用点周围的 tag/派发检查 ✓。
 **检查没了** ⇒ 没有机制要接 ✓;**检查还在** ⇒ 才动 `types.ql` ✓(并按第三条口径先看探针 ✓)。
 
+**⑲.0b 实测更正(推翻 ⑲.0,以本小节为准)** ✓
+
+单文件夹具(同一程序,只差 `: Number`):
+
+```qlang
+let f = (n: Number): Number -> { n + 1; };   // 另一版不写 `: Number`
+let x = f(1) + f(2);
+println(x);
+```
+
+两版发射结果**逐字节相同**:`IR=193917`、`@ql_tag=3660`,逐行一致 ✓ ⇒ **声明的返回类型没有传到调用点** ✗。
+反证很清楚:若传到了,`f(1) + f(2)` 两侧都将是静态 Number ⇒ 走 `bothNum` 快速路径 ⇒ 那两处派发 tag 测试
+本来就该消失 ✓。
+
+⇒ **⑲.2 成立,⑲.0 不成立(以 ⑲.2 为准)** ✓。定位方向:`types.ql:788` 注册 `typeFnResults` 时读的是
+`s.value.returnType` ✓,而**用户函数的这个字段很可能根本没被填**(`returnType` 只走了 std 成员/模块索引那条
+路 ⇒ `callee.memberReturn` ✓)⇒ 要么把 `declaredReturnType` 填进 `s.value.returnType`,要么在注册处直接用
+`declaredReturnType` ✓。
+
+**这个夹具从此就是那条链的验收工具** ✓:改完之后,带注解版与不带注解版**必须开始出现差异**(IR 行数与
+`@ql_tag` 数都要更低 ✓);仍相同 ⇒ 链接点找错了 ✓。
+
 **⑲.1 首批注解(已落地 `cc7c57e`)** ✓:`stdlib/decimal.ql` 的 `decimalCompare` / `decimalCompose` /
 `decimalNumber`(解析路径枢纽)补 `: Number` —— 三者**永不返回 Error**,声明属实;bundle 已重生成
 (diff 仅此三处,96470 → 96494 字节)。验收:探针 **528/70/92 与基线一致** ✓;`clang -O2 -S` **0 error** ✓;
