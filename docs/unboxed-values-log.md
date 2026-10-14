@@ -775,6 +775,50 @@ clang: /tmp/ir_nz.ll:1498:39: error: use of undefined value '%t1006'
 结果只看到「IR 0 行」,白跑一轮;露出来立刻看到 `expected ';' after statement`(我的 `if/else` 少了一个闭合
 `;` ✓)。与「门禁不许 `tail`」同族:**长命令的可见性就是诊断能力** ✓。
 
+### ⑲ ⑥ 首批(std 返回注解)、⑥ 的阻塞点、以及 panic 三条规矩的归属(已核对 Rust)
+
+**⑲.1 首批注解(已落地 `cc7c57e`)** ✓:`stdlib/decimal.ql` 的 `decimalCompare` / `decimalCompose` /
+`decimalNumber`(解析路径枢纽)补 `: Number` —— 三者**永不返回 Error**,声明属实;bundle 已重生成
+(diff 仅此三处,96470 → 96494 字节)。验收:探针 **528/70/92 与基线一致** ✓;`clang -O2 -S` **0 error** ✓;
+动态除数用例仍报 `DivisionByZero` ✓;输出仍 `20` ✓;**IR 与 `-O2` 机器指令均 ±0** ✗。按规矩(零收益也要加,
+只有负收益才不加)保留 ✓。
+
+**⑲.2 本批真正的产出:定位了 ⑥ 的阻塞点** ✓ —— **「声明返回类型 ⇒ 调用点可信」这条链没接通** ✗:
+
+- 没有返回注解的函数**本来就不发射返回边检查** ⇒ 加注解**不新增**代码 ✓;
+- 调用端也**没有**因为被调者声明了 `Number` 而获得信任 ⇒ 检查**也没减少** ✓;
+- 探针一字未变即是证据 ✓。落点在 `types.ql:691-700`:调用点类型取自 `typeFnLookup(callee.name)` 与
+  `callee.memberReturn` —— **只有 std 成员那条路是通的**,普通函数绑定不在内 ✗。
+
+下一步:把 `declaredReturnType` 登记进 `typeFnResults`(覆盖普通函数绑定),调用点才真正获信 ✓ ——
+这同时是 Error 设计「类型不说谎」的前提 ✓。
+
+**⑲.3 panic:三条规矩的归属(核对 Rust 后修正)** —— 我的初稿把三条都写成「Rust 的规矩」✗,核后:
+
+| | 措辞 | 归属 |
+|---|---|---|
+| **R1** | 每个会 panic 的操作**必须**有可检查配套(`a[i]`↔`a.get(i)` ✓、`unwrap`↔`?` ✓、`checked_add`↔`+` ✓) | **本项目硬性规则** ✓(照 std 惯例加强;Rust 编译器并不强制 ✗) |
+| **R2** | panic 只用于契约违反;数据失败一律 `Result` | **Rust 官方指导** ✓(std::panic 文档原文:「Panic for genuine programmer errors — broken invariants, indices out of bounds… Don't panic for expected failure modes like a missing file or invalid user input — those should return Result」) |
+| **R3** | panic 集合尽量小;每取消一个失败就少一个坑 | **本项目原则** ✗(Rust 无此量化要求) |
+
+**Rust 自己走形的三处(引以为戒)** ✓:
+
+1. **整数溢出**:debug **panic** ✓ / release **wrap** ✗ ⇒ *同一份代码在两种构建下行为不同* ⇒ 我们若要动
+   `/0` 之类,**必须选定一种行为,绝不做 build-mode 依赖** ✓;
+2. **OOM**:`alloc` 失败是 **abort** ✓(一个数据条件被当成不可恢复)⇒ 与我们对 `ql_alloc` 的判定一致 ✓;
+3. **panic 可配置**:`panic = "abort"` 使 `catch_unwind` 失效 ⇒ 我们**固定 abort**,比 Rust 更简单 ✓
+   (也就没有「可被抓住的 panic」那套复杂度 ✓)。
+
+出处:[std::panic 文档](https://rustdocshub.com/std/panic/) ✓、[learnrust 12.5](https://learnrust.net/chapter-12/when-to-panic/) ✓、
+[programmingline panic! 指南](https://learn.programmingline.com/learn/rust/rust-panic) ✓。
+
+**⑲.4 panic 在本仓的落地形状** ✓(尚未实现):`panic(kind, msg)` = 物化带**位置 + 消息**的 Error +
+`__exit_error` + `unreachable` ⇒ **零新机制**(发射器在「顶层未处理错误」处已经就是这么发的 ✓)。
+现存契约违反的承载者是 `__op_zone_error` / `__neg_error` / `__pos_error` / `__arity_error` ✓ —— 它们今天
+**返回** Error ⇒ 进入类型 ⇒ 处处检查 ✗;改成 panic ⇒ **冷终结符 ⇒ 不产生错误边** ✓ ⇒ 那 1 521 点 / −31 %
+才有结构性出路 ✓。顺序:**先加原语(不改任何行为)** ⇒ 再**逐类**改(每类**先补配套** ✓),每类仍按
+「探针 → 合法性 → 行为 → IR + `-O2`」验收 ✓。
+
 ### ⑪ Status of the raw-ABI work (②b / ②c) — measured, not started
 
 - **②b raw returns**: **340** call sites, all pointing at the 6 functions that *declare* `: Number`.
