@@ -2144,6 +2144,7 @@ let main = (args) -> {
   // 命中数:分析期证明不可能出错、因而整块省掉定位测试的节点数(主函数体发完之后才知道)。
   out[out.length] = "; located-error elided: " + std.String.toString(locErrorElided);
   out[out.length] = "; fnreg: " + std.Array.join(fnRegLog)(" | ");
+  out[out.length] = "; fnregan: " + typeFnRegReport();
   // ②a 补充:发射序折扣(同样要等主函数体发完 —— 函数体是在 main 发射过程中才发现并发出的)。
   out[out.length] = "; rawABI order: usercalls=" + std.String.toString(ordCallsTotal) + " emitted=" + std.String.toString(ordCallsEmitted) + " notyet=" + std.String.toString(ordCallsNotYet) + " retraw=" + std.String.toString(ordCallsRetRaw);
   // R10-c: out[0..mainAt) = prelude plus the cold helper, then every function body,

@@ -786,6 +786,23 @@ clang: /tmp/ir_nz.ll:1498:39: error: use of undefined value '%t1006'
 ——一个带 `: Number` 返回注解的普通函数 + 对它的返回值做运算 —— 数调用点周围的 tag/派发检查 ✓。
 **检查没了** ⇒ 没有机制要接 ✓;**检查还在** ⇒ 才动 `types.ql` ✓(并按第三条口径先看探针 ✓)。
 
+**⑲.0e 分析内部现场:登记其实**发生了** ✓ —— 故障在消费侧** ✓
+
+把量测打进分析内部(照 `typeRepReport()` / `typeNsReport()` 的先例,用**导出访问器**
+`typeFnRegReport` 交给发射端打印 ✓;只观察、不改决策 ✓):
+
+- 夹具 **`f=r:Number,g:1,d:1`** ✓ ⇒ **登记已发生**:`returnType` 非空 ✓、稳定性条件通过 ✓、
+  写入 `typeFnResults[0]` ✓;
+- 不注解者 **`g:0`** ✓(`returnType` 为空 ⇒ 不登记 ✓,与设计一致 ✓);
+- ⇒ **链路的生产侧是好的** ✓;**故障在消费侧** —— 调用点为何没拿到 `Number` ✗。
+
+⇒ 焦点收窄到一处:`bothNum = isStaticNumber(left) && isStaticNumber(right)` ✓。若 `isStaticNumber` 只接受
+**可裸表示**的节点 ✗,而 **Call 的结果是装箱的 `%ql_value`** ✓,那么即便 `staticType == "Number"` ✓ 也不会走
+快速路径 ✗ ⇒ **注解对「以调用结果为操作数」的运算天然惰性** ✓(这与「⑥ 首批 ±0」「夹具逐字节相同」全部吻合 ✓)。
+
+查法:`grep isStaticNumber aot/types.ql` 看清判据 ✓,再决定是「扩展它」✓ 还是「在发射端对**已证明**的调用结果
+先解箱再走数值路径」✓。
+
 **⑲.0d 打现场:三个假设全部证伪 ⇒ 问题不在我读的那段代码上** ✓
 
 量测 `; fnreg:`(已作为量测辅助提交 `3bc8b44`,只多一行 IR 注释 ✓)把每个「`let 名 = 函数`」的

@@ -31,6 +31,8 @@ let typeProgram = 0;
 let typeScopes = [];
 let typeFnResults = [];
 let typeDepth = 0;
+// 量测(不改决策):每个「值为函数」的 Let 的现场 —— 名字、returnType、登记条件是否通过、当时深度。
+let typeFnRegLog = "";
 let typeErrors = [];
 // 「表示」栈,与 typeScopes 同深同栈:名字 -> "Number"(裸 double)。缺失即装箱。
 // 表示是「值」的属性(编译期算好、标在节点 staticRep 上),不是发射时才决定的。
@@ -838,6 +840,12 @@ let inferStmts = (stmts) -> {
         typeRepScopes[typeDepth - 1][s.name] = "Number";
       };
       // 返回类型已知、且绑定稳定(从未被赋值)的函数:登记它,调用点才能拿到类型。
+      // 量测(不改决策):先记现场,再走原逻辑 —— 用来查「注解 ⇒ 调用点可信」这条链为何没生效。
+      if s.value != null && !isError(s.value.type) && s.value.type == "Function" {
+        let lr = if isError(s.value.returnType) { "<err>"; } else { s.value.returnType; };
+        let gd = if !isError(s.value.returnType) && s.value.returnType != "" && isError(typeAssignedNames[typeProgram][s.name]) { "1"; } else { "0"; };
+        typeFnRegLog = typeFnRegLog + s.name + "=r:" + lr + ",g:" + gd + ",d:" + std.String.toString(typeDepth) + " | ";
+      };
       if s.value != null && !isError(s.value.returnType) && s.value.returnType != "" && isError(typeAssignedNames[typeProgram][s.name]) {
         typeFnResults[typeDepth - 1][s.name] = s.value.returnType;
         // ②a:连同签名一起登记,调用点才能判断能否发裸调用(只记第二遍的权威判定)。
@@ -979,6 +987,8 @@ let checkIsDead = (valueNode, declaredName) -> {
 let typeRepReport = () -> typeRepCounts;
 let typeNsReport = () -> [typeNsResolved, typeNsUnresolved];
 export typeNsReport;
+let typeFnRegReport = () -> typeFnRegLog;
+export typeFnRegReport;
 let typeNsUnknownNames = () -> typeNsUnresolvedNames;
 export typeNsUnknownNames;
 let typeRepPrograms = () -> typeProgram;
