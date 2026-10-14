@@ -562,14 +562,39 @@ let emitBinaryOp = (node) -> {
     } else {
       let L = emitExpr(node.left);
       let R = emitExpr(node.right);
-      let t1 = temp(); let t2 = temp(); let c1 = temp(); let c2 = temp(); let c3 = temp();
-      line("  " + t1 + " = call i64 @ql_tag(%ql_value " + L + ")");
-      line("  " + t2 + " = call i64 @ql_tag(%ql_value " + R + ")");
-      line("  " + c1 + " = icmp eq i64 " + t1 + ", 1");
-      line("  " + c2 + " = icmp eq i64 " + t2 + ", 1");
-      line("  " + c3 + " = and i1 " + c1 + ", " + c2);
+      // 已知的一侧不发 tag 测试(分析已证明它的 tag 就是 1):条件仍然等价于「两侧都是 Number」,
+      // 未知的一侧才测 ⇒ 少一次 @ql_tag 调用、少一个 and。
+      let knownL = isStaticNumber(node.left);
+      let knownR = isStaticNumber(node.right);
+      // 一侧静态已知是 String ⇒ `+` 必然是字符串拼接(__op_add 对 String 与任意组合都成立),
+      // 数值路径不可能 ⇒ 两个 tag 测试和整个菱形都不发。只有 `+` 有这种「一侧定性」的性质。
+      if op == "+" && ((!isError(node.left.staticType) && node.left.staticType == "String") || (!isError(node.right.staticType) && node.right.staticType == "String")) {
+        return emitDispOp(op, L, R);
+      };
       let lNum = lbl(); let lDisp = lbl(); let lMerge = lbl();
-      line("  br i1 " + c3 + ", label %" + lNum + ", label %" + lDisp);
+      let cond = "1";
+      if knownL {
+        if !knownR {
+          let t2 = temp(); let c2 = temp();
+          line("  " + t2 + " = call i64 @ql_tag(%ql_value " + R + ")");
+          line("  " + c2 + " = icmp eq i64 " + t2 + ", 1");
+          cond = c2;
+        };
+      } else if knownR {
+        let t1 = temp(); let c1 = temp();
+        line("  " + t1 + " = call i64 @ql_tag(%ql_value " + L + ")");
+        line("  " + c1 + " = icmp eq i64 " + t1 + ", 1");
+        cond = c1;
+      } else {
+        let t1 = temp(); let t2 = temp(); let c1 = temp(); let c2 = temp(); let c3 = temp();
+        line("  " + t1 + " = call i64 @ql_tag(%ql_value " + L + ")");
+        line("  " + t2 + " = call i64 @ql_tag(%ql_value " + R + ")");
+        line("  " + c1 + " = icmp eq i64 " + t1 + ", 1");
+        line("  " + c2 + " = icmp eq i64 " + t2 + ", 1");
+        line("  " + c3 + " = and i1 " + c1 + ", " + c2);
+        cond = c3;
+      };
+      line("  br i1 " + cond + ", label %" + lNum + ", label %" + lDisp);
       line(lNum + ":");
       curLbl = lNum;
       let numRes = emitNumOp(op, { reg: L, raw: "" }, { reg: R, raw: "" });

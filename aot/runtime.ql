@@ -503,6 +503,15 @@ let __op_div0 = () -> {
   __err("DivisionByZero", "division by zero");
 };
 
+// panic:契约违反的落点(不可恢复)。物化一个带 kind/message 的 Error 后从顶层退出 —— 走的是
+// 「顶层未处理错误」同一条路(__exit_error),所以它**不是值**、不进类型、不产生错误边。
+// 对照 Rust:R2(只用于契约违反;数据失败一律 Result)、R1(每个 panic 点必须有可检查的配套)、
+// 固定 abort(不做 unwinding ⇒ 没有「可被抓住的 panic」)。详见 log §5⑲.3/⑲.4。
+// 本步**只加原语**:目前没有任何调用点,行为不变。
+let __panic = (kind, message) -> {
+  __exit_error(__err(kind, message));
+};
+
 // 字符串内容相等:len 相等 + 逐字节相等(ASCII 域 len = 字符数)
 let __str_eq = (a, b) -> {
   let la = readU64(a, 16);
