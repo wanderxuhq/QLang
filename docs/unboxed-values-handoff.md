@@ -166,6 +166,28 @@ author-declared type information. **Decisions still open:** `/0` as IEEE (drop `
 were already dead are now emitted as nothing. The remaining slices (`/0` ⇒ IEEE, absence ⇒ `Null`) touch
 written contracts and existing assertions, so they need an explicit decision first.
 
+**Its shape: re-classify, do not re-implement.** Nothing about the *mechanism* needs rewriting — the Error
+representation (tag 8, provenance) and the unrecoverable path are already exactly what the design wants:
+`panic` = materialise an Error + `__exit_error` + `unreachable`, which the emitter *already* emits for an
+unhandled top-level error, so `panic` is a new primitive of ~a dozen lines and **no new runtime**. What must
+be redone is the *classification and the carrier*: the 7 runtime primitives, the 26 library `raise`s and the 9
+fallible syntactic forms each move into one of four bins — (a) type-rejected, (b) total with a meaningful
+value, (c) genuinely no value (in the type), (d) **panic** (contract violation) — plus the typing discipline
+that makes a declared type *true* so the analysis can trust it. Do it one class at a time, each with the
+four-step gate (probes → legality → behaviour → IR + `-O2`). Three rules for the panic side, with their real
+provenance (**R1** companion rule = *our* hard rule; **R2** panic only for contract violations, data failures
+always `Result` = Rust's official guidance; **R3** keep the panic set small = *our* principle), and Rust's own
+three deviations to avoid (debug/release overflow behaving differently, OOM aborting, `panic = "abort"` making
+`catch_unwind` useless — we fix abort and never make behaviour build-mode dependent) are in the log §5⑲.3.
+
+**⑦ §5⑲ — verify, while working, whether annotated ordinary bindings already grant call-site trust.** The
+wiring may already exist: `types.ql:788` registers `typeFnResults` from `s.value.returnType` for a *stable*
+(never-reassigned) function binding, and call-site typing reads `typeFnLookup(callee.name)` — so the ±0 of the
+first annotation batch (`cc7c57e`) may simply mean those call sites had no checks left to delete. **Do not
+build a mechanism before checking.** Fold the check into any build that touches call-site typing: compile a
+one-file fixture with an annotated ordinary function and count the tag/dispatch checks around its call site;
+only if they survive is there something to wire.
+
 ## 5. How to build, measure and verify
 
 See §0's commands. Two conventions worth calling out:
