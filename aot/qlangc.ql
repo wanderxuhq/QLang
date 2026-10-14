@@ -721,8 +721,6 @@ let needColdLocated = false;
 let coldHelperAt = 0;
 // 分析期已证明不可能是 Error、因而整块省掉定位测试的节点数(命中数,先于行数报)。
 let locErrorElided = 0;
-// 量测(不改行为):每个「let 名 = 函数」的返回类型相关字段,用于查「注解 ⇒ 调用点可信」这条链为何没生效。
-let fnRegLog = [];
 // Runtime functions whose body is already emitted, keyed by source name: a call
 // after that point can be direct (this toolchain wants the definition first), and
 // runtime bindings are private, so they cannot be rebound by user code.
@@ -857,13 +855,6 @@ let emitLetStmt = (node) -> {
   let typeFree = annotated && !inRuntime && !isError(node.runtimeTypeFree) && node.runtimeTypeFree == true;
   let deadCheck = !inRuntime && (typeFree || checkIsDead(node.value, node.annotationType));
   if annotated && !typeFree { ty = emitExpr(node.annotation); text = internString(annotationText(node.annotation)); };
-  if node.value != null {
-    let vt = if isError(node.value.declaredReturnType) { "?"; } else { ""; };
-    let nt = if isError(node.value.type) { "<err>"; } else { node.value.type; };
-    let ad = if isError(node.value.declaredReturnType) { "<err>"; } else { node.value.declaredReturnType; };
-    let rt = if isError(node.value.returnType) { "<err>"; } else { node.value.returnType; };
-    fnRegLog[fnRegLog.length] = node.name + ":" + nt + " decl=" + ad + " ret=" + rt;
-  };
   let value = "null";
   if node.value != null {
     if node.value.type == "Function" { value = emitFunction(node.value, node.name); }
@@ -2143,8 +2134,6 @@ let main = (args) -> {
   };
   // 命中数:分析期证明不可能出错、因而整块省掉定位测试的节点数(主函数体发完之后才知道)。
   out[out.length] = "; located-error elided: " + std.String.toString(locErrorElided);
-  out[out.length] = "; fnreg: " + std.Array.join(fnRegLog)(" | ");
-  out[out.length] = "; fnregan: " + typeFnRegReport();
   // ②a 补充:发射序折扣(同样要等主函数体发完 —— 函数体是在 main 发射过程中才发现并发出的)。
   out[out.length] = "; rawABI order: usercalls=" + std.String.toString(ordCallsTotal) + " emitted=" + std.String.toString(ordCallsEmitted) + " notyet=" + std.String.toString(ordCallsNotYet) + " retraw=" + std.String.toString(ordCallsRetRaw);
   // R10-c: out[0..mainAt) = prelude plus the cold helper, then every function body,
