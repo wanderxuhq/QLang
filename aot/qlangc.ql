@@ -566,9 +566,10 @@ let emitBinaryOp = (node) -> {
       // 未知的一侧才测 ⇒ 少一次 @ql_tag 调用、少一个 and。
       let knownL = isStaticNumber(node.left);
       let knownR = isStaticNumber(node.right);
-      // 一侧静态已知是 String ⇒ `+` 必然是字符串拼接(__op_add 对 String 与任意组合都成立),
-      // 数值路径不可能 ⇒ 两个 tag 测试和整个菱形都不发。只有 `+` 有这种「一侧定性」的性质。
-      if op == "+" && ((!isError(node.left.staticType) && node.left.staticType == "String") || (!isError(node.right.staticType) && node.right.staticType == "String")) {
+      // 一侧静态已知是 String ⇒ 结果**定性**(与数值路径无关):`+` 必是拼接(__op_add)、`==`/`!=` 必走
+      // 标签感知的 __op_eq/__op_ne ⇒ 两个 tag 测试与整个菱形都不发,直接派发。
+      let oneString = (!isError(node.left.staticType) && node.left.staticType == "String") || (!isError(node.right.staticType) && node.right.staticType == "String");
+      if oneString && (op == "+" || op == "==" || op == "!=") {
         return emitDispOp(op, L, R);
       };
       let lNum = lbl(); let lDisp = lbl(); let lMerge = lbl();
