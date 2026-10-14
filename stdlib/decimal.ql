@@ -33,7 +33,7 @@ let decimalAdd = (a, b) -> {
   if carry > 0 { out[out.length] = carry; };
   out;
 };
-let decimalCompare = (a, b) -> {
+let decimalCompare = (a, b): Number -> {
   if a.length < b.length { return -1; };
   if a.length > b.length { return 1; };
   let i = a.length - 1;
@@ -59,7 +59,7 @@ let decimalSubtract = (a, b) -> {
 // The rounded mantissa is an exact integer. Subnormals receive one final
 // multiplication; normal factors are exact powers of two. Unary minus retains
 // a zero sign supplied by the input text.
-let decimalCompose = (mantissa, biasedExponent, negative) -> {
+let decimalCompose = (mantissa, biasedExponent, negative): Number -> {
   let value = 0;
   if biasedExponent == 0 { value = mantissa * 5e-324; }
   else if biasedExponent == 2047 { value = 1e308 * 1e308; }
@@ -71,7 +71,7 @@ let decimalCompose = (mantissa, biasedExponent, negative) -> {
   };
   if negative { -value; } else { value; };
 };
-let decimalNumber = (r, decimal, negative, digits) -> {
+let decimalNumber = (r, decimal, negative, digits): Number -> {
   if r.length == 1 && r[0] == 0 { return decimalCompose(0, 0, negative); };
   if decimal + digits > 310 { return decimalCompose(0, 2047, negative); };
   if decimal + digits < -325 { return decimalCompose(0, 0, negative); };
