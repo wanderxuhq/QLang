@@ -20,6 +20,10 @@ def main():
         ('assignment', 'let f = () -> {\n  unknown = 3;\n};', None, 2, 3, 'assignment to undeclared name: unknown'),
         ('dependency', 'import "./lib.ql";', '\nlet f = () -> {\n  println(missing);\n};', 3, 11, 'undeclared name: missing'),
         ('import-site', '\n  import "./absent.ql";', None, 2, 3, None),
+        ('uninitialized-field', 'let x; x.field = 1;', None, 1, 8, 'reading uninitialized variable: x'),
+        ('uninitialized-index', 'let x = []; let index; x[index] = 1;', None, 1, 26, 'reading uninitialized variable: index'),
+        ('annotation-literal', 'let bad: Number = "x";', None, 1, 1,
+         'type mismatch: value of type String does not match the annotated type Number'),
     ]
     with tempfile.TemporaryDirectory(prefix='qlang-semantic-diagnostics-') as tmp:
         work = Path(tmp)

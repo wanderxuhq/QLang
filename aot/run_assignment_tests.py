@@ -9,8 +9,11 @@ import tempfile
 from run_selfhost_tests import ROOT, TIMEOUT, emit, link
 
 CASES = [
-    ('uninitialized-field', 'let x; x.field = 1;', 'Uninitialized'),
-    ('uninitialized-index', 'let x; x[0] = 1;', 'Uninitialized'),
+    # A same-body read of an uninitialized binding is a *frontend* error now
+    # (`reading uninitialized variable`), so those cases moved to
+    # run_semantic_diagnostic_tests.py. The runtime channel is still covered by
+    # `uninitialized-through-call` below (the read crosses a function boundary).
+    ('uninitialized-through-call', 'let x; let f = () -> x; f().field = 1;', 'Uninitialized'),
     ('null-field', 'let x = null; x.field = 1;', 'NotAnObject'),
     ('number-field', 'let x = 42; x.field = 1;', 'NotAnObject'),
     ('null-index', 'let x = null; x[0] = 1;', 'CannotIndex'),
@@ -22,7 +25,6 @@ CASES = [
     ('object-bool', 'let x = {}; x[true] = 1;', 'CannotIndex'),
     ('object-array', 'let x = {}; x[[]] = 1;', 'CannotIndex'),
     ('missing-parent', 'let x = {}; x.missing.field = 1;', 'UndefinedField'),
-    ('failed-index', 'let x = []; let index; x[index] = 1;', 'Uninitialized'),
     ('protected-field', 'Number.check = (v) -> false;', 'Custom'),
     ('protected-index', 'let alias = Error; alias["raise"] = null;', 'Custom'),
     ('loop', 'while true { if true { let x = []; x[1] = 2; }; };', 'IndexOutOfBounds'),
