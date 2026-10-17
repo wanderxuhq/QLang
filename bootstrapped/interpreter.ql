@@ -41,7 +41,7 @@ let Interpreter = () -> {
       value = copy;
     };
     // The embedding source context is not a user diagnostic-control API.
-    if key != "__diagnostics" && key != "__extensions" { userStd[key] = value; }; mi = mi + 1;
+    if key != "__diagnostics" && key != "__extensions" && key != "__panic" { userStd[key] = value; }; mi = mi + 1;
   };
   let globalEnv = GlobalEnvironment(userStd);
   // Each module has a lexical args binding backed by the shared process array.
@@ -476,7 +476,9 @@ let Interpreter = () -> {
         assigned = env._assign(target.name, value);
       };
       if assigned != true {
-        return { type: "Error", value: std.Error.raise("UndefinedVariable", "Undefined variable: " + target.name, null), propagate: false };
+        // 子片 A:绑定运行期不存在 ⇒ 契约违反 ⇒ 致命(经 boot 唯一的宿主通道 std.__* )。
+        std.__panic("UndefinedVariable", "Undefined variable: " + target.name);
+        null;
       };
       null;
     } else if target.type == "MemberAccess" || target.type == "IndexAccess" {

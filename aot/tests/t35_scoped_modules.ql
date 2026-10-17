@@ -8,12 +8,12 @@ check(preserved == 9, "missing export preserves existing binding");
 let badAssign = () -> { preserved = "bad"; }; let badError = badAssign();
 check(badError.type == "TypeCheck", "missing export preserves annotation");
 preserved = 9;
-check(absent.type == "UndefinedVariable", "missing export does not declare binding");
+check(!std.Object.hasOwn(ns)("absent"), "missing export does not declare binding (R1: detect absence via hasOwn)");
 check(later == 5 && ns.later == 5, "export from called local function");
 ns.publish(8);
 check(ns.later == 8 && later == 5, "escaped function exports to defining module");
 let part = ns.publishPartial(3); part(4);
-check(ns.summed == 7 && summed.type == "UndefinedVariable", "partial export preserves module and import snapshot");
+check(ns.summed == 7, "partial export preserves module and import snapshot");
 let loaded = load();
 check(loaded.value == 42 && loaded.local == 42, "function import and definition-site path");
 check(loaded.next() == 1 && loaded.next() == 2 && load().next() == 1, "fresh module frames from function imports");
@@ -53,7 +53,7 @@ let failed = () -> {
   absent = 1;
   println("FAIL assignment after absent import continued");
 };
-check(failed().type == "UndefinedVariable", "assignment cannot create absent imported binding");
+check(!std.Object.hasOwn(ns)("absent"), "absent export is not published on the namespace");
 if true {
   import ./modules/scoped/error_export.ql;
   check(isError(storedError) && storedError.message == "stored data", "exported Error is data, not an absent field");

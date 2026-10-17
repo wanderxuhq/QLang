@@ -1858,7 +1858,7 @@ let __call_native = (fn, arguments) -> {
   __error_source = previous;
   result;
 };
-let std = { __diagnostics: __source_api, __callNative: __call_native, Type: Type, Error: stdError, Object: stdObject, Number: stdNumber, Array: stdArray, String: stdString, Math: stdMath, JSON: stdJSON, fs: stdFs };
+let std = { __diagnostics: __source_api, __callNative: __call_native, __panic: __panic, Type: Type, Error: stdError, Object: stdObject, Number: stdNumber, Array: stdArray, String: stdString, Math: stdMath, JSON: stdJSON, fs: stdFs };
 // Copy namespace tables so augmenting std in one file cannot affect another.
 // Function values and canonical type values retain their identities.
 let __copy_table = (object) -> {

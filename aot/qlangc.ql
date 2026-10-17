@@ -960,9 +960,11 @@ let emitStoreByName = (name, expression, target, declaredType) -> {
     line("  " + absent + " = icmp eq ptr " + off + ", null");
     line("  br i1 " + absent + ", label %" + bad + ", label %" + good);
     line(bad + ":"); curLbl = bad;
-    let error = emitCallRegs("__err", [internString("UndefinedVariable"), internString("Undefined variable: " + name)]);
-    error = emitLocatedError(error, target, false);
-    emitPropagateError(error); line("  br label %" + good);
+    // 子片 A:绑定运行期不存在 ⇒ 契约违反 ⇒ 致命(编译器自发的固定名冷助手,与 emitter 走同一通道)。
+    needColdPanic = true;
+    let siteEnv = emitRuntimeBase();
+    line("  call void @__panic_exit(ptr " + siteEnv + ", %ql_value " + internString("UndefinedVariable") + ", %ql_value " + internString("Undefined variable: " + name) + ")");
+    line("  unreachable");
     line(good + ":"); curLbl = good;
   };
   // Unannotated same-body target: the slot's type/text are zero, so the plain
@@ -1725,6 +1727,39 @@ let emitColdLocatedHelper = () -> {
   curReturnType = savedRetType; curReturnTy = savedRetTy; curReturnText = savedRetText; curReturnActive = savedRetActive;
   blk;
 };
+// 契约违反的致命通道:与 __cold_located_error 同法 —— 编译器自己发一个固定名函数,
+// 任意模块的生成代码都能按符号直调(不经名字解析、不动模块作用域)。
+// 体内借 runtime 帧调用 runtime 的 __panic(= 物化 Error + __exit_error + 不可达)。
+let needColdPanic = false;
+let emitColdPanicHelper = () -> {
+  let savedStackSlots = stackSlots; stackSlots = [];
+  let savedArgSlots = argSlotPool; argSlotPool = {};
+  let savedScope = curScope; let savedEnv = curEnv; let savedLbl = curLbl;
+  let savedTop = isTopLevel; let savedRetv = curRetv; let savedEpi = curEpiLbl;
+  let savedRetType = curReturnType; let savedReturnTy = curReturnTy; let savedRetText = curReturnText;
+  let savedRetActive = curReturnActive;
+  curReturnType = ""; curReturnTy = "null"; curReturnText = "null"; curReturnActive = false;
+  let blk = [];
+  curSink = blk;
+  line("define void @__panic_exit(ptr %env, %ql_value %kind, %ql_value %msg) {");
+  line("entry:");
+  let slotAt = blk.length; line("");
+  curLbl = "entry";
+  curEnv = "%env";
+  curScope = runtimeScope;
+  inColdHelper = true;
+  isTopLevel = false; curRetv = "%retv"; curEpiLbl = "epilogue";
+  emitCallRegs("__panic", ["%kind", "%msg"]);
+  line("  unreachable");
+  line("}");
+  blk[slotAt] = stackEntry();
+  inColdHelper = false;
+  stackSlots = savedStackSlots; argSlotPool = savedArgSlots;
+  curScope = savedScope; curEnv = savedEnv; curLbl = savedLbl;
+  isTopLevel = savedTop; curRetv = savedRetv; curEpiLbl = savedEpi;
+  curReturnType = savedRetType; curReturnTy = savedReturnTy; curReturnText = savedRetText; curReturnActive = savedRetActive;
+  blk;
+};
 // Attach provenance only on an Error edge. Synthetic/runtime nodes have no
 // user position. Calls/imports extend a persistent trace; ordinary reads do not.
 let emitLocatedError = (value, node, callFrame) -> {
@@ -2140,6 +2175,18 @@ let main = (args) -> {
   // populated here, and the definition must precede every call site.
   if needColdLocated {
     let helper = emitColdLocatedHelper();
+    let merged = [];
+    let m = 0;
+    while m < coldHelperAt { merged[merged.length] = out[m]; m = m + 1; };
+    let hh = 0;
+    while hh < helper.length { merged[merged.length] = helper[hh]; hh = hh + 1; };
+    while m < out.length { merged[merged.length] = out[m]; m = m + 1; };
+    out = merged;
+    mainAt = mainAt + helper.length;
+  };
+  // 致命助手同理:契约违反的调用点引用它,必须在调用点之前定义。
+  if needColdPanic {
+    let helper = emitColdPanicHelper();
     let merged = [];
     let m = 0;
     while m < coldHelperAt { merged[merged.length] = out[m]; m = m + 1; };

@@ -675,7 +675,11 @@ let Json = Mu((R) -> Union(Union(Union(Null, Number), Union(String, Boolean)), U
   ok;
 }))));
 let jDeep = { a: 1, b: [{ c: true }, null], d: { e: "x", f: [1, [2, [3, null]]] } };
-let jBad = { a: 1, b: [{ c: true }, { d: { e: { f: 42, g: undefined } } }] };
+// `undefined` used to stand in here: an undeclared read yielded an UndefinedVariable
+// *value*, which the schema then rejected by accident. A runtime-absent binding is a
+// contract violation now (fatal), and a function is a value that no JSON schema can
+// ever accept — so it keeps this example's intent (`g` must be rejected).
+let jBad = { a: 1, b: [{ c: true }, { d: { e: { f: 42, g: (x) -> x } } }] };
 assert("json null", Json.check(null));
 assert("json deep", Json.check(jDeep));
 assert("json number", Json.check(3.14));

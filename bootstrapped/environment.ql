@@ -70,7 +70,9 @@ let Environment = (parent) -> {
       // Undefined: error value (no longer falls back to null — aligned with the host's
       // UndefinedVariable). Use std.Error.raise (3 args: kind/message/cause); the bare Error.raise
       // is the type object's 1-2-arg constructor (kind hardcoded to "Error"), which would drop kind/message.
-      { type: "Error", value: std.Error.raise("UndefinedVariable", "Undefined variable: " + name, null), propagate: false };
+      // 子片 A:未知名 ⇒ 契约违反 ⇒ 致命(经 boot 唯一的宿主通道 std.__* )。
+      std.__panic("UndefinedVariable", "Undefined variable: " + name);
+      null;
     }
   };
   let doAssign = (name, value) -> {
@@ -111,7 +113,7 @@ let GlobalEnvironment = (stdObj) -> {
   let parentEnv = {
     // ⑧ boundary fix: unknown name → UndefinedVariable error value (no longer falls back to null);
     // std is returned as-is.
-    get: (name) -> if name == "std" { stdObj } else { { type: "Error", value: std.Error.raise("UndefinedVariable", "Undefined variable: " + name, null), propagate: false } },
+    get: (name) -> if name == "std" { stdObj } else { std.__panic("UndefinedVariable", "Undefined variable: " + name); null; },
     define: (name, value) -> null,
     assign: (name, value) -> if name == "std" { stdObj = value; true; } else { false; }
   };
