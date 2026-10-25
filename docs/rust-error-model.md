@@ -143,6 +143,12 @@ let legacy = () -> { let z = 0; let v = (1 / z)?; v; };                   // 迁
 `__s_codepoint` 内层函数原本声明了 `Number`/`String` 却使用 `?`,现在去掉返回注解;
 等它们改成 `Result` 再恢复注解。
 
+**实现注意(已经踩过)**:不要把 Option 的 None 做成新的 propagation 类型去扩
+`isPropagating` / 在函数边界加转换。试过两种标记,其中一种会让 boot 解释器整体退化
+(连 `println(1+2)` 都输出 `not an error`);当前稳定解是 **parser 标内部 `?Option`**,
+native 传 Null(tag 4),boot 用现有 Return completion 返回 Null。`isPropagating` 保持
+原样(只认 Error)。
+
 当前数字(同源 `/tmp/o_new7`):
 
 | 项 | 基线 `5d0f4e8` | 切片 1 |
