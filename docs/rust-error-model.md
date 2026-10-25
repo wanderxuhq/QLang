@@ -171,8 +171,8 @@ native 传 Null(tag 4),boot 用现有 Return completion 返回 Null。`isPropaga
   - `run_semantic_diagnostic_tests.py`:10/10;
   - `t56_result_annotations`:native/boot 逐行一致(None/Some/Error 三态);
   - `run_interpreter_tests.py --compiler /tmp/o_new10 --interpreter /tmp/bp_new8`:57 PASS;
-  - stage2/stage3 IR identical;
-  - 完整 selfhost 套件在本切片提交时仍在运行。
+  - `run_selfhost_tests.py --compiler /tmp/o_new10`:48 PASS;
+  - stage2/stage3 IR identical。
 
 ## 4. 后续切片(不在本切片)
 
