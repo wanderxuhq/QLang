@@ -149,6 +149,10 @@ let legacy = () -> { let z = 0; let v = (1 / z)?; v; };                   // 迁
 native 传 Null(tag 4),boot 用现有 Return completion 返回 Null。`isPropagating` 保持
 原样(只认 Error)。
 
+**已评估、已回滚(2026-10-25)**:让 `types.ql` 识别 `Result(T)`/`Option(T)` 并把
+`?` 的结果静态收窄成 payload。判别夹具 IR 188025 → 188013(−12),`clang -O2` 机器指令
+**±0**;按“无收益不背复杂度”回滚。等 Result/Option 的调用点返回类型也能被跟踪时再做。
+
 当前数字(同源 `/tmp/o_new7`):
 
 | 项 | 基线 `5d0f4e8` | 切片 1 |
