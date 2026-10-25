@@ -135,6 +135,15 @@ behaviour and stays valid for the host. Rust is not changed, so the two frontend
 differ here; the QLang frontend is authoritative for compiled and interpreted
 QLang programs.
 
+## User-level `assert` (2026-10-25)
+
+The QLang runtime and boot interpreter expose `assert(condition, message)` on the
+fatal `__panic` channel (false ⇒ stderr `AssertionFailed: <message>`, exit 1).
+The retained Rust host does not implement it: `./target/release/qlang` on a file
+using `assert(false, "boom")` prints the following statements and exits 0
+instead of terminating. QLang compiled/boot programs are authoritative here;
+Rust is not changed.
+
 ## Approved mechanism parity added to the host (2026-10-07)
 
 Two new language mechanisms were approved by the user, and the portable QLang

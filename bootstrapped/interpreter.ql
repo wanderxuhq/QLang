@@ -99,6 +99,10 @@ let Interpreter = () -> {
   globalEnv._define("println", println);
   globalEnv._define("Error", Error);
   globalEnv._define("isError", isError);
+  // User-level contract check: false is a contract violation, not a value.
+  // `assert` lives in the runtime and is marked native there, so the boot calls
+  // the same implementation (raw args, same panic channel) as compiled code.
+  globalEnv._define("assert", assert);
 
   // Task 10: seed the boot global environment with the boot's OWN type library
   // (stdlib.ql constants — same module as std.Type.of's results, so user-code

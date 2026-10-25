@@ -14,9 +14,10 @@ let Result = (T) -> {
 };
 
 // std.Option(T) — a value of type T, or null. It is the nullable form, not
-// Rust's nominal Option: `null` is also an ordinary value, so Option's `?`
-// propagation is deliberately not enabled yet (see docs/rust-error-model.md).
-// Error is not an Option; the Err side belongs to Result(T).
+// Rust's nominal Option: `null` is the None side, so `?` inside an
+// Option-annotated function propagates null (the parser marks it as the
+// internal `?Option` operator). Error is not an Option; the Err side belongs
+// to Result(T).
 let Option = (T) -> {
   let typeObject = {
     check: (v) -> {

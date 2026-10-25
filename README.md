@@ -948,6 +948,43 @@ x.message   // 'value of type "String" does not match the annotated type "Number
 - An annotation that is not a type value — a plain value, or a shadowed
   constant — yields `TypeCheck: type annotation is not a type value`.
 
+### Result and Option annotations
+
+`std.Result(T)` and `std.Option(T)` are ordinary library type values:
+
+- `std.Result(T).check(v)` accepts a `T` **or** an Error (the Err side). The Ok
+  case is the plain `T` — no wrapper and no allocation.
+- `std.Option(T).check(v)` accepts a `T` or `null` (the None side); it rejects
+  Error. `None` is `null`, not a separate constructor.
+
+`?` is only legal in a function whose declared return type is
+`std.Result(...)` or `std.Option(...)` (or unannotated / top level during the
+migration period). A function annotated `Number`/`String`/another type may not
+use `?`; the parser rejects it with
+`? requires a Result or Option return type`. The check is syntactic: aliases
+and indirect constructors are not recognized yet.
+
+```qlang
+let load = (): std.Result(Number) -> {
+  let z = 0;
+  let value = (1 / z)?;   // Err: return the Error as this function's value
+  value + 1;
+};
+isError(load())           // true
+
+let maybe = (): std.Option(Number) -> {
+  let value = null;
+  let checked = value?;   // None: `?` returns null from this function
+  1;
+};
+maybe()                   // null
+```
+
+Inside an `Option` function, `?` propagates `null`; an Error is not Option's
+failure side and is reported as a `TypeCheck` at the return edge. Result/Option
+annotations make the *value* honest; consuming the payload still requires the
+explicit `?` — there is no automatic propagation from syntax.
+
 ### Shadowing and protected members
 
 - Names can be shadowed: `let Number = 42` is legal.
@@ -1056,12 +1093,19 @@ error.
 
 ### Error values
 
-**Errors are data, not control flow.** Runtime errors — type mismatches,
-out-of-bounds indexing, missing fields, division by zero, recursion overflow,
-user-raised — produce an `Error` **value**: a first-class value of its own
-type that flows through expressions like any other data. Nothing "throws" or
-terminates the program; an error is handled (`?`, `??`, `isError`) the moment
+**Errors are data, not control flow.** Data errors — type mismatches,
+out-of-bounds indexing, missing fields, division by zero, user-raised —
+produce an `Error` **value**: a first-class value of its own
+type that flows through expressions like any other data. Nothing "throws";
+an error is handled (`?`, `??`, `isError`) the moment
 the code chooses to handle it, and execution continues. There is no try/catch.
+
+**Contract violations are fatal.** `assert(condition, message)` checks an
+invariant; if the condition is false the process prints
+`AssertionFailed: <message>` to stderr and exits 1. A failed assertion is not
+an `Error` value and cannot be caught — use `Result`/`?` for expected data
+failures. On success `assert` returns `null`. The condition is the checkable
+form: assert the invariant directly rather than relying on side effects.
 
 An error value carries structured diagnostics:
 
@@ -1120,6 +1164,10 @@ keyword — `return Error.raise("...")` is how you raise one (Go-style).
   eats the whole right expression: `risky() ?? 42 + 1` is
   `risky() ?? (42 + 1)`; parenthesize to truncate (`(risky() ?? 42) + 1`).
   `a ?? b ?? c` = `(a ?? b) ?? c` (fallback cascades).
+- `assert(condition, message)` — user-level **contract check**, not error
+  handling: true returns `null`; false prints `AssertionFailed: <message>` to
+  stderr and exits 1. It is fatal by design and is not catchable with
+  `?`/`??`/`isError`.
 
 ```qlang
 // std.String.at(s, i) returns an IndexOutOfBounds error value for

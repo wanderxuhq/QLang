@@ -150,10 +150,17 @@ HEAD 基线(`/tmp/sweep3/`):**17 绿**,含 `interpreter`(731s)、`selfhost`(1573
 - **B4 `/0` ⇒ IEEE:已定不动**。理由是代价:它要改三方差分预言机(`fuzzexpr.py` 明写「三方」)与
   `run_module_tests.py` 的双引擎断言,收益不抵。
 
-### C. **③ 用户级 `assert`/`expect`**(已定:要)
+### C. **③ 用户级 `assert`/`expect`**(部分落地:2026-10-25)
 用户代码今天**没有办法**断言自己的不变量(语言里没有 assert/expect)。Rust 的 `expect("理由")` 正是
 干这个的,官方也把「不变量被破」列为该 panic 的三类之一。实现与 `__panic` **同通道**;R1 要求它同时
 有可检查对照形式。
+
+**已落地 `assert`**:runtime 的 `assert(condition, message)`(失败
+`__panic("AssertionFailed", __str(message))` ⇒ stderr + exit 1,不可捕获;成功返回 null),
+runtime 注册为 native、boot 直接装同一实现;夹具 `t57_assert`,两个驱动各有 fatal 用例。
+`assert` 同时在 `qlangc.ql` 的 `moduleGlobalNames` 里,导入模块/函数可见。
+同源验收(interpreter 57 PASS、selfhost ALL PASS、stage3/stage4 IR identical)见
+`docs/rust-error-model.md` §3.7。`expect` 仍未做,与 Result/Option 的辅助函数一起设计(§3.6/§4)。
 
 ### D. **cause 链 provenance 真 bug**(§12,属错误模型本体)
 实测:`direct.line` 持久正确 ✓,但 `chained.cause.line` 给的是**读取所在的绑定行**(9/11/15)而不是

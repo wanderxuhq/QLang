@@ -152,7 +152,8 @@ cp /tmp/qlang-library-bundle.ql stdlib/bundle.ql
   `Array(Number)`、`Array(3)`、`Object({name: String})`。
 - 联合类型的规范构造子是 `A | B`,用 `std.Type.make` 组合:
   `let Union = (A, B) -> std.Type.make((v) -> A.check(v) || B.check(v));`
-  `Result(T) ≡ T | Error`、`Option(T) ≡ T | Null` 是设计方向;`stdlib/result.ql` 尚未实现。
+  `Result(T) ≡ T | Error`、`Option(T) ≡ T | Null` 已在 `stdlib/result.ql` 实现;
+  `?` 只允许在返回注解为 `Result(...)`/`Option(...)` 的函数(无注解/顶层为迁移期例外)。
 - `std.Type` 同时是类型值和模块;`std.Type.of` 返回**类型值**;内建类型对象的
   `check`/`raise`/`of`/`make` 受保护。`Error.raise(msg[, cause])` 构造错误值(不再是 `Error("msg")`)。
 
@@ -161,6 +162,8 @@ cp /tmp/qlang-library-bundle.ql stdlib/bundle.ql
 - 没有 throw/catch。错误是普通值,用 `isError`、后缀 `?`(传播)、`??`(错误回退)处理。
 - `?`:函数内立即返回该错误;顶层打印诊断到 stderr 并 **exit 1**。
 - `??` 只接 **Error**,不接 `null`:`null ?? 7` 仍是 `null`;`(1/0) ?? 7` 是 `7`。
+- `assert(condition, message)` 是**契约检查**而非错误处理:成功返回 `null`,失败打印
+  `AssertionFailed: <message>` 到 stderr 并 **exit 1**;失败不是 Error 值,不能被 `?`/`??`/`isError` 捕获。
 - 错误值只在三处合法:传播;读取自身字段(`.type/.message/.cause/.line/.col`)/打印;
   其余(算术、比较、索引、成员访问、序列化、**作为函数实参**)会产生新的链式 Error。
 - `Error` 值是 truthy,`!err` 是 `false`(已知不对称,两引擎一致)。
@@ -234,7 +237,7 @@ source.ql
   口径与切片见 **`docs/rust-error-model.md`**。它与 `unboxed-values-handoff.md` 冲突时,以新文件为准。
   当前切片已做:注解检查成功协议、`std.Option(T)`、`?` 只允许在 `Result`/`Option` 注解函数(无注解仍允许,迁移期)、
   Option 的 `?`（parser 内部标成 `?Option`,native 传 Null,boot 用 Return completion）、
-  `cannotBeError` 健全性门、boot 库函数导出修复。
+  `cannotBeError` 健全性门、boot 库函数导出修复、用户级 `assert`(契约违反 ⇒ fatal,两引擎同一实现)。
 - 原分支 `error-carried` @ `5d0f4e8`(已推 `origin`);从 `unboxed-values` 的 `394e473` 切出。
 - `unboxed-values` 已推 `origin`,**未合并**;合并前需作者明确同意。
 - `backup/nan-removal-stage1` = "去 NaN/∞"回滚现场;`error-carried` 合并后可删。
@@ -257,7 +260,9 @@ source.ql
       参数不足是合法部分应用)。站点 `runtime.ql:1941`;`interpreter.ql:1046/1097/1120`。
     - B4 `/0` 保持 `DivisionByZero` Error 值 —— 改成 IEEE 的候选已评估,要动三方差分预言机与双引擎断言,
       代价不抵,**已定不动**(不要重开)。
-  - **C**:用户级 `assert`/`expect`(今天语言里没有)。实现与 `__panic` 同通道;需可检查的对照形式。
+  - **C**:用户级 `assert` **已落地**(runtime 定义、`__native` 注册、boot 装同一实现;
+    夹具 `t57_assert` + 两驱动 fatal 用例)。`expect` 仍未做,与 Result/Option 辅助函数一起设计。
+    见 `docs/rust-error-model.md` §3.6。
   - **D**:cause 链 provenance 真 bug(probes §12):`chained.cause.line` 给读取所在的绑定行,
     而不是来源行。先逐语句 bisect 证实/证伪,再修 **`runtime.ql:97-120`** 的守卫。
     验收 `t38:38` 转绿。**不要改那条断言**,它在正确抓 bug。
@@ -352,7 +357,9 @@ source.ql
 - 子片 A 助手:`aot/qlangc.ql:1731` 旗标、`:1732-1760` 助手、`:964-967` 调用点。
 - 静态/运行期两通道边界:`aot/qlangc.ql:814-846`(`emitIdentifier`;`:832` 的 `sameBody`)。
 - `?` / `??` 发射:`aot/qlangc.ql:643` / `:552-553`;boot `interpreter.ql:713`;parser `parser.ql:825`。
-- 契约违反的致命原语:`aot/runtime.ql:511`(`__panic`);`std` 字面量 `:1861`;boot 过滤 `interpreter.ql:44`。
+- 契约违反的致命原语:`aot/runtime.ql:511`(`__panic`);`std` 字面量 `:1870`;boot 过滤 `interpreter.ql:44`。
+- 用户级契约检查:`runtime.ql:787`(`assert`,同 `__panic` 通道);`qlangc.ql:25` 的
+  `moduleGlobalNames` 负责让模块/函数解析到该槽;boot 直接装 runtime 的 `assert`(`interpreter.ql:105`)。
 - provenance 记录:`aot/runtime.ql:96-129`。
 - 类型值/派生类型:`aot/runtime.ql:1352-1362`;`README.md:809/827/867-872`;`tests/type_system.rs`。
 

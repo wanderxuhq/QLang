@@ -317,3 +317,61 @@ location** or previous call paths. Only failure edges allocate.」—— 而 `:9
 
 **关于 +6**(已知同族,非回归):`std.__panic` 这一项让 `__panic` 的闭包盒**变为可达** ⇒ 被发出;
 与 log ㉑ 记过的「一个**未被调用**的运行期函数」代价同族(那次数值 +105 IR / +41 机器)。
+
+## 14. 已实测:Result/Option 注解、Option 的 `?`、用户级 `assert`(2026-10-25)
+
+同源:`target/selfhost/stage2`(当前 `aot/qlangc.ql` + `aot/runtime.ql`)与
+`target/native-interpreter/interpreter`(同一编译器构建)。
+
+### 14.1 注解成功协议(Err 是值)
+
+```qlang
+let z = 0; let e = 1 / z;
+let a: Any = e;                    println(a.type);              // DivisionByZero
+let b: std.Result(Number) = e;     println(b.type);              // DivisionByZero
+let fail = () -> { let c: Number = e; c; };
+println(isError(fail()));                                        // true
+```
+
+⇒ `Any`/`Result(Number)` 存原 Error;`Number` 仍失败(在函数内是可观察的 `TypeCheck` 值;
+顶层绑定失败则按顶层未处理错误 exit 1)。夹具 `t56_result_annotations` 逐行匹配两引擎。
+
+### 14.2 Option 的类型与 `?`
+
+```qlang
+println(std.Option(Number).check(5));     // true
+println(std.Option(Number).check(null));  // true
+println(std.Option(Number).check("x"));   // false
+let none = (): std.Option(Number) -> { let v = null; let x = v?; 99; };
+println(none());                          // null
+```
+
+⇒ `None` = `null`;Option 函数里的 `?` 传播 `null`;Error 不是 Option(交返回边报 `TypeCheck`)。
+夹具 `t56` 的 None/Some/Error 三态在 native/boot 上一致。
+
+### 14.3 `?` 上下文约束
+
+```qlang
+let bad = (): Number -> { let z = 0; let v = (1 / z)?; v; };
+```
+
+native:`CompileError: …:1:51: ? requires a Result or Option return type`;boot:同一
+`ParseError` 位置与消息。`Result(Number)`/`Option(Number)`/无注解函数是合法对照
+(`run_semantic_diagnostic_tests.py` 的 `propagate-number`/`propagate-string` + `t56`)。
+
+### 14.4 用户级 `assert`
+
+```qlang
+println("before");
+assert(false, "boom");
+println("after");
+```
+
+| 引擎 | 实测 |
+|---|---|
+| native | rc=1,stdout=`before\n`,stderr=`AssertionFailed: boom` |
+| boot | rc=1,stdout 到 `before` 为止,stderr=`AssertionFailed: boom` |
+
+成功侧:`assert(true, "ok")` 返回 `null`;字符串/数组 truthy、对象消息均可用
+(夹具 `t57_assert`)。实现是 runtime 的 `assert`,通过 `__native(assert, "assert", false)`
+让 boot 直接调用同一份实现;`assert` 已进 `moduleGlobalNames`,导入模块/函数内可见。

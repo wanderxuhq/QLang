@@ -26,7 +26,7 @@
 | 旧口径(handoff) | 新口径(本文件) |
 |---|---|
 | `语法形式自动传播、函数调用显式` | **全部显式 `?`**;语法不自动传播 |
-| `Option(T) ≡ T|Null` 直接当类型 | Option 仍是 `T|Null` 的检查,但**不把 `null` 当 None 的 `?` 传播**;Option 的 `?` 留到后续切片 |
+| `Option(T) ≡ T|Null` 直接当类型 | Option 仍是 `T|Null` 的检查;`null` 就是 None,Option 函数里的 `?` 传播 `null`(切片 2 已落地) |
 | B4 `/0` 保持 `DivisionByZero` | 暂不改;是否走 IEEE 是独立语义决定,不与 Rust 传播模型捆绑 |
 | B2 缺失字段/索引 → Null | 暂不改;先让 Result/`?` 可用,再讨论索引/字段的 panic-vs-Option |
 | B1 StackOverflow / B3 arity → 致命 | 暂不改;panic 边界先不动,避免一次改太多 |
@@ -77,7 +77,7 @@ let Option = (T) -> {
 - `Option(Number).check(err)` → false(Error 不是 Option;Err 用 Result)
 
 加入 `stdlib/manifest.json` 的模块/导出;重建 `stdlib/bundle.ql` 并 `--check`。
-**不**在本切片实现 `Some/None` 构造器或 Option 的 `?` 传播——那需要先决定 Null 与 None 的区分。
+`Some/None` 构造器仍未实现;`None` 就是 `null`,Option 的 `?` 传播已在切片 2 落地(见 §3.5)。
 
 ### 3.3 `?` 的上下文约束(渐进式)
 
@@ -153,16 +153,17 @@ native 传 Null(tag 4),boot 用现有 Return completion 返回 Null。`isPropaga
 `?` 的结果静态收窄成 payload。判别夹具 IR 188025 → 188013(−12),`clang -O2` 机器指令
 **±0**;按“无收益不背复杂度”回滚。等 Result/Option 的调用点返回类型也能被跟踪时再做。
 
-当前数字(同源 `/tmp/o_new7`):
+当前数字(同源 native 编译器 `target/selfhost/stage2`,含切片 1/2 与 `assert`):
 
-| 项 | 基线 `5d0f4e8` | 切片 1 |
+| 项 | 基线 `5d0f4e8` | 当前 |
 |---|---|---|
-| `/tmp/t20.ql` IR | 187,738 | **188,301(+563)** |
-| `clang -O2` AArch64 指令 | 125,479 | **125,645(+166)** |
+| `/tmp/t20.ql` IR | 187,738 | **188,453(+715)** |
+| `clang -O2` AArch64 指令 | 125,479 | **125,735(+256)** |
 | 输出 | 20 | 20 |
 
-+563/+166 是健全性修复 + `Option` 库函数的成本,不是传播模型的收益;后续用
-`Result` 注解覆盖与死检查消除再回收。
++563/+166 是切片 1 的健全性修复 + `Option` 库函数成本;`assert` 再加 **+152/+90**
+(`__panic` 同通道的公开入口)。两者都不是传播模型的收益;后续用 `Result` 注解覆盖与
+死检查消除再回收。
 
 已通过的定向验收:
 
@@ -178,6 +179,63 @@ native 传 Null(tag 4),boot 用现有 Return completion 返回 Null。`isPropaga
   - `run_selfhost_tests.py --compiler /tmp/o_new10`:48 PASS;
   - stage2/stage3 IR identical。
 
+## 3.6 用户级 `assert`(切片 3,2026-10-25 落地)
+
+`assert(condition, message)` 是契约违反的公开入口:
+
+- 成功返回 `null`;
+- 失败走 `__panic("AssertionFailed", __str(message))`,即 `__exit_error`:
+  stderr 打印 `AssertionFailed: <message>`,进程 **exit 1**;
+- 失败**不是** Error 值,不可被 `?`/`??`/`isError` 捕获;数据失败仍用
+  `Result`/`Option`;
+- `condition` 本身是可检查的对照形式(R1):断言只检查调用方给的布尔,
+  没有“字符串开关”或可关闭的调试模式。
+
+实现口径:
+
+- `aot/runtime.ql` 的 `assert` 定义在 `println` 旁边,失败路径与 `__panic` 同一条;
+- 在 runtime 的 native 注册表加 `__native(assert, "assert", false)`。
+  boot 不另写一份实现,只把 runtime 的 `assert` 装进全局环境
+  (`bootstrapped/interpreter.ql`);因此两引擎共享参数规则、错误值拒绝规则和
+  同一条 fatal 通道。
+- `assert` 同时加入 `aot/qlangc.ql` 的 `moduleGlobalNames`:导入模块和函数体里的
+  `assert` 才会解析到 runtime 槽;否则 boot 源会报 `undeclared name: assert`。
+- `expect` 仍未实现;Rust 的 `unwrap/expect` 要等 Result/Option 的构造器/
+  辅助函数一起设计(§4)。
+
+验收:
+
+- `aot/tests/t57_assert.ql` + `.expected`:条件为 true、字符串/数组 truthy、
+  对象消息、返回 `null`;
+- `run_selfhost_tests.py` 与 `run_interpreter_tests.py` 各加一个 fatal 用例:
+  `println("before"); assert(false, "boom"); println("after");`
+  ⇒ exit 1、stdout 只到 `before`、stderr 含 `AssertionFailed: boom`。
+
+## 3.7 同源验收(2026-10-25)
+
+编译器:`target/selfhost/stage2`(由当前 `aot/qlangc.ql` + `aot/runtime.ql` 构建)。
+`run_selfhost_tests.py --self` 的 **stage2/stage3 IR 逐字节相同**;另外 stage3c/stage4c
+也逐字节相同。boot 由同一编译器构建(`target/native-interpreter/interpreter`)。
+
+| 套件 | 结果 |
+|---|---|
+| `run_semantic_diagnostic_tests.py` | 10/10 |
+| `run_interpreter_tests.py` | **ALL CHECKS PASS**,57 PASS(含 t56/t57、assert fatal、419 demo) |
+| `run_selfhost_tests.py --self` | **ALL REQUESTED CHECKS PASS**(含 stage2/stage3 IR identical) |
+| `run_assignment_tests.py` | ALL CHECKS PASS |
+| `run_diagnostic_tests.py` | ALL CHECKS PASS |
+| `run_source_context_tests.py` | ALL CHECKS PASS |
+| `run_scoped_module_tests.py` / `run_lazy_module_tests.py` | ALL CHECKS PASS |
+| `stdlib/run_string_tests.py` | ALL CHECKS PASS(193 contracts + Unicode oracle) |
+| `run_numeric_tests.py` / `run_array_tests.py` / `run_object_tests.py` | ALL CHECKS PASS |
+| `run_call_tests.py` | ALL CHECKS PASS |
+| `cargo test --offline` | 14 passed |
+| `stdlib/build_bundle.ql --check` | verified |
+| `/tmp/t20.ql` | IR 188,453;`clang -O2` 机器 125,735;输出 20 |
+
+未重跑的全量基线项保持 handoff §3.4 的已知状态(`module` 环境缺口、`extension` 先于本次红、
+`runtime_diag` 的 cause-provenance 真 bug);本次改动没有触碰它们。
+
 ## 4. 后续切片(不在本切片)
 
 1. **Result/Option 的命名空间与构造器**:`Ok/Err/Some/None`、`unwrap/expect`。
@@ -191,7 +249,8 @@ native 传 Null(tag 4),boot 用现有 Return completion 返回 Null。`isPropaga
 4. **索引/字段的 Rust 化**:`a[i]` 越界 panic + `a.get(i)` Option;`.field` panic +
    `Object.get` Option。与 B2 的 Null 方案二选一。
 5. **`/0` 的 IEEE**:若最终选择 Rust f64 语义,需改三方差分预言机与双引擎断言。
-6. **panic 面收口**:B1/B3/C、`unwrap/expect`、宿主边界(`runSource` fatal result、独立退出码)。
+6. **panic 面收口**:B1/B3、`unwrap/expect`、宿主边界(`runSource` fatal result、独立退出码)。
+   用户级 `assert` 已落地(§3.6);`expect` 仍归入 Result/Option 辅助函数。
 
 ## 5. 纪律
 

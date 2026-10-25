@@ -782,6 +782,13 @@ let println = (v) -> {
   null;
 };
 
+// User-level contract check (R1: the condition itself is the checkable form).
+// Failing it is a contract violation, not a value: __panic exits the process.
+let assert = (condition, message) -> {
+  if !condition { __panic("AssertionFailed", __str(message)); };
+  null;
+};
+
 // ---- M3 T3:错误链格式化 + 顶层未捕获错误退出 ----
 
 // 错误链文本:`{kind}: {message}` + 每级 cause `\n  └─ caused by: {kind}: {message}`
@@ -2075,6 +2082,7 @@ writeU64(__error_construct, 32, 5);
 __native(__error_tostring, "Error.toString", true);
 __native(print, "print", true);
 __native(println, "println", true);
+__native(assert, "assert", false);
 __native(isError, "isError", true);
 __native(Array, "Array", false);
 __native(Object, "Object", false);

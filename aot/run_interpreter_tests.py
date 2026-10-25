@@ -45,7 +45,7 @@ def main():
             link(ir, interpreter)
         subprocess.run([sys.executable, str(ROOT / 'aot/run_argument_tests.py'),
                         '--interpreter', str(interpreter)], check=True, timeout=TIMEOUT)
-        for name in ['t16_functions', 't17_bootstrap', 't19_literals', 't20_native_bridge', 't21_assignments', 't22_lifetimes', 't23_inline_values', 't24_call_buffers', 't25_numeric', 't26_extrema', 't27_native_calls', 't28_objects', 't29_arrays', 't30_strings', 't31_library_loading', 't32_value_access', 't33_builtin_bindings', 't34_numeric_syntax', 't35_scoped_modules', 't36_lazy_modules', 't41_math_library', 't43_number_library', 't48_object_library', 't49_raw_object_index', 't50_raw_value_type_checks', 't51_value_access_errors', 't52_expression_return', 't53_return_boundaries', 't54_json_stringify', 't55_return_types', 't56_result_annotations', 't45_native_function_members', 't46_number_literal_keys', 't47_finite_number_rendering']:
+        for name in ['t16_functions', 't17_bootstrap', 't19_literals', 't20_native_bridge', 't21_assignments', 't22_lifetimes', 't23_inline_values', 't24_call_buffers', 't25_numeric', 't26_extrema', 't27_native_calls', 't28_objects', 't29_arrays', 't30_strings', 't31_library_loading', 't32_value_access', 't33_builtin_bindings', 't34_numeric_syntax', 't35_scoped_modules', 't36_lazy_modules', 't41_math_library', 't43_number_library', 't48_object_library', 't49_raw_object_index', 't50_raw_value_type_checks', 't51_value_access_errors', 't52_expression_return', 't53_return_boundaries', 't54_json_stringify', 't55_return_types', 't56_result_annotations', 't57_assert', 't45_native_function_members', 't46_number_literal_keys', 't47_finite_number_rendering']:
             source = ROOT / 'aot/tests' / (name + '.ql')
             expected = source.with_suffix('.expected').read_bytes()
             # Run outside the repository: interpreter dependencies must be in the
@@ -53,6 +53,13 @@ def main():
             actual = body(execute(interpreter, source, cwd=work))
             assert actual == expected, (name, actual, expected)
             print('PASS native interpreter:', name, flush=True)
+        assert_source = work / 'assert-fatal.ql'
+        assert_source.write_text('println("before");\nassert(false, "boom");\nprintln("after");\n')
+        result = execute(interpreter, assert_source, cwd=work)
+        assert result.returncode == 1, (result.returncode, result.stdout, result.stderr)
+        assert b'before\n' in result.stdout and b'after\n' not in result.stdout, result.stdout
+        assert b'AssertionFailed: boom' in result.stderr, result.stderr
+        print('PASS native interpreter: assert(false) is a fatal contract violation', flush=True)
         result = body(execute(interpreter, ROOT / 'demo/type_gymnastics.ql', cwd=work))
         assert b'RESULT: 419/419 asserts passed\n' in result, result
         print('PASS native interpreter: 419 type-system assertions', flush=True)

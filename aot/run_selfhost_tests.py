@@ -41,6 +41,19 @@ def check_program(compiler, source, expected, work, name):
     assert result.stdout == expected, (name, result.stdout, result.stderr)
     print('PASS native compiler:', name, flush=True)
 
+def check_assert_fatal(compiler, work):
+    source = work / 'assert-fatal.ql'
+    source.write_text('println("before");\nassert(false, "boom");\nprintln("after");\n')
+    ir = work / 'assert-fatal.ll'; binary = work / 'assert-fatal'
+    emit(compiler, source, ir); link(ir, binary)
+    # A fatal contract violation exits 1 by design; do not use run(), which
+    # treats any nonzero status as an infrastructure failure.
+    result = subprocess.run([str(binary)], capture_output=True, timeout=TIMEOUT)
+    assert result.returncode == 1, (result.returncode, result.stdout, result.stderr)
+    assert result.stdout == b'before\n', result.stdout
+    assert b'AssertionFailed: boom' in result.stderr, result.stderr
+    print('PASS native compiler: assert(false) is a fatal contract violation', flush=True)
+
 def check_rejections(compiler, work):
     for name, text in [('undeclared', 'println(missing);'),
                        ('private-runtime-read', 'println(__arr_add);'),
@@ -161,9 +174,10 @@ def main():
         check_program(stage1, number, number.with_suffix('.expected').read_bytes(), work, 'portable-number')
         members = ROOT / 'aot/tests/t45_native_function_members.ql'
         check_program(stage1, members, members.with_suffix('.expected').read_bytes(), work, 'native-function-members')
-        for name in ['t46_number_literal_keys', 't47_finite_number_rendering', 't48_object_library', 't49_raw_object_index', 't50_raw_value_type_checks', 't51_value_access_errors', 't52_expression_return', 't53_return_boundaries', 't54_json_stringify', 't55_return_types', 't56_result_annotations']:
+        for name in ['t46_number_literal_keys', 't47_finite_number_rendering', 't48_object_library', 't49_raw_object_index', 't50_raw_value_type_checks', 't51_value_access_errors', 't52_expression_return', 't53_return_boundaries', 't54_json_stringify', 't55_return_types', 't56_result_annotations', 't57_assert']:
             fixture = ROOT / 'aot/tests' / (name + '.ql')
             check_program(stage1, fixture, fixture.with_suffix('.expected').read_bytes(), work, name)
+        check_assert_fatal(stage1, work)
         check_return_scope_rejections(stage1, work)
         if options.self:
             second = work / 'stage2.ll'; third = work / 'stage3.ll'; stage2 = work / 'stage2'
