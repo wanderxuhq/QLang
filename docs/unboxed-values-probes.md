@@ -375,3 +375,38 @@ println("after");
 成功侧:`assert(true, "ok")` 返回 `null`;字符串/数组 truthy、对象消息均可用
 (夹具 `t57_assert`)。实现是 runtime 的 `assert`,通过 `__native(assert, "assert", false)`
 让 boot 直接调用同一份实现;`assert` 已进 `moduleGlobalNames`,导入模块/函数内可见。
+
+## 15. 已实测:直接调用与纯 Number 内联(2026-10-26)
+
+同源 `target/selfhost/stage2` 形态;判别夹具 `t58_direct_calls` / `t59_inline_pure`。
+
+```qlang
+// direct: 不可变 leaf,无参数注解,实参均 cannotBeError
+let add = (a, b) -> a + b;
+let i = 0; let s = 0;
+while i < 5 { s = add(i, 1); i = i + 1; };
+
+// raw inline: 单调用点、无 value use、参数/返回 Number、body 纯 + 且无自由变量
+let pure = (a: Number, b: Number): Number -> a + b;
+let j = 0; let t = 0;
+while j < 5 { t = pure(j, 1); j = j + 1; };
+```
+
+| 形状 | 机器指令 |
+|---|---:|
+| 空文件 | 125,673 |
+| 直接调用判别 | **125,870** |
+| 同上走后门 `f = add; f(i,1)` | 125,889 |
+| 纯 Number 内联判别 | **125,744** |
+| 同上走后门 `f = pure; f(j,1)` | 125,939 |
+
+⇒ 直接调用静态 **−19**,但循环体不再进入 771 条静态指令的通用分派体;纯 Number
+内联 **−195**,函数体/闭包被删掉,循环体成为 raw `fadd`。20M 次微基准本机用户态:
+内联约 **0.05–0.08s**,通用分派约 **36s**(后台套件争用,仅量级参考)。
+
+**失效条件(已加判别)**:赋值、重声明、export、value use(别名)、参数注解、
+参数不足/超参、实参可能为 Error、body 有调用、body 有自由变量、非 Number 运算。
+`t59` 覆盖重声明、赋值、value use、捕获自由变量;`t58` 覆盖别名、部分应用、
+Error 实参、注解参数、返回注解、leaf 内赋值与 body Error。
+同源 p0f:`stage2/stage3` IR 相同;interpreter 59 PASS;selfhost ALL CHECKS PASS;
+call/array/object/numeric/assignment/diagnostic ALL CHECKS PASS。

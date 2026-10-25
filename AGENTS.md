@@ -238,6 +238,9 @@ source.ql
   当前切片已做:注解检查成功协议、`std.Option(T)`、`?` 只允许在 `Result`/`Option` 注解函数(无注解仍允许,迁移期)、
   Option 的 `?`（parser 内部标成 `?Option`,native 传 Null,boot 用 Return completion）、
   `cannotBeError` 健全性门、boot 库函数导出修复、用户级 `assert`(契约违反 ⇒ fatal,两引擎同一实现)。
+- **2026-10-26**:P0 直接调用/纯 Number 内联落地(不可变 leaf 绑定的直接 boxed 调用;
+  单调用点纯 Number 函数 raw 内联)。判别 `t58_direct_calls` / `t59_inline_pure`;
+  设计/边界见 `docs/direct-call-optimization.md`。
 - 原分支 `error-carried` @ `5d0f4e8`(已推 `origin`);从 `unboxed-values` 的 `394e473` 切出。
 - `unboxed-values` 已推 `origin`,**未合并**;合并前需作者明确同意。
 - `backup/nan-removal-stage1` = "去 NaN/∞"回滚现场;`error-carried` 合并后可删。
@@ -337,7 +340,7 @@ source.ql
 | 语法/词法/解析/语法糖 | `bootstrapped/lexer.ql`, `parser.ql`, `ast.ql` |
 | 解释执行语义 | `bootstrapped/interpreter.ql`, `environment.ql`;`aot/runtime.ql` |
 | 编译期分析(类型/表示/收窄) | `aot/types.ql` |
-| 代码发射 | `aot/qlangc.ql` |
+| 代码发射 | `aot/qlangc.ql`;直接调用/纯 Number 内联见 `docs/direct-call-optimization.md` |
 | 热机制/ABI 叶子 | `aot/value_abi.ql`;`aot/runtime.c` |
 | stdlib 算法 | `stdlib/*.ql` + `manifest.json` + 重建 `bundle.ql` |
 | 夹具/金文件 | `aot/tests/*.ql` / `.expected`;`bootstrapped/tests/*` |

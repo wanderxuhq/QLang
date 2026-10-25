@@ -770,6 +770,202 @@ let ordCallsTotal = 0;
 let ordCallsEmitted = 0;
 let ordCallsRetRaw = 0;
 let ordCallsNotYet = 0;
+// P0 direct-call slice: only user-program bindings, only while the flag is on;
+// library/runtime emission keeps its existing eager/dynamic path.
+let allowDirectUserCalls = false;
+let directCalls = 0;
+// Conservative name-level assignment scan: a name assigned anywhere in the
+// user program is never direct-called (shadowing makes this over-approximate,
+// never unsound).
+let assignedUserNames = {};
+let letSeenNames = {};
+let redeclaredUserNames = {};
+let exportedUserNames = {};
+let collectAssignedNames = (node, names) -> {
+  if AnyArray.check(node) {
+    let i = 0; while i < node.length { collectAssignedNames(node[i], names); i = i + 1; };
+  } else if AnyObject.check(node) {
+    if !isError(node.type) && node.type == "Import" { return null; };
+    if !isError(node.type) && node.type == "Export" && !isError(node.name) {
+      exportedUserNames[node.name] = true;
+    };
+    if !isError(node.type) && node.type == "Let" && !isError(node.name) {
+      if !isError(letSeenNames[node.name]) { redeclaredUserNames[node.name] = true; }
+      else { letSeenNames[node.name] = true; };
+    };
+    if !isError(node.type) && node.type == "Assign" && !isError(node.target) && !isError(node.target.type) && node.target.type == "Identifier" {
+      names[node.target.name] = true;
+    };
+    let keys = std.Object.keys(node); let i = 0;
+    while i < keys.length { collectAssignedNames(node[keys[i]], names); i = i + 1; };
+  };
+  null;
+};
+// A function is a leaf when its own body contains no call/import; nested
+// function definitions are values, not calls, and are skipped.
+let functionBodyIsLeaf = (node) -> {
+  if AnyArray.check(node) {
+    let i = 0;
+    while i < node.length {
+      if !functionBodyIsLeaf(node[i]) { return false; };
+      i = i + 1;
+    };
+  } else if AnyObject.check(node) {
+    let t = node.type;
+    if !isError(t) && t == "Function" { return true; };
+    if !isError(t) && (t == "Call" || t == "Import") { return false; };
+    let keys = std.Object.keys(node); let i = 0;
+    while i < keys.length {
+      if !functionBodyIsLeaf(node[keys[i]]) { return false; };
+      i = i + 1;
+    };
+  };
+  true;
+};
+let callArgsCannotBeError = (args) -> {
+  let i = 0;
+  while i < args.length {
+    let flag = args[i].cannotBeError;
+    if isError(flag) || flag != true { return false; };
+    i = i + 1;
+  };
+  true;
+};
+// Raw inlining for a very narrow shape: a pure Number function whose only
+// reference is one direct call. The function definition is not emitted; the
+// call site evaluates the body with raw Number parameters.
+let inlineSubst = null;
+let inlineCandidates = {};
+let inlineUsed = 0;
+let collectDirectRefs = (node, refs) -> {
+  if AnyArray.check(node) {
+    let i = 0; while i < node.length { collectDirectRefs(node[i], refs); i = i + 1; };
+  } else if AnyObject.check(node) {
+    let t = node.type;
+    if !isError(t) && t == "Import" { return null; };
+    if !isError(t) && t == "Call" {
+      let callee = node.callee;
+      if !isError(callee) && !isError(callee.type) && callee.type == "Identifier" {
+        let bid = callee.bindId;
+        if !isError(bid) && bid >= 0 {
+          let slot = refs[bid];
+          if isError(slot) { slot = { value: 0, callee: 0, call: null }; refs[bid] = slot; };
+          slot.callee = slot.callee + 1;
+          slot.call = node;
+        };
+      } else {
+        collectDirectRefs(callee, refs);
+      };
+      let ai = 0;
+      while ai < node.arguments.length { collectDirectRefs(node.arguments[ai], refs); ai = ai + 1; };
+      return null;
+    };
+    if !isError(t) && t == "Identifier" {
+      let bid = node.bindId;
+      if !isError(bid) && bid >= 0 {
+        let slot = refs[bid];
+        if isError(slot) { slot = { value: 0, callee: 0, call: null }; refs[bid] = slot; };
+        slot.value = slot.value + 1;
+      };
+    };
+    let keys = std.Object.keys(node); let i = 0;
+    while i < keys.length { collectDirectRefs(node[keys[i]], refs); i = i + 1; };
+  };
+  null;
+};
+let inlineBodyAllowed = (expr) -> {
+  if expr == null || isError(expr) { return false; };
+  let t = expr.type;
+  if isError(t) { return false; };
+  if expr.staticType != "Number" || expr.cannotBeError != true { return false; };
+  if t == "Number" || t == "Identifier" { return true; };
+  if t == "UnaryOp" { return expr.operator == "-" || expr.operator == "+"; };
+  if t == "BinaryOp" {
+    let op = expr.operator;
+    return op == "+" || op == "-" || op == "*" || op == "&" || op == "|" || op == "^";
+  };
+  false;
+};
+let inlineBodyUsesOnlyParams = (node, pids) -> {
+  if AnyArray.check(node) {
+    let i = 0;
+    while i < node.length { if !inlineBodyUsesOnlyParams(node[i], pids) { return false; }; i = i + 1; };
+  } else if AnyObject.check(node) {
+    if !isError(node.type) && node.type == "Function" { return false; };
+    if !isError(node.type) && node.type == "Identifier" {
+      let bid = node.bindId;
+      if isError(bid) || bid < 0 { return false; };
+      let ok = false; let i = 0;
+      while i < pids.length { if pids[i] == bid { ok = true; }; i = i + 1; };
+      if !ok { return false; };
+    };
+    let keys = std.Object.keys(node); let i = 0;
+    while i < keys.length { if !inlineBodyUsesOnlyParams(node[keys[i]], pids) { return false; }; i = i + 1; };
+  };
+  true;
+};
+let collectInlineCandidates = (node, refs, candidates) -> {
+  if AnyArray.check(node) {
+    let i = 0; while i < node.length { collectInlineCandidates(node[i], refs, candidates); i = i + 1; };
+  } else if AnyObject.check(node) {
+    let t = node.type;
+    if !isError(t) && t == "Import" { return null; };
+    if !isError(t) && t == "Let" && node.value != null && !isError(node.value.type) && node.value.type == "Function"
+       && !isError(node.bindId) && node.bindId >= 0 && (node.annotation == null || isError(node.annotation))
+       && isError(redeclaredUserNames[node.name]) && isError(exportedUserNames[node.name]) {
+      let bid = node.bindId;
+      let r = refs[bid];
+      if !isError(r) && r != null && r.value == 0 && r.callee == 1 {
+        let fn = node.value;
+        let params = fn.parameters;
+        let stmts = fn.body.statements;
+        let cok = stmts.length == 1 && inlineBodyAllowed(stmts[0]) && functionBodyIsLeaf(stmts[0]);
+        let retOk = isError(fn.declaredReturnType) || fn.declaredReturnType == "" || fn.declaredReturnType == "Number";
+        let p = 0;
+        while cok && p < params.length {
+          if isError(params[p].unboxType) || params[p].unboxType != "Number" { cok = false; };
+          if isError(params[p].bindId) || params[p].bindId < 0 { cok = false; };
+          p = p + 1;
+        };
+        let call = r.call;
+        if cok && call != null && !isError(call) && call.arguments.length == params.length {
+          let a = 0;
+          while cok && a < call.arguments.length {
+            let arg = call.arguments[a];
+            if arg.staticType != "Number" || arg.cannotBeError != true { cok = false; };
+            a = a + 1;
+          };
+        } else { cok = false; };
+        if cok && retOk {
+          let pids = []; let pi = 0;
+          while pi < params.length { pids[pids.length] = params[pi].bindId; pi = pi + 1; };
+          if inlineBodyUsesOnlyParams(stmts[0], pids) {
+            candidates[bid] = { arity: params.length, params: pids, body: stmts[0] };
+          };
+        };
+      };
+    };
+    let keys = std.Object.keys(node); let i = 0;
+    while i < keys.length { collectInlineCandidates(node[keys[i]], refs, candidates); i = i + 1; };
+  };
+  null;
+};
+let buildInlineCandidates = (program) -> {
+  let refs = {};
+  collectDirectRefs(program, refs);
+  collectInlineCandidates(program, refs, inlineCandidates);
+};
+let emitInlineDirect = (info, values) -> {
+  let saved = inlineSubst; inlineSubst = {};
+  let i = 0;
+  while i < values.length {
+    inlineSubst[info.params[i]] = { reg: emitFloat(values[i]), raw: "Number" };
+    i = i + 1;
+  };
+  let r = emitValue(info.body);
+  inlineSubst = saved;
+  if r.raw == "Number" { emitFloatValue(r.reg); } else { r.reg; };
+};
 
 // Frames reserve slots ahead of time, but declarations become visible in
 // source order. An all-zero internal value is binding state, never QLang null.
@@ -940,8 +1136,14 @@ let emitLetStmt = (node) -> {
   let deadCheck = !inRuntime && (typeFree || checkIsDead(node.value, node.annotationType));
   if annotated && !typeFree { ty = emitExpr(node.annotation); text = internString(annotationText(node.annotation)); };
   let value = "null";
+  let inline = null;
+  if allowDirectUserCalls && node.value != null && !isError(node.value.type) && node.value.type == "Function" && !isError(node.bindId) {
+    let candidate = inlineCandidates[node.bindId];
+    if !isError(candidate) && candidate != null { inline = candidate; };
+  };
   if node.value != null {
-    if node.value.type == "Function" { value = emitFunction(node.value, node.name); }
+    if inline != null { value = emitNull(); }
+    else if node.value.type == "Function" { value = emitFunction(node.value, node.name); }
     else { value = emitExpr(node.value); };
     // A typed binding holds only its type. The check's value still goes through
     // __err_at first, so a failing check carries the declaration's source position,
@@ -992,11 +1194,30 @@ let emitLetStmt = (node) -> {
     if value == "null" && !isError(node.unboxType) && node.unboxType == "Number" { value = "{ i64 1, i64 0 }"; };
     emitBindingStore(off, value, ty, text);
   };
+  // P0: a named function literal becomes a direct-call target only when it is
+  // a leaf, has no parameter annotations (the dispatcher normally owns those
+  // checks), is never assigned by name, and its definition was emitted.
+  // A pure Number inline candidate has no emitted definition at all.
+  // Every let invalidates an older target first (redeclaration may replace a
+  // function with an ordinary value).
+  if allowDirectUserCalls {
+    if isError(curScope.directFns) { curScope.directFns = {}; };
+    curScope.directFns[node.name] = null;
+    if node.value != null && !isError(node.value.type) && node.value.type == "Function"
+       && isError(assignedUserNames[node.name]) && isError(redeclaredUserNames[node.name]) && isError(exportedUserNames[node.name]) {
+      if inline != null {
+        curScope.directFns[node.name] = { inline: true, arity: inline.arity, params: inline.params, body: inline.body };
+      } else if !isError(node.value.emittedIr) && node.value.directLeaf == true && node.value.directNoParamAnnotations == true {
+        curScope.directFns[node.name] = { ir: node.value.emittedIr, arity: node.value.parameters.length };
+      };
+    };
+  };
   slot;
 };
 let emitStoreByName = (name, expression, target, declaredType) -> {
   let hit = lookupSlot(name);
   if hit == null { addCompileError(target, "assignment to undeclared name: " + name); return null; };
+  if allowDirectUserCalls && !isError(hit.scope.directFns) { hit.scope.directFns[name] = null; };
   let rv = emitValue(expression);
   // 裸槽的写入:只写 payload 位(标签早已是 NUMBER,槽仍是合法 Number 盒),不必先装箱。
   if !inRuntime && !isError(hit.scope.unbox) && !isError(hit.scope.unbox[name]) && rv.raw == "Number" {
@@ -1118,6 +1339,21 @@ let emitFunction = (node, name) -> {
   if name != "" { curScope.active[name] = true; };
   let fname = "ql_fn" + std.String.toString(funcCounter);
   funcCounter = funcCounter + 1;
+  node.emittedIr = fname;
+  if allowDirectUserCalls && name != "" && !inRuntime {
+    let hasParamAnnotation = false;
+    let pi = 0;
+    while pi < node.parameters.length {
+      let ann = node.parameters[pi].annotation;
+      if ann != null && !isError(ann) { hasParamAnnotation = true; };
+      pi = pi + 1;
+    };
+    node.directLeaf = functionBodyIsLeaf(node.body);
+    node.directNoParamAnnotations = !hasParamAnnotation;
+  } else {
+    node.directLeaf = false;
+    node.directNoParamAnnotations = false;
+  };
   if isModule { moduleFactories[node.modulePath] = fname; };
   let savedScope = curScope;
   let savedEnv = curEnv;
@@ -1442,8 +1678,7 @@ let emitInt = (value, width) -> {
 // A direct call to an already-defined runtime function: same frame/closure as the
 // boxed form, but the code address is known, so no pointer load and no indirect
 // branch. Arguments still go through the ordinary buffer.
-let emitDirectCall = (irName, name, argRegs) -> {
-  let FN = emitIdentifier({ type: "Identifier", name: name, internal: true });
+let emitDirectCallValue = (irName, FN, argRegs) -> {
   let pointer = emitPointer(FN);
   let ep = temp(); let env = temp(); let ap = temp(); let annotations = temp();
   line("  " + ep + " = getelementptr i8, ptr " + pointer + ", i64 16");
@@ -1465,6 +1700,10 @@ let emitDirectCall = (irName, name, argRegs) -> {
   line("  " + r + " = call %ql_value @" + irName + "(ptr " + env + ", ptr " + arr + ", i64 " + std.String.toString(narg) + ", %ql_value " + annotations + ")");
   line("  call void @llvm.lifetime.end.p0(i64 " + std.String.toString(bytes) + ", ptr " + arr + ")");
   r;
+};
+let emitDirectCall = (irName, name, argRegs) -> {
+  let FN = emitIdentifier({ type: "Identifier", name: name, internal: true });
+  emitDirectCallValue(irName, FN, argRegs);
 };
 let emitCallRegs = (fname, argRegs) -> {
   // NOTE(deviation from brief): emitIdentifier 现签名取 Identifier 节点(读 node.name),
@@ -1523,6 +1762,19 @@ let emitBorrowedCall = (fn, values, exempt) -> {
   result;
 };
 
+let directCallTarget = (node, cname) -> {
+  if !allowDirectUserCalls || inRuntime || inColdHelper { return null; };
+  let hit = lookupSlot(cname);
+  if hit == null { return null; };
+  let table = hit.scope.directFns;
+  if isError(table) || table == null { return null; };
+  let info = table[cname];
+  if isError(info) || info == null { return null; };
+  if !isError(assignedUserNames[cname]) && assignedUserNames[cname] == true { return null; };
+  if node.arguments.length != info.arity { return null; };
+  if !callArgsCannotBeError(node.arguments) { return null; };
+  info;
+};
 let emitCall = (node) -> {
   let calleeIsId = node.callee.type == "Identifier";
   let cname = if calleeIsId { node.callee.name } else { "" };
@@ -1637,6 +1889,14 @@ let emitCall = (node) -> {
     let number = temp(); line("  " + number + " = sitofp i64 " + result + " to double");
     return emitFloatValue(number);
   };
+  let direct = null;
+  if calleeIsId { direct = directCallTarget(node, cname); };
+  if direct != null && !isError(direct.inline) && direct.inline == true {
+    let inlineValues = []; let ii = 0;
+    while ii < node.arguments.length { inlineValues.add(emitExpr(node.arguments[ii])); ii = ii + 1; };
+    directCalls = directCalls + 1; inlineUsed = inlineUsed + 1;
+    return emitInlineDirect(direct, inlineValues);
+  };
   let FN = emitExpr(node.callee); let values = []; let i = 0;
   while i < node.arguments.length { values.add(emitExpr(node.arguments[i])); i = i + 1; };
   // ②a 补充量测:这个用户调用点能不能在发射序上变成直接调用(⇒ 才能吃裸签名)。
@@ -1646,6 +1906,13 @@ let emitCall = (node) -> {
       ordCallsEmitted = ordCallsEmitted + 1;
       if ordFnRetNum[cname] == true { ordCallsRetRaw = ordCallsRetRaw + 1; };
     } else { ordCallsNotYet = ordCallsNotYet + 1; };
+  };
+  if direct != null {
+    // The target is an immutable leaf with an exact arity and non-Error
+    // arguments; the generic dispatcher's argument/arity/annotation/depth
+    // checks are statically discharged, so a direct boxed-ABI call is safe.
+    directCalls = directCalls + 1;
+    return emitDirectCallValue(direct.ir, FN, values);
   };
   let trusted = false;
   if inRuntime && calleeIsId && !isError(runtimeFunctions[cname]) {
@@ -1898,6 +2165,12 @@ let emitRawBoolean = (node) -> {
   c;
 };
 let emitValue = (node) -> {
+  // Raw-inline substitution: a parameter of an inlined pure Number function
+  // reads its caller argument directly as a double.
+  if inlineSubst != null && !isError(node.type) && node.type == "Identifier" && !isError(node.bindId) {
+    let sub = inlineSubst[node.bindId];
+    if !isError(sub) && sub != null { return sub; };
+  };
   // 分析期已经算出这个值的自然表示;生成端只消费结论,不猜。裸值在边界处才装箱。
   let sr = emitNaturalRep(node);
   let kind = node.type;
@@ -2216,7 +2489,11 @@ let main = (args) -> {
   let exportsOff = emitBindingPtr({depth: 0, slot: curScope.slots["$exports"]});
   emitBindingStore(exportsOff, moduleExportsReg, "null", "null");
   emitSetModuleLoading(path, true);
+  collectAssignedNames(userProgram.statements, assignedUserNames);
+  buildInlineCandidates(userProgram.statements);
+  allowDirectUserCalls = true;
   let last = emitBlockStmts(userProgram.statements);
+  allowDirectUserCalls = false;
   emitSetModuleLoading(path, false);
   // The CLI reports an unhandled final Error, just as the host interpreter does.
   if last != null {
@@ -2269,7 +2546,7 @@ let main = (args) -> {
   // 命中数:分析期证明不可能出错、因而整块省掉定位测试的节点数(主函数体发完之后才知道)。
   out[out.length] = "; located-error elided: " + std.String.toString(locErrorElided);
   // ②a 补充:发射序折扣(同样要等主函数体发完 —— 函数体是在 main 发射过程中才发现并发出的)。
-  out[out.length] = "; rawABI order: usercalls=" + std.String.toString(ordCallsTotal) + " emitted=" + std.String.toString(ordCallsEmitted) + " notyet=" + std.String.toString(ordCallsNotYet) + " retraw=" + std.String.toString(ordCallsRetRaw);
+  out[out.length] = "; rawABI order: usercalls=" + std.String.toString(ordCallsTotal) + " emitted=" + std.String.toString(ordCallsEmitted) + " notyet=" + std.String.toString(ordCallsNotYet) + " retraw=" + std.String.toString(ordCallsRetRaw) + " direct=" + std.String.toString(directCalls) + " inline=" + std.String.toString(inlineUsed);
   // R10-c: out[0..mainAt) = prelude plus the cold helper, then every function body,
   // then main. Function bodies come before their direct callers because this
   // toolchain has no forward declarations; the closure boxes keep the order
