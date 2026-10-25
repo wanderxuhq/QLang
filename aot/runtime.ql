@@ -1437,7 +1437,9 @@ let __s_at = (s, idx) -> {
 };
 let __s_codepoint = (s) -> {
   if readU64(s, 0) != 2 { return __err("TypeMismatch", "String.codePointAt expects String"); };
-  (idx): Number -> {
+  // Migration debt: `?` can return an Error, so this inner function must not
+  // claim `: Number` until it is migrated to a Result return type.
+  (idx) -> {
     if readU64(idx, 0) != 1 { return __err("TypeMismatch", "String.codePointAt expects Number"); };
     let buf = ql_mem_get_ptr(s, 8);
     let at = __norm_idx(idx, __s_len(s))?;

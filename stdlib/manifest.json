@@ -39,6 +39,10 @@
     {
       "name": "Result",
       "value": "Result"
+    },
+    {
+      "name": "Option",
+      "value": "Option"
     }
   ]
 }

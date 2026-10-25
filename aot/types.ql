@@ -267,6 +267,22 @@ let typeSolveWrites = (list) -> {
   while i < list.length { typeBindingProne(list[i]); i = i + 1; };
   null;
 };
+// runtimeTypeFree was decided during collection from "no unknown-type writes".
+// A known static type can still be an Error (division by a variable zero, a
+// call whose result is not proven), so refine it after the prone fixpoint:
+// only bindings whose every write is provably Error-free may drop the runtime
+// type slot and check.
+let typeRefreshRuntimeChecks = (list) -> {
+  let i = 0;
+  while i < list.length {
+    let st = list[i];
+    if !isError(st) && !isError(st.decl) && st.decl != null && st.decl.runtimeTypeFree == true {
+      if st.prone == true || st.unk == true { st.decl.runtimeTypeFree = false; };
+    };
+    i = i + 1;
+  };
+  null;
+};
 // 空串不适合当对象的键,诊断桶里记作 "boxed"。
 let repKey = (rep) -> { if rep == "" { return "boxed"; }; rep; };
 let tagRep = (node, rep) -> {
@@ -800,7 +816,7 @@ let inferStmts = (stmts) -> {
       if typeCollectWrites {
         bindId = typeBindCount[typeProgram];
         typeBindCount[typeProgram] = bindId + 1;
-        let st = { base: isError(typeScalar[bindingType]), prone: false, busy: false, done: false, writes: [], unk: (value == "" || isError(value)) };
+        let st = { base: isError(typeScalar[bindingType]), prone: false, busy: false, done: false, writes: [], unk: (value == "" || isError(value)), decl: s };
         if s.value != null { st.writes[0] = s.value; };
         typeBindTable[typeProgram][bindId] = st;
       } else {
@@ -963,6 +979,9 @@ let inferTypes = (stmts) -> {
   typeDepth = 1;
   typeReturnDepth = 0;
   inferStmts(stmts);
+  // The second pass rewrites runtimeTypeFree from the unknown-write set; refine
+  // it now with the prone fixpoint so a known-but-fallible write keeps its check.
+  typeRefreshRuntimeChecks(typeBindTable[typeProgram]);
   typeErrors;
 };
 
@@ -971,6 +990,10 @@ let isStaticNumber = (node) -> !isError(node.staticType) && node.staticType == "
 let checkIsDead = (valueNode, declaredName) -> {
   if declaredName == "" { return false; };
   if isError(valueNode.staticType) { return false; };
+  // staticType is not enough: a Number-typed expression can still be an Error
+  // (division by a variable zero, a call whose annotation is only a promise).
+  // Only an expression proven not to produce an Error may skip the runtime check.
+  if isError(valueNode.cannotBeError) || valueNode.cannotBeError != true { return false; };
   valueNode.staticType == declaredName;
 };
 

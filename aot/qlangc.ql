@@ -868,6 +868,57 @@ let emitBindingStore = (off, value, ty, text) -> {
   let present = temp(); line("  " + present + " = getelementptr i8, ptr " + off + ", i64 48");
   line("  store i64 1, ptr " + present);
 };
+// An annotation check normally returns the value on success and a TypeCheck
+// Error on failure, and the caller propagates any Error. That is right for the
+// built-in predicates that reject Errors, but wrong for Result(T), Any, Error
+// and user/composite types: their check can legitimately accept an Error, which
+// is then the value to store (the Err side), not a failure to propagate.
+// Such annotations use a Boolean verdict and keep the original value on success.
+let annotationMayAcceptError = (annotationType) -> {
+  if isError(annotationType) || annotationType == "" { return true; };
+  annotationType == "Any" || annotationType == "Error";
+};
+// Propagate a value already known to be an Error. Unlike emitPropagateError this
+// emits no conditional and no join label, which matters inside an already
+// terminated failure block (an extra empty label would be invalid IR).
+let emitKnownErrorPropagation = (O) -> {
+  if isTopLevel {
+    emitCallRegs("__exit_error", [O]);
+    line("  unreachable");
+  } else {
+    line("  store %ql_value " + O + ", ptr " + curRetv);
+    line("  br label %" + curEpiLbl);
+  };
+  null;
+};
+// Emit the annotation check and return the value to store. On failure this
+// terminates the current block (propagation / top-level exit), like the old path.
+let emitAnnotatedCheck = (value, ty, text, locNode, mayAcceptError) -> {
+  if !mayAcceptError {
+    let checked = emitLocatedError(emitCallRegs("__check_binding", [value, ty, text]), locNode, false);
+    emitPropagateError(checked);
+    return value;
+  };
+  // __check_value returns the Boolean verdict, or the check's own Error.
+  let ok = emitCallRegs("__check_value", [value, ty]);
+  let tag = temp(); let isCheckError = temp();
+  line("  " + tag + " = call i64 @ql_tag(%ql_value " + ok + ")");
+  line("  " + isCheckError + " = icmp eq i64 " + tag + ", 8");
+  let lErr = lbl(); let lBool = lbl(); let lFail = lbl(); let lOk = lbl();
+  line("  br i1 " + isCheckError + ", label %" + lErr + ", label %" + lBool);
+  line(lErr + ":"); curLbl = lErr;
+  emitKnownErrorPropagation(emitLocatedError(ok, locNode, false));
+  line(lBool + ":"); curLbl = lBool;
+  let bits = temp(); let passed = temp();
+  line("  " + bits + " = extractvalue %ql_value " + ok + ", 1");
+  line("  " + passed + " = icmp ne i64 " + bits + ", 0");
+  line("  br i1 " + passed + ", label %" + lOk + ", label %" + lFail);
+  line(lFail + ":"); curLbl = lFail;
+  let denied = emitLocatedError(emitCallRegs("__check_binding", [value, ty, text]), locNode, false);
+  emitKnownErrorPropagation(denied);
+  line(lOk + ":"); curLbl = lOk;
+  value;
+};
 let emitLetStmt = (node) -> {
   let ty = "null"; let text = "null";
   let annotated = !isError(node.annotation) && node.annotation != null;
@@ -888,9 +939,9 @@ let emitLetStmt = (node) -> {
     // A typed binding holds only its type. The check's value still goes through
     // __err_at first, so a failing check carries the declaration's source position,
     // and only then propagates out of the current function (or exits at top level).
+    // Annotations that can accept an Error keep the original value on success.
     if annotated && !deadCheck {
-      value = emitLocatedError(emitCallRegs("__check_binding", [value, ty, text]), node, false);
-      emitPropagateError(value);
+      value = emitAnnotatedCheck(value, ty, text, node, annotationMayAcceptError(node.annotationType));
     };
   };
   let slot = defineSlot(node.name);
@@ -990,8 +1041,8 @@ let emitStoreByName = (name, expression, target, declaredType) -> {
   // position attached, then a failure propagates rather than being stored, so the
   // binding keeps holding only its declared type. The diamond is also emitted for
   // writes whose target the compiler cannot see, so the propagation is emitted only
-  // when the declaring scope marks the name annotated.
-  let checked = emitLocatedError(emitCallRegs("__check_binding", [value, ty, text]), target, false);
+  // when the declaring scope marks the name annotated. Annotations that can accept
+  // an Error (Result/Any/Error/user types) keep the original value on success.
   // Guard the lookup: indexing an object with a missing key yields an Error, and
   // that Error would propagate through the comparison and make the condition an
   // Error value rather than a boolean.
@@ -1001,7 +1052,10 @@ let emitStoreByName = (name, expression, target, declaredType) -> {
     let flag = declaringScope.annotated[name];
     if !isError(flag) && flag == true { annotatedHere = true; };
   };
-  if annotatedHere { emitPropagateError(checked); };
+  let checked = value;
+  if annotatedHere {
+    checked = emitAnnotatedCheck(value, ty, text, target, annotationMayAcceptError(declaredType));
+  };
   line("  store %ql_value " + checked + ", ptr " + off); line("  br label %" + done);
   line(plain + ":"); curLbl = plain;
   line("  store %ql_value " + value + ", ptr " + off); line("  br label %" + done);

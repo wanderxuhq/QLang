@@ -161,7 +161,7 @@ def main():
         check_program(stage1, number, number.with_suffix('.expected').read_bytes(), work, 'portable-number')
         members = ROOT / 'aot/tests/t45_native_function_members.ql'
         check_program(stage1, members, members.with_suffix('.expected').read_bytes(), work, 'native-function-members')
-        for name in ['t46_number_literal_keys', 't47_finite_number_rendering', 't48_object_library', 't49_raw_object_index', 't50_raw_value_type_checks', 't51_value_access_errors', 't52_expression_return', 't53_return_boundaries', 't54_json_stringify', 't55_return_types']:
+        for name in ['t46_number_literal_keys', 't47_finite_number_rendering', 't48_object_library', 't49_raw_object_index', 't50_raw_value_type_checks', 't51_value_access_errors', 't52_expression_return', 't53_return_boundaries', 't54_json_stringify', 't55_return_types', 't56_result_annotations']:
             fixture = ROOT / 'aot/tests' / (name + '.ql')
             check_program(stage1, fixture, fixture.with_suffix('.expected').read_bytes(), work, name)
         check_return_scope_rejections(stage1, work)

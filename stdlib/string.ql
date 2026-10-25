@@ -35,7 +35,10 @@ let cased = null;
 let ignorable = null;
 let whitespace = null;
 let has = (table, c): Boolean -> !isError(table[c]);
-let casing = (s, up): String -> {
+// Migration debt: this function can return the Error from requireString, so a
+// `: String` annotation would be a lie. It stays unannotated until the corpus
+// is migrated to Result return types (see docs/rust-error-model.md).
+let casing = (s, up) -> {
   s = requireString(s, if up { "String.toUpperCase" } else { "String.toLowerCase" })?;
   if up && upperMap == null { upperMap = mappingTable(unicodeData.upper); };
   if !up && lowerMap == null { lowerMap = mappingTable(unicodeData.lower); };

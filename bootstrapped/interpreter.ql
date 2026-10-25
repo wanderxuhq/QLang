@@ -1353,7 +1353,12 @@ let Interpreter = () -> {
     if libraryExports != null {
       let modules = libraryExports.value; let names = std.Object.keys(modules); let i = 0;
       while i < names.length {
-        let name = names[i]; let member = modules[name].value;
+        let name = names[i];
+        // Namespace modules are value wrappers whose payload is the field table;
+        // a function/type/scalar export is stored directly (it has no `.value`).
+        let raw = modules[name];
+        let member = raw;
+        if !isError(raw) && typeTag(raw) == "Object" && !isError(raw.value) { member = raw.value; };
         let target = userStd[name];
         // A member may be any value, not only a module object: a function, a type or a
         // scalar is installed as-is. Only when the member and the existing target are

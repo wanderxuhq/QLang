@@ -24,6 +24,10 @@ def main():
         ('uninitialized-index', 'let x = []; let index; x[index] = 1;', None, 1, 26, 'reading uninitialized variable: index'),
         ('annotation-literal', 'let bad: Number = "x";', None, 1, 1,
          'type mismatch: value of type String does not match the annotated type Number'),
+        ('propagate-number', 'let f = (): Number -> {\n  let z = 0;\n  let v = (1 / z)?;\n  v;\n};',
+         None, 3, 18, '? requires a Result or Option return type'),
+        ('propagate-string', 'let f = (): String -> {\n  let z = 0;\n  let v = (1 / z)?;\n  v;\n};',
+         None, 3, 18, '? requires a Result or Option return type'),
     ]
     with tempfile.TemporaryDirectory(prefix='qlang-semantic-diagnostics-') as tmp:
         work = Path(tmp)

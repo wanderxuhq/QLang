@@ -10,6 +10,31 @@ let Parser = (tokens) -> {
   // Return belongs to a lexical function body, not a block or module factory.
   let insideFunction = false;
   let setFunctionContext = (inside) -> { insideFunction = inside; };
+  // `?` is only valid in a function whose declared return type is Result/Option
+  // (or at top level). Until the corpus is annotated, an unannotated function
+  // keeps the legacy dynamic behaviour; a function that declares another return
+  // type must not silently return an Error, so that combination is a parse error.
+  let returnContexts = []; let returnDepth = 0;
+  let setReturnContext = (annotation) -> {
+    returnContexts = []; returnDepth = 0;
+    if annotation != null { returnContexts[0] = annotation; returnDepth = 1; };
+  };
+  let currentReturnAnnotation = () -> {
+    if returnDepth <= 0 { null; } else { returnContexts[returnDepth - 1]; };
+  };
+  let isResultOrOptionAnnotation = (ann) -> {
+    if ann == null || isError(ann) { return false; };
+    if isError(ann.type) || ann.type != "Call" { return false; };
+    let callee = ann.callee;
+    if callee == null || isError(callee) || isError(callee.type) { return false; };
+    if callee.type == "Identifier" {
+      return !isError(callee.name) && (callee.name == "Result" || callee.name == "Option");
+    };
+    if callee.type == "MemberAccess" {
+      return !isError(callee.field) && (callee.field == "Result" || callee.field == "Option");
+    };
+    false;
+  };
   // While parsing a return type the trailing `->` belongs to the function, not to a
   // bare-lambda body: `(x): Number -> body` must read `Number` as the type.
   let suppressArrowLambda = false;
@@ -821,7 +846,13 @@ let Parser = (tokens) -> {
         let index = parseExpression();
         if !matchToken([TokenKind.RightBracket]) { return parseError("Expected ']' after index"); };
         expr = locate(IndexAccessExpr(expr, index), nodeStart(expr));
-      } else if matchToken([TokenKind.Question]) {
+      } else if check(TokenKind.Question) {
+        let questionToken = peek();
+        advance();
+        let annotation = currentReturnAnnotation();
+        if insideFunction && annotation != null && !isResultOrOptionAnnotation(annotation) {
+          return parseErrorAt("? requires a Result or Option return type", questionToken);
+        };
         expr = locate(UnaryOpExpr("?", expr), nodeStart(expr));
       } else {
         done = true;
@@ -849,7 +880,9 @@ let Parser = (tokens) -> {
     // Parameters/annotations were parsed in the defining outer context.
     let outerContext = insideFunction;
     insideFunction = true;
+    returnContexts[returnDepth] = returnTypeAnnotation; returnDepth = returnDepth + 1;
     let body = parseBlock();
+    returnDepth = returnDepth - 1;
     insideFunction = outerContext;
     FunctionExpr(params, body, returnTypeAnnotation);
   };
@@ -876,6 +909,7 @@ let Parser = (tokens) -> {
           let inner = Parser(part.tokens);
           // Interpolation is evaluated in its enclosing lexical context.
           inner.setFunctionContext(insideFunction);
+          inner.setReturnContext(currentReturnAnnotation());
           inner.setSource(sourceText); inner.setSourcePath(sourcePath);
           let expr = inner.parseExpression();
           if inner.getErrors().length > 0 {
