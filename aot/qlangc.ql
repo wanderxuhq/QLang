@@ -616,11 +616,12 @@ let emitBinaryOp = (node) -> {
 };
 
 // Shared failure edge for postfix ? and failed aggregate assignments.
-let emitPropagateError = (O) -> {
-  // M3 T3 Propagate:operand 为 Error → 折回函数返回(或顶层 __exit_error);否则原值继续
+// tag 8 = Error (Result), tag 4 = Null (Option). The caller chooses which
+// failure value the enclosing function propagates.
+let emitPropagateTag = (O, failedTag) -> {
   let tO = temp(); let eO = temp();
   line("  " + tO + " = call i64 @ql_tag(%ql_value " + O + ")");
-  line("  " + eO + " = icmp eq i64 " + tO + ", 8");
+  line("  " + eO + " = icmp eq i64 " + tO + ", " + std.String.toString(failedTag));
   let lProp = lbl(); let lOk = lbl();
   line("  br i1 " + eO + ", label %" + lProp + ", label %" + lOk);
   line(lProp + ":");
@@ -636,12 +637,18 @@ let emitPropagateError = (O) -> {
   curLbl = lOk;
   O;
 };
+let emitPropagateError = (O) -> emitPropagateTag(O, 8);
+let emitPropagateOptionNone = (O) -> emitPropagateTag(O, 4);
 
-// Unary operations produce inline scalar results; ? propagates Errors.
+// Unary operations produce inline scalar results; ? propagates the failure side
+// of the enclosing function: Error for ?, Null for ?Option. The parser decides
+// the operator from the declared return type, so the emitter needs no scope
+// context and no runtime lookup.
 let emitUnaryOp = (node) -> {
   let ov = emitValue(node.operand);
-  if node.operator == "?" {
+  if node.operator == "?" || node.operator == "?Option" {
     let value = if ov.raw == "Number" { emitFloatValue(ov.reg); } else if ov.raw == "Boolean" { emitBoolResult(ov.reg); } else { ov.reg; };
+    if node.operator == "?Option" { return emitPropagateOptionNone(value); };
     return emitPropagateError(value);
   };
   if node.operator == "-" || node.operator == "+" {

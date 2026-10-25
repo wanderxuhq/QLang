@@ -133,6 +133,11 @@ let legacy = () -> { let z = 0; let v = (1 / z)?; v; };                   // 迁
   (如 `1 / 变量零`)不再丢检查。
 - **boot 库导出修复**:函数/类型/标量导出现在按原值安装;此前 `modules[name].value`
   会把函数导成 `UndefinedField` 错误(`Result`/`Option` 在 boot 上不可用)。
+- **Option 的 `?`(切片 2)**:parser 在 `Option(...)` 返回注解的函数里把 `?` 标成内部
+  操作符 `?Option`(Result 与无注解仍是 `?`)。native 对 `?Option` 传播 Null(tag 4);
+  boot 用现有 Return completion 以 Null 返回,因此不需要新的传播标记。`None` 就是 `null`;
+  Option 函数里遇到 Error 不是失败侧,会交给返回边检查报 `TypeCheck`。
+  内部操作符不暴露给用户;所有 `?` 语法仍是 `?`。
 
 迁移债(已注明):`stdlib/string.ql` 的 `casing` 与 `aot/runtime.ql` 的
 `__s_codepoint` 内层函数原本声明了 `Number`/`String` 却使用 `?`,现在去掉返回注解;
@@ -152,16 +157,25 @@ let legacy = () -> { let z = 0; let v = (1 / z)?; v; };                   // 迁
 已通过的定向验收:
 
 - `run_semantic_diagnostic_tests.py`:10/10(新增 `propagate-number` / `propagate-string`);
-- `t56_result_annotations`:native 与 boot 都逐行匹配 `.expected`;
-- `run_selfhost_tests.py --compiler /tmp/o_new5`:48 PASS(注解协议/健全性修复的中间版本);
-- `run_interpreter_tests.py --compiler /tmp/o_new7 --interpreter /tmp/bp_new2`:进行中。
+- `t56_result_annotations`:native 与 boot 都逐行匹配 `.expected`
+  (含 `Option` 的 None/Some/Error 三态);
+- `run_selfhost_tests.py --compiler /tmp/o_new7`:48 PASS(切片 1 的完整自举套件);
+- `run_interpreter_tests.py --compiler /tmp/o_new7 --interpreter /tmp/bp_new2`:57 PASS(切片 1);
+- 切片 2(Option `?`):
+  - `run_semantic_diagnostic_tests.py`:10/10;
+  - `t56_result_annotations`:native/boot 逐行一致(None/Some/Error 三态);
+  - `run_interpreter_tests.py --compiler /tmp/o_new10 --interpreter /tmp/bp_new8`:57 PASS;
+  - stage2/stage3 IR identical;
+  - 完整 selfhost 套件在本切片提交时仍在运行。
 
 ## 4. 后续切片(不在本切片)
 
 1. **Result/Option 的命名空间与构造器**:`Ok/Err/Some/None`、`unwrap/expect`。
    当前 `Result` 是函数(类型构造器),不能同时挂字段;要么引入语言级可调用对象,
    要么用 `std.Result.of` + 独立函数,要么给函数加字段表 —— 需要单独决定。
-2. **Option 的 `?`**:先决定 `None` 与 `null` 的关系;否则 `?` 无法区分“缺失”与“合法 null”。
+2. **Option 的构造器/辅助函数**:`Some/None`、`Ok/Err`、`unwrap/expect`。
+   当前 `Result`/`Option` 是函数(类型构造器),不能同时挂字段;要么引入语言级可调用对象,
+   要么用独立函数/命名空间 —— 需要单独决定。`unwrap/expect` 还要接 panic 通道。
 3. **消费检查 / must-use**:函数返回 `Result`/`Option` 时,语句位置丢弃要报错/警告;
    依赖调用点返回类型跟踪。
 4. **索引/字段的 Rust 化**:`a[i]` 越界 panic + `a.get(i)` Option;`.field` panic +

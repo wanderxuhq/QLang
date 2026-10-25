@@ -27,5 +27,10 @@ println(propagate().type);
 // function is accepted by the parser (Option-specific `?` semantics come later).
 let legacy = () -> { let w = 0; let value = (1 / w)?; value; };
 println(legacy().type);
+let optionNone = (): std.Option(Number) -> { let value = null; let checked = value?; 99; };
+println(optionNone());
+let optionSome = (): std.Option(Number) -> { let value = 5; let checked = value?; checked + 1; };
+println(optionSome());
+// An Error is not Option's failure side; the return check reports the mismatch.
 let optionPropagate = (): std.Option(Number) -> { let w = 0; let value = (1 / w)?; value; };
 println(optionPropagate().type);

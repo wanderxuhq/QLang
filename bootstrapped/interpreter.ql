@@ -710,8 +710,17 @@ let Interpreter = () -> {
     } else if expr.type == "UnaryOp" {
       let val = evaluate(expr.operand, env);
       if isExiting(val) { return val; };
-      if expr.operator == "?" {
-        // ? propagation: an Error operand becomes a propagate-marked wrapper
+      if expr.operator == "?Option" {
+        // Option's `?`: Null is the failure side (None); other values pass.
+        // The parser emits ?Option only inside an Option-annotated function.
+        if val != null && !isError(val.type) && val.type == "Null" {
+          // None returns from the current function with Null. Using the existing
+          // Return completion keeps isPropagating and the return check unchanged.
+          return { type: "Return", marker: returnMarker, value: { type: "Null", value: null } };
+        };
+        val;
+      } else if expr.operator == "?" {
+        // Result/unannotated `?`: an Error operand becomes a propagate-marked wrapper
         if isErrorVal(val) {
           return { type: "Error", value: val.value, propagate: true };
         } else {

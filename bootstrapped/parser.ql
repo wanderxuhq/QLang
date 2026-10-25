@@ -22,18 +22,20 @@ let Parser = (tokens) -> {
   let currentReturnAnnotation = () -> {
     if returnDepth <= 0 { null; } else { returnContexts[returnDepth - 1]; };
   };
-  let isResultOrOptionAnnotation = (ann) -> {
-    if ann == null || isError(ann) { return false; };
-    if isError(ann.type) || ann.type != "Call" { return false; };
+  let returnAnnotationKind = (ann) -> {
+    if ann == null || isError(ann) { return ""; };
+    if isError(ann.type) || ann.type != "Call" { return ""; };
     let callee = ann.callee;
-    if callee == null || isError(callee) || isError(callee.type) { return false; };
+    if callee == null || isError(callee) || isError(callee.type) { return ""; };
     if callee.type == "Identifier" {
-      return !isError(callee.name) && (callee.name == "Result" || callee.name == "Option");
+      if !isError(callee.name) && (callee.name == "Result" || callee.name == "Option") { return callee.name; };
+      return "";
     };
     if callee.type == "MemberAccess" {
-      return !isError(callee.field) && (callee.field == "Result" || callee.field == "Option");
+      if !isError(callee.field) && (callee.field == "Result" || callee.field == "Option") { return callee.field; };
+      return "";
     };
-    false;
+    "";
   };
   // While parsing a return type the trailing `->` belongs to the function, not to a
   // bare-lambda body: `(x): Number -> body` must read `Number` as the type.
@@ -850,10 +852,12 @@ let Parser = (tokens) -> {
         let questionToken = peek();
         advance();
         let annotation = currentReturnAnnotation();
-        if insideFunction && annotation != null && !isResultOrOptionAnnotation(annotation) {
+        let kind = if annotation == null { ""; } else { returnAnnotationKind(annotation); };
+        if insideFunction && annotation != null && kind == "" {
           return parseErrorAt("? requires a Result or Option return type", questionToken);
         };
-        expr = locate(UnaryOpExpr("?", expr), nodeStart(expr));
+        let operator = if kind == "Option" { "?Option"; } else { "?"; };
+        expr = locate(UnaryOpExpr(operator, expr), nodeStart(expr));
       } else {
         done = true;
       }

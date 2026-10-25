@@ -233,6 +233,7 @@ source.ql
 - **2026-10-25 更新**:新分支 `rust-error-model`(从 `5d0f4e8` 切出)开始落地 Rust 式错误模型;
   口径与切片见 **`docs/rust-error-model.md`**。它与 `unboxed-values-handoff.md` 冲突时,以新文件为准。
   当前切片已做:注解检查成功协议、`std.Option(T)`、`?` 只允许在 `Result`/`Option` 注解函数(无注解仍允许,迁移期)、
+  Option 的 `?`（parser 内部标成 `?Option`,native 传 Null,boot 用 Return completion）、
   `cannotBeError` 健全性门、boot 库函数导出修复。
 - 原分支 `error-carried` @ `5d0f4e8`(已推 `origin`);从 `unboxed-values` 的 `394e473` 切出。
 - `unboxed-values` 已推 `origin`,**未合并**;合并前需作者明确同意。
