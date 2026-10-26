@@ -619,3 +619,29 @@ tag/长度判断,把循环不变部分提出去,并省掉调用与实参缓冲�
 
 **这条性质是把 stdlib 预编译(文本前缀或独立目标文件)的前提**:库函数体不再依赖
 用户程序,只有 `@main` 里的初始化序列按程序变化。
+
+
+## 25. S-3 第三步:runtime/stdlib 初始化提成 @__stdlib_init(2026-10-27)
+
+`@main` 里原来内联着 runtime/stdlib 的初始化(建闭包、装 std、装 args)。现在这段
+整体提成一个独立函数 `@__stdlib_init(ptr %env, i32 %argc, ptr %argv)`,`@main` 只剩
+一句调用 + 按程序变化的部分。
+
+这一步不改任何语义:初始化里的错误路径仍按"顶层"处理(`__exit_error` + `unreachable`),
+所以函数内把 `isTopLevel` 显式设成 true —— 与原来在 `@main` 顶层逐条相同。
+
+代价与验证:
+
+| 度量 | 结果 |
+|---|---|
+| t20 机器指令 | 125,923 → **125,946**(+23,调用边界) |
+| selfhost 全套(`--jobs 3`) | **ALL PASS** |
+| native interpreter 全套(`--jobs 3`) | **ALL CHECKS PASS** |
+| 自举固定点 | stage2/stage3 IR 逐字节相同 |
+
+踩到的两个状态泄漏(都已修,记下来):
+1. `emitStdlibInit` 忘了恢复 `curSink` —— 调用点之后的行被追加到刚 push 进 `fnBlocks`
+   的那个函数体尾部,IR 结构直接坏掉;
+2. 初始化函数内部借用 `inRuntime = true`,返回后必须由 `@main` 显式置回 false,否则
+   用户程序的直接调用判定全部失效(`directCallTarget` 在 `inRuntime` 下返回 null),
+   表现为 `internal: proven-safe call is not directly dispatched`。

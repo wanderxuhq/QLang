@@ -2660,6 +2660,62 @@ let emitTopLevelStmt = (node) -> {
   };
 };
 
+// runtime/stdlib 的初始化(建闭包、装 std、装 args)原来写在 @main 体内。把它提成
+// 一个独立函数有两个作用:变成 stdlib 模块自己的入口(预编译标准库时它是唯一需要在
+// 程序启动时被调用的东西),以及让 @main 里只剩按程序变化的部分。
+// 语义保持:错误路径仍按"顶层"处理(直接 __exit_error + unreachable),与原来在
+// @main 顶层里一模一样 —— 所以这里把 isTopLevel 显式设成 true。
+let emitStdlibInit = (runtimeStmts, libraryStmts) -> {
+  let savedSink = curSink;
+  let savedStackSlots = stackSlots; stackSlots = [];
+  let savedArgSlots = argSlotPool; argSlotPool = {};
+  let savedScope = curScope; let savedEnv = curEnv; let savedLbl = curLbl;
+  let savedTop = isTopLevel; let savedRetv = curRetv; let savedEpi = curEpiLbl;
+  let savedRetType = curReturnType; let savedRetTy = curReturnTy; let savedRetText = curReturnText;
+  let savedRetActive = curReturnActive;
+  let savedRuntime = inRuntime;
+  curReturnType = ""; curReturnTy = "null"; curReturnText = "null"; curReturnActive = false;
+  let blk = [];
+  curSink = blk;
+  line("define void @__stdlib_init(ptr %env, i32 %argc, ptr %argv) {");
+  line("entry:");
+  let slotAt = blk.length; line("");
+  curLbl = "entry";
+  curEnv = "%env";
+  curScope = runtimeScope;
+  isTopLevel = true;
+  inStdlibRegion = true;
+  inRuntime = true;
+  let i = 0;
+  while i < runtimeStmts.length { emitTopLevelStmt(runtimeStmts[i]); i = i + 1; };
+  // Give the AST interpreter the same host runtime/ABI used by direct imports.
+  emitCallRegs("__extension_bind_host", [emitPointerValue(curEnv), emitPointerValue("@qlang_extension_abi_v1"), emitNumber({value: curScope.slots["args"]})]);
+  // Both process arguments cross the language ABI as values.
+  let argcValue = temp();
+  line("  " + argcValue + " = sitofp i32 %argc to double");
+  let processArgs = emitCallRegs("__process_args", [emitFloatValue(argcValue), emitPointerValue("%argv")]);
+  let argsSlot = emitBindingPtr({ depth: 0, slot: curScope.slots["args"] });
+  emitBindingStore(argsSlot, processArgs, "null", "null");
+  inRuntime = false;
+  // Library bodies use the ordinary AST/code path: no runtime privilege.
+  let li = 0;
+  while li < libraryStmts.length { emitTopLevelStmt(libraryStmts[li]); li = li + 1; };
+  let libraryBase = emitCallRegs("__fresh_std", []);
+  let library = emitCallRegs("__build_standard_library", [libraryBase]);
+  emitCallRegs("__install_library", [library]);
+  inStdlibRegion = false;
+  line("  ret void");
+  line("}");
+  blk[slotAt] = stackEntry();
+  fnBlocks[fnBlocks.length] = blk;
+  curSink = savedSink;
+  inRuntime = savedRuntime;
+  stackSlots = savedStackSlots; argSlotPool = savedArgSlots;
+  curScope = savedScope; curEnv = savedEnv; curLbl = savedLbl;
+  isTopLevel = savedTop; curRetv = savedRetv; curEpiLbl = savedEpi;
+  curReturnType = savedRetType; curReturnTy = savedRetTy; curReturnText = savedRetText; curReturnActive = savedRetActive;
+  null;
+};
 let main = (args) -> {
   if args.length != 3 { return std.Error.raise("CompileError", "usage: qlangc --emit-llvm|--emit-module source.ql runtime.ql", null); };
   let source = args[0]; let sourcePath = args[1]; let runtimeSource = args[2];
@@ -2831,27 +2887,11 @@ let main = (args) -> {
     let result = emitInvoke(factory, "null", "0");
     line("  ret %ql_value " + result);
   } else {
-  // region B 从这里开始:runtime 与 stdlib 的初始化 + 全部库函数体。
-  inStdlibRegion = true;
-  let i = 0;
-  while i < program.statements.length { emitTopLevelStmt(program.statements[i]); i = i + 1; };
-  // Give the AST interpreter the same host runtime/ABI used by direct imports.
-  emitCallRegs("__extension_bind_host", [emitPointerValue(curEnv), emitPointerValue("@qlang_extension_abi_v1"), emitNumber({value: curScope.slots["args"]})]);
-  // Both process arguments cross the language ABI as values.
-  let argcValue = temp();
-  line("  " + argcValue + " = sitofp i32 %argc to double");
-  let processArgs = emitCallRegs("__process_args", [emitFloatValue(argcValue), emitPointerValue("%argv")]);
-  let argsSlot = emitBindingPtr({ depth: 0, slot: curScope.slots["args"] });
-  emitBindingStore(argsSlot, processArgs, "null", "null");
+  // region B(runtime/stdlib 初始化)已提成独立函数 @__stdlib_init;这里只调它。
+  emitStdlibInit(program.statements, libraryProgram.statements);
+  line("  call void @__stdlib_init(ptr " + curEnv + ", i32 %argc, ptr %argv)");
+  // 初始化函数内部借用了 inRuntime=true(runtime 段),返回后必须回到普通代码路径。
   inRuntime = false;
-  // Library bodies use the ordinary AST/code path: no runtime privilege.
-  let li = 0;
-  while li < libraryProgram.statements.length { emitTopLevelStmt(libraryProgram.statements[li]); li = li + 1; };
-  let libraryBase = emitCallRegs("__fresh_std", []);
-  let library = emitCallRegs("__build_standard_library", [libraryBase]);
-  emitCallRegs("__install_library", [library]);
-  // region B 结束;之后都是按程序变化的部分(用户初始化/用户函数/main 尾)。
-  inStdlibRegion = false;
   let parent = curEnv;
   scopePush(runtimeScope);
   reserveModuleBindings(userProgram.statements);
