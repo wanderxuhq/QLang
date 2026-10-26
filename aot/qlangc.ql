@@ -251,12 +251,21 @@ let line = (s) -> { curSink[curSink.length] = s; };
 // 的临时量/标签命名空间:名字只由助手自身的形状决定。
 let coldTmpN = 0;
 let coldLblN = 0;
+// runtime/stdlib 区(region B)有自己的一套命名空间:进程里排在前面的 "模块加载" 初始化
+// 行数取决于用户程序 import 了几个模块,若它们与库函数体共用计数器,库函数体的
+// `%tN` 编号就会随用户程序变。分空间之后,region B 的文本对任何输入都一样
+// —— 这正是把它预编译成固定前缀(S-3)所需要的那条性质。
+let inStdlibRegion = false;
+let stdTmpN = 0;
+let stdLblN = 0;
 let temp = () -> {
   if inColdHelper { coldTmpN = coldTmpN + 1; return "%h" + std.String.toString(coldTmpN); };
+  if inStdlibRegion { stdTmpN = stdTmpN + 1; return "%r" + std.String.toString(stdTmpN); };
   tmpN = tmpN + 1; "%t" + std.String.toString(tmpN);
 };
 let lbl = () -> {
   if inColdHelper { coldLblN = coldLblN + 1; return "hL" + std.String.toString(coldLblN); };
+  if inStdlibRegion { stdLblN = stdLblN + 1; return "rL" + std.String.toString(stdLblN); };
   lblN = lblN + 1; "bb" + std.String.toString(lblN);
 };
 // LLVM decimal floating constants require a decimal point or exponent.
@@ -2822,6 +2831,8 @@ let main = (args) -> {
     let result = emitInvoke(factory, "null", "0");
     line("  ret %ql_value " + result);
   } else {
+  // region B 从这里开始:runtime 与 stdlib 的初始化 + 全部库函数体。
+  inStdlibRegion = true;
   let i = 0;
   while i < program.statements.length { emitTopLevelStmt(program.statements[i]); i = i + 1; };
   // Give the AST interpreter the same host runtime/ABI used by direct imports.
@@ -2839,6 +2850,8 @@ let main = (args) -> {
   let libraryBase = emitCallRegs("__fresh_std", []);
   let library = emitCallRegs("__build_standard_library", [libraryBase]);
   emitCallRegs("__install_library", [library]);
+  // region B 结束;之后都是按程序变化的部分(用户初始化/用户函数/main 尾)。
+  inStdlibRegion = false;
   let parent = curEnv;
   scopePush(runtimeScope);
   reserveModuleBindings(userProgram.statements);
