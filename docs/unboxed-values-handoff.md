@@ -121,6 +121,17 @@ HEAD 基线(`/tmp/sweep3/`):**17 绿**,含 `interpreter`(731s)、`selfhost`(1573
 `difftest` 在本机**不可裁决**(它的 boot 侧走 `cargo run`,120 秒超时;`cargo build` 已热只需 0.12s)
 ⇒ 替代:用 native 编译的 boot 做同样对照。
 
+### 3.6 标准库对象化(2026-10-27)
+
+`aot/stdlib_split.py` 把「preamble + 助手 + runtime/stdlib 函数体 + 字符串 + `@__stdlib_init`」
+编成一份 `target/stdlib/<key>/stdlib.o`(key = 编译器 + runtime.ql + bundle.ql 的哈希),
+`aot/native_link.py` 用 `--stdlib-object` / `QLANG_STDLIB_OBJECT` 拆掉用户模块里的库定义、
+补 `declare` 后链接;两套门禁自动构建并启用(失败回落单模块)。
+
+单夹具链接 12.3s → **1.5s**;二进制指令数 126,635 → 126,599;selfhost 全套
+**6.3 min**、interpreter **6.2 min**(`--jobs 3`)。`internal alwaysinline` 的 value-ABI
+叶子在两个模块各留一份,避免把 tag 检查变成真调用(+1,038 条)。
+
 ### 3.5 门禁并行(2026-10-27)
 
 `run_selfhost_tests.py` / `run_interpreter_tests.py` 加 `--jobs N`(默认 1,行为不变)。

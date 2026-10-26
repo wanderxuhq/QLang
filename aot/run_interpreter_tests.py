@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Compile and exercise the QLang interpreter without invoking the Rust runner."""
 import argparse
+import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import nullcontext
 from pathlib import Path
@@ -25,6 +26,22 @@ def body(result):
     return result.stdout.split(start, 1)[1][:-len(end)]
 
 
+
+def _use_stdlib_object(compiler):
+    """Compile the fixed runtime/stdlib prefix once and link it per fixture.
+
+    Every fixture otherwise re-emits ~180k IR lines of runtime+stdlib and asks
+    `clang -O2` to optimise them again. `stdlib_split.build_stdlib` caches the
+    object by (compiler, runtime, bundle) hash, so a gate run pays for it once.
+    """
+    try:
+        from stdlib_split import build_stdlib
+        object_path, _symbols = build_stdlib(compiler)
+        os.environ['QLANG_STDLIB_OBJECT'] = str(object_path)
+    except Exception as error:  # pragma: no cover - fall back to the monolithic link
+        print(f'note: precompiled stdlib unavailable ({error}); linking monolithically', flush=True)
+        os.environ.pop('QLANG_STDLIB_OBJECT', None)
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--compiler', required=True, type=Path)
@@ -33,6 +50,7 @@ def main():
     parser.add_argument('--jobs', type=int, default=1, help='fixtures to interpret in parallel (default 1)')
     options = parser.parse_args()
     compiler = options.compiler.resolve()
+    _use_stdlib_object(compiler)
     if options.output_dir:
         options.output_dir = options.output_dir.resolve()
         options.output_dir.mkdir(parents=True, exist_ok=True)

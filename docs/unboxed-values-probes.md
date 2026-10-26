@@ -645,3 +645,30 @@ tag/长度判断,把循环不变部分提出去,并省掉调用与实参缓冲�
 2. 初始化函数内部借用 `inRuntime = true`,返回后必须由 `@main` 显式置回 false,否则
    用户程序的直接调用判定全部失效(`directCallTarget` 在 `inRuntime` 下返回 null),
    表现为 `internal: proven-safe call is not directly dispatched`。
+
+
+## 26. 标准库对象化:一次编译,按哈希缓存,逐夹具链接(2026-10-27)
+
+前两节把 runtime/stdlib 的文本变成了与程序无关的固定前缀;这一节把它**编译一次**:
+
+- `aot/stdlib_split.py`:用编译器编一个空程序,把模块拆成「preamble + 助手 + 库函数体 +
+  字符串 + `@__stdlib_init`」,编译成 `target/stdlib/<key>/stdlib.o`(key = 编译器二进制
+  + `runtime.ql` + `stdlib/bundle.ql` 的哈希),并落一份 `symbols.json`(声明文本);
+- `aot/native_link.py`:新增 `--stdlib-object` / `QLANG_STDLIB_OBJECT`。开启时把用户 IR
+  里属于 stdlib 的 `define`/全局删掉、只给被引用的补 `declare`,然后和 `stdlib.o` 一起链接;
+- 两套门禁自动构建并启用它(带缓存,失败则自动回落到单模块链接)。
+
+关键取舍:**`internal alwaysinline` 的 value-ABI 叶子(`ql_tag`/`ql_empty`/`ql_word`/
+`ql_byte`/`ql_truthy`)两个模块各留一份**。它们不跨对象边界,调用点仍然内联;否则每个
+tag 检查都会变成一次真调用(+1,038 条指令/程序)。
+
+| 度量 | 单模块 | 拆开 + 链接 |
+|---|---:|---:|
+| 单夹具链接(clang -O2 + lld) | 12.3s | **1.5s** |
+| t20 二进制机器指令数 | 126,635 | **126,599**(−36) |
+| selfhost 全套(`--jobs 3`) | ~20 min | **6.3 min** |
+| interpreter 全套(`--jobs 3`) | ~8 min | **6.2 min** |
+| stdlib 对象 | — | 280 函数 + 1,573 全局 |
+
+夹具输出逐条不变(6 个夹具逐字节比对 + 两套门禁全绿)。IR 仍是逐字节相同的单模块文本
+——编译器一行没改,只有链接路径变了,所以自举固定点不受影响。

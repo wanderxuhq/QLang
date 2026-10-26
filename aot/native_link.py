@@ -150,14 +150,26 @@ def validate(ir, binary):
     return len(expected)
 
 
-def link(ir, binary, opt=2, timeout=600, clang='clang', shared=False):
+def link(ir, binary, opt=2, timeout=600, clang='clang', shared=False, stdlib_object=None):
+    if stdlib_object is None:
+        stdlib_object = os.environ.get('QLANG_STDLIB_OBJECT')
     ir, binary = Path(ir).resolve(), Path(binary).absolute()
     # Parse before invoking Clang; never publish partial or unrelated output.
     ir_strings(ir)
     binary.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='.qlang-link-', dir=binary.parent) as tmp:
         candidate = Path(tmp) / 'program'
-        inputs = [str(ir), '-shared', '-fPIC'] if shared else [str(ir), str(ROOT / 'aot/runtime.c'), '-Wl,--export-dynamic', '-ldl']
+        if stdlib_object is not None and not shared:
+            # Compile the runtime/stdlib bodies once (target/stdlib/<key>) and
+            # link them instead of re-optimising ~180k IR lines every build.
+            from stdlib_split import build_symbols_for_ir, split_file
+            symbols = build_symbols_for_ir(Path(stdlib_object))
+            user_ir = Path(tmp) / 'user.ll'
+            split_file(ir, user_ir, symbols)
+            inputs = [str(user_ir), str(ROOT / 'aot/runtime.c'), str(stdlib_object),
+                      '-Wl,--export-dynamic', '-ldl']
+        else:
+            inputs = [str(ir), '-shared', '-fPIC'] if shared else [str(ir), str(ROOT / 'aot/runtime.c'), '-Wl,--export-dynamic', '-ldl']
         subprocess.run([str(clang), f'-O{opt}', '-fuse-ld=lld', '-Wl,--threads=1',
                         *inputs, '-o', str(candidate)],
                        cwd=ROOT, check=True, timeout=timeout)
@@ -172,13 +184,17 @@ def main():
     parser.add_argument('-o', '--output', required=True, type=Path)
     parser.add_argument('--opt', choices=range(4), type=int, default=2)
     parser.add_argument('--shared', action='store_true', help='link a QLang extension without a second runtime')
+    parser.add_argument('--stdlib-object', type=Path,
+                        help='link a precompiled runtime/stdlib object (see aot/stdlib_split.py)')
     parser.add_argument('--check-only', action='store_true', help='validate an existing ELF without linking')
     options = parser.parse_args()
     try:
         if options.check_only:
             count = validate(options.ir, options.output)
         else:
-            count = link(options.ir, options.output, options.opt, shared=options.shared)
+            stdlib_object = options.stdlib_object or os.environ.get('QLANG_STDLIB_OBJECT')
+            count = link(options.ir, options.output, options.opt, shared=options.shared,
+                         stdlib_object=stdlib_object)
     except (OSError, LinkError, subprocess.SubprocessError) as error:
         print(f'LinkError: {error}', file=sys.stderr)
         return 1
