@@ -197,7 +197,8 @@ runtime 注册为 native、boot 直接装同一实现;夹具 `t57_assert`,两个
 **2026-10-26 P1**:多调用点、参数注解函数的 raw ABI 已落地(`t60_raw_direct`):
 无 value use 的注解 Number leaf 函数不再有闭包盒/annotations/boxed 入口,绑定槽存
 定义处环境指针,调用点直接传 double;判别程序机器指令 −354 / −465,5M 次微基准
-用户态 0.059s vs 通用 8.473s。仍限 leaf、
+用户态 0.059s vs 通用 8.473s。自编译实测 **无提速**(编译器源码 raw 命中 0,
+同输入 44.76s vs 44.90s,产物机器指令相同)。仍限 leaf、
 无 value use、所有调用点实参已证 Number 且非 Error;返回仍 boxed。设计同见上文档。
 
 ### H. **⑦ std 整链**(特性级,未开工)
