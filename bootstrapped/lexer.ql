@@ -27,7 +27,8 @@ while lexClassCode < 128 {
 };
 
 let Lexer = (source) -> {
-  let chars = std.String.toChars(source);
+  // 注解让发射端知道「chars 一定是 Array」,逐字符的 `chars[i]` 才能走内联快路径。
+  let chars: AnyArray = std.String.toChars(source);
   let sourceMap = SourceMap(chars);
   let pendingError = null;
   let currentIndex = 0;

@@ -754,6 +754,8 @@ let needColdLocated = false;
 let coldHelperAt = 0;
 // 分析期已证明不可能是 Error、因而整块省掉定位测试的节点数(命中数,先于行数报)。
 let locErrorElided = 0;
+// 走「内联数组取元素」快路径的调用点数(量测:每多一个,热循环就少一次通用分派)。
+let arrayIndexFastSites = 0;
 // Runtime functions whose body is already emitted, keyed by source name: a call
 // after that point can be direct (this toolchain wants the definition first), and
 // runtime bindings are private, so they cannot be rebound by user code.
@@ -2524,13 +2526,64 @@ let emitExprInner = (node) -> {
   } else if node.type == "IndexAccess" {
     let C = emitExpr(node.object);
     let I = emitExpr(node.index);
-    emitCallRegs("__get_index", [C, I]);
+    if !inRuntime && isArrayIndexFast(node) { emitArrayIndexFast(C, I); }
+    else { emitCallRegs("__get_index", [C, I]); };
   } else {
     addCompileError(node, "unsupported expression: " + t);
     emitNull();
   };
 };
 
+// 已知接收者是 Array、下标已证是 Number 且不可能出错时,取元素不必走通用
+// `__get_index`(它对 Array/String/Object/Error 逐个分派,并把下标做一次浮点取整
+// 校验)。这里内联「tag 检查 + 长度 + 无符号界检查」,任何一项不成立就落回通用助手
+// ——回落路径负责负数回绕、小数下标、越界错误值,语义与原来逐条相同。
+// 保留 tag 检查:staticType 不是运行期类型(陷阱 #1),它只决定「值不值得快」,
+// 不成立时必须安全地降级而不是把 payload 当数组指针。
+let isArrayIndexFast = (node) -> {
+  node != null && !isError(node)
+    && !isError(node.indexKind) && node.indexKind == "Array"
+    && node.index != null && !isError(node.index)
+    && !isError(node.index.staticType) && node.index.staticType == "Number"
+    && !isError(node.index.cannotBeError) && node.index.cannotBeError == true;
+};
+let emitArrayIndexFast = (container, index) -> {
+  let tag = temp(); let isArray = temp();
+  line("  " + tag + " = extractvalue %ql_value " + container + ", 0");
+  line("  " + isArray + " = icmp eq i64 " + tag + ", 5");
+  let payload = temp(); let obj = temp();
+  line("  " + payload + " = extractvalue %ql_value " + container + ", 1");
+  line("  " + obj + " = inttoptr i64 " + payload + " to ptr");
+  let double = emitFloat(index);
+  let at = temp(); let back = temp(); let integral = temp();
+  line("  " + at + " = call i64 @llvm.fptosi.sat.i64.f64(double " + double + ")");
+  line("  " + back + " = sitofp i64 " + at + " to double");
+  line("  " + integral + " = fcmp oeq double " + back + ", " + double);
+  let lenp = temp(); let len = temp();
+  line("  " + lenp + " = getelementptr i8, ptr " + obj + ", i64 16");
+  line("  " + len + " = load i64, ptr " + lenp);
+  let inRange = temp(); let canRead = temp(); let fits = temp();
+  line("  " + inRange + " = icmp ult i64 " + at + ", " + len);
+  line("  " + fits + " = and i1 " + isArray + ", " + integral);
+  line("  " + canRead + " = and i1 " + fits + ", " + inRange);
+  let fast = lbl(); let slow = lbl(); let done = lbl();
+  line("  br i1 " + canRead + ", label %" + fast + ", label %" + slow);
+  line(fast + ":"); curLbl = fast;
+  let elsp = temp(); let els = temp(); let addr = temp(); let hit = temp();
+  line("  " + elsp + " = getelementptr i8, ptr " + obj + ", i64 8");
+  line("  " + els + " = load ptr, ptr " + elsp);
+  line("  " + addr + " = getelementptr %ql_value, ptr " + els + ", i64 " + at);
+  line("  " + hit + " = load %ql_value, ptr " + addr);
+  line("  br label %" + done);
+  line(slow + ":"); curLbl = slow;
+  let miss = emitCallRegs("__get_index", [container, index]);
+  line("  br label %" + done);
+  line(done + ":"); curLbl = done;
+  let merged = temp();
+  line("  " + merged + " = phi %ql_value [ " + hit + ", %" + fast + " ], [ " + miss + ", %" + slow + " ]");
+  arrayIndexFastSites = arrayIndexFastSites + 1;
+  merged;
+};
 // ---- 产物头部注入(每产物一份) ----
 let emitPrelude = () -> {
   line("%ql_value = type { i64, i64 }");
@@ -2839,6 +2892,7 @@ let main = (args) -> {
   };
   // 命中数:分析期证明不可能出错、因而整块省掉定位测试的节点数(主函数体发完之后才知道)。
   out[out.length] = "; located-error elided: " + std.String.toString(locErrorElided);
+  out[out.length] = "; index-fast: " + std.String.toString(arrayIndexFastSites);
   // ②a 补充:发射序折扣(同样要等主函数体发完 —— 函数体是在 main 发射过程中才发现并发出的)。
   out[out.length] = "; rawABI order: usercalls=" + std.String.toString(ordCallsTotal) + " emitted=" + std.String.toString(ordCallsEmitted) + " notyet=" + std.String.toString(ordCallsNotYet) + " retraw=" + std.String.toString(ordCallsRetRaw) + " direct=" + std.String.toString(directCalls) + " inline=" + std.String.toString(inlineUsed) + " rawcalls=" + std.String.toString(rawCalls) + " rawfuncs=" + std.String.toString(rawFuncs) + " rawretcalls=" + std.String.toString(rawDoubleCalls) + " rawretfuncs=" + std.String.toString(rawDoubleReturns);
   // R10-c: out[0..mainAt) = prelude plus the cold helper, then every function body,

@@ -5,7 +5,9 @@ import ./tokens.ql;
 import ./ast.ql;
 import ./stdlib.ql;
 
-let Parser = (tokens) -> {
+// `tokens` 注解成 AnyArray:peek/advance 的 `tokens[i]` 每读一个 token 走一次,
+// 这是解析器最热的取元素点。
+let Parser = (tokens: AnyArray) -> {
   let current = 0;
   // Return belongs to a lexical function body, not a block or module factory.
   let insideFunction = false;

@@ -1147,6 +1147,10 @@ let inferExpr = (node) -> {
   if t == "IndexAccess" {
     inferExpr(node.object);
     if node.index != null && !isError(node.index) { inferExpr(node.index); };
+    // 接收者静态类型已知是 Array ⇒ 发射端可以走「内联快路径 + 冷回落」。这只是把
+    // 一个已经成立的静态事实记下来,不改变任何类型结论。
+    node.indexKind = "";
+    if typeNameFamily(node.object.staticType) == "Array" { node.indexKind = "Array"; };
     tagType(node, "");
     return tagRep(node, "");
   };

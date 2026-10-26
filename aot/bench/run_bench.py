@@ -13,6 +13,7 @@ Usage:
 import argparse
 import pathlib
 import re
+import resource
 import subprocess
 import sys
 import time
@@ -26,6 +27,12 @@ LINK = ROOT / "aot" / "native_link.py"
 
 def run(cmd, **kw):
     return subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, **kw)
+
+
+def child_cpu():
+    """CPU time of finished children (s). Immune to a noisy/contended host."""
+    usage = resource.getrusage(resource.RUSAGE_CHILDREN)
+    return usage.ru_utime + usage.ru_stime
 
 
 def insn_count(asm_text):
@@ -81,13 +88,17 @@ def main():
                 print(f"{name}: link failed\n{proc.stderr}", file=sys.stderr)
                 return 1
             best = None
+            best_cpu = None
             for _ in range(5):
                 t0 = time.monotonic()
+                cpu0 = child_cpu()
                 proc = run([str(binary)], timeout=180)
+                cpu = child_cpu() - cpu0
                 elapsed = time.monotonic() - t0
                 if proc.returncode != 0:
                     break
                 best = elapsed if best is None else min(best, elapsed)
+                best_cpu = cpu if best_cpu is None else min(best_cpu, cpu)
             if proc.returncode != 0:
                 print(f"{name}: run failed ({proc.returncode})\n{proc.stderr}", file=sys.stderr)
                 return 1
@@ -95,7 +106,8 @@ def main():
 
         rows.append(dict(name=name, insns=insns, frontend=frontend,
                          backend=backend, output=output,
-                         runtime=0.0 if args.no_run else best))
+                         runtime=0.0 if args.no_run else best,
+                         cpu=0.0 if args.no_run else best_cpu))
 
         if not args.keep:
             for path in (ir, asm, binary):
@@ -105,9 +117,9 @@ def main():
                     pass
 
     width = max(len(r["name"]) for r in rows)
-    print(f"{'bench'.ljust(width)}  {'insns':>8}  {'front(s)':>8}  {'clang(s)':>8}  {'run(s)':>7}  output")
+    print(f"{'bench'.ljust(width)}  {'insns':>8}  {'front(s)':>8}  {'clang(s)':>8}  {'run(s)':>7}  {'cpu(s)':>7}  output")
     for r in rows:
-        print(f"{r['name'].ljust(width)}  {r['insns']:>8}  {r['frontend']:>8.2f}  {r['backend']:>8.2f}  {r['runtime']:>7.3f}  {r['output']}")
+        print(f"{r['name'].ljust(width)}  {r['insns']:>8}  {r['frontend']:>8.2f}  {r['backend']:>8.2f}  {r['runtime']:>7.3f}  {r['cpu']:>7.3f}  {r['output']}")
     return 0
 
 
