@@ -201,6 +201,13 @@ runtime 注册为 native、boot 直接装同一实现;夹具 `t57_assert`,两个
 同输入 44.76s vs 44.90s,产物机器指令相同)。仍限 leaf、
 无 value use、所有调用点实参已证 Number 且非 Error;返回仍 boxed。设计同见上文档。
 
+**2026-10-26 P2**:裸返回 + known-safe 调用结果(`t61_known_safe`):
+proven Number 的 raw 函数 `ret double`;分析期证明纯参数单调用点调用不可能 Error,
+给 Identifier/Call 盖 `cannotBeError`,累加器不再 prone、走现有 inline,不新增
+运行期检查。5M 次 `s = add(s, i)`:机器 125,937→**125,757**,用户态
+**9.606s→0.011s**。顺带修掉入口程序被 moduleCache 重复分析、重置分析结论的 bug。
+仍限 leaf;放宽 leaf 未做。
+
 ### H. **⑦ std 整链**(特性级,未开工)
 280 个函数里 **189 个(67.5 %)** 只能经闭包码指针到达 ⇒ 静态**不可删**;只有真惰性/按需实例化能碰它。
 

@@ -869,6 +869,8 @@ let inlineUsed = 0;
 let rawDirectCandidates = {};
 let rawCalls = 0;
 let rawFuncs = 0;
+let rawDoubleReturns = 0;
+let rawDoubleCalls = 0;
 let directSlots = [];
 let directScanSeq = 0;
 let directRefSlot = (refs, bid) -> {
@@ -1317,7 +1319,7 @@ let emitLetStmt = (node) -> {
       if inline != null {
         curScope.directFns[node.name] = { inline: true, arity: inline.arity, params: inline.params, body: inline.body };
       } else if rawInfo != null && !isError(node.value.rawDirect) && node.value.rawDirect == true {
-        curScope.directFns[node.name] = { raw: true, ir: node.value.emittedIr, arity: node.value.parameters.length };
+        curScope.directFns[node.name] = { raw: true, ir: node.value.emittedIr, arity: node.value.parameters.length, rawRet: !isError(node.value.returnsNumberSafe) && node.value.returnsNumberSafe == true };
       } else if !isError(node.value.emittedIr) && node.value.directLeaf == true && node.value.directNoParamAnnotations == true {
         curScope.directFns[node.name] = { ir: node.value.emittedIr, arity: node.value.parameters.length };
       };
@@ -1432,6 +1434,7 @@ let emitAssignStmt = (node) -> {
 // depth 1 命中全局帧 → 递归成立。
 let emitFunction = (node, name, rawDirect) -> {
   let rawMode = !isError(rawDirect) && rawDirect == true;
+  let rawNum = rawMode && !isError(node.returnsNumberSafe) && node.returnsNumberSafe == true;
   let isModule = !isError(node.moduleBody) && node.moduleBody;
   if isModule && !isError(moduleFactories[node.modulePath]) {
     return emitClosure(moduleFactories[node.modulePath], curEnv, 0, emitNull());
@@ -1503,7 +1506,8 @@ let emitFunction = (node, name, rawDirect) -> {
       signature = signature + ", double %p" + std.String.toString(sb);
       sb = sb + 1;
     };
-    line("define internal %ql_value @" + fname + "(" + signature + ") {");
+    let retTy = if rawNum { "double"; } else { "%ql_value"; };
+    line("define internal " + retTy + " @" + fname + "(" + signature + ") {");
   } else {
     line("define internal %ql_value @" + fname + "(ptr %env, ptr %args, i64 %argc, %ql_value %annotations) {");
   };
@@ -1566,6 +1570,7 @@ let emitFunction = (node, name, rawDirect) -> {
       curReturnText = internString(annotationText(node.returnTypeAnnotation));
     };
   };
+  if rawNum && curReturnActive { addCompileError(node, "internal: raw return must have a statically dead return check"); };
   // 函数体:R10-a 语句级 last-value 语义 —— emitBlockStmts 返回最后值寄存器;函数结果 =
   // 函数体最后值(恒有值,默认 null 值)。
   if isModule {
@@ -1595,7 +1600,14 @@ let emitFunction = (node, name, rawDirect) -> {
   line("  " + rv2 + " = load %ql_value, ptr " + rv);
   if isModule { emitSetModuleLoading(node.modulePath, false); };
   if localFrame { line("  call void @llvm.lifetime.end.p0(i64 " + std.String.toString(16 + 64 * n) + ", ptr " + f + ")"); };
-  line("  ret %ql_value " + rv2);
+  if rawNum {
+    let bits = emitBits(rv2); let number = temp();
+    line("  " + number + " = bitcast i64 " + bits + " to double");
+    line("  ret double " + number);
+    rawDoubleReturns = rawDoubleReturns + 1;
+  } else {
+    line("  ret %ql_value " + rv2);
+  };
   line("}");
   curRetv = savedRetv; curEpiLbl = savedEpi; isTopLevel = savedTop;
   curReturnType = savedRetType; curReturnTy = savedRetTy; curReturnText = savedRetText; curReturnActive = savedRetActive;
@@ -1747,7 +1759,10 @@ let emitIfStmt = (node, prevLast) -> {
   let cv = emitValue(br.condition);
   let tr = temp();
   if cv.raw == "Boolean" { tr = cv.reg; }
-  else { line("  " + tr + " = call i1 @ql_truthy(%ql_value " + cv.reg + ")"); };
+  else {
+    let boxed = if cv.raw == "Number" { emitFloatValue(cv.reg); } else { cv.reg; };
+    line("  " + tr + " = call i1 @ql_truthy(%ql_value " + boxed + ")");
+  };
   let lThen = lbl(); let lElse = lbl(); let lEnd = lbl();
   line("  br i1 " + tr + ", label %" + lThen + ", label %" + lElse);
   line(lThen + ":");
@@ -1796,7 +1811,10 @@ let emitWhileStmt = (node) -> {
   let cv = emitValue(node.condition);
   let tr = temp();
   if cv.raw == "Boolean" { tr = cv.reg; }
-  else { line("  " + tr + " = call i1 @ql_truthy(%ql_value " + cv.reg + ")"); };
+  else {
+    let boxed = if cv.raw == "Number" { emitFloatValue(cv.reg); } else { cv.reg; };
+    line("  " + tr + " = call i1 @ql_truthy(%ql_value " + boxed + ")");
+  };
   line("  br i1 " + tr + ", label %" + lBody + ", label %" + lExit);
   line(lBody + ":");
   curLbl = lBody;
@@ -1908,6 +1926,29 @@ let emitBorrowedCall = (fn, values, exempt) -> {
   result;
 };
 
+// One raw call site: env from the binding slot, one double per argument, and a
+// return that is either a boxed %ql_value or a proven-Number double.
+let emitRawDirectCall = (direct, node, cname, doubleReturn) -> {
+  let hit = lookupSlot(cname);
+  let off = emitBindingPtr(hit);
+  let envValue = temp(); line("  " + envValue + " = load %ql_value, ptr " + off);
+  let env = emitPointer(envValue);
+  let callText = "ptr " + env;
+  let ri = 0;
+  while ri < node.arguments.length {
+    callText = callText + ", double " + emitRawDouble(emitValue(node.arguments[ri]));
+    ri = ri + 1;
+  };
+  let result = temp();
+  if doubleReturn {
+    line("  " + result + " = call double @" + direct.ir + "(" + callText + ")");
+    rawDoubleCalls = rawDoubleCalls + 1;
+  } else {
+    line("  " + result + " = call %ql_value @" + direct.ir + "(" + callText + ")");
+  };
+  rawCalls = rawCalls + 1;
+  result;
+};
 let rawCallArgsOk = (args) -> {
   let i = 0;
   while i < args.length {
@@ -2060,22 +2101,11 @@ let emitCall = (node) -> {
     return emitInlineDirect(direct, inlineValues);
   };
   if direct != null && !isError(direct.raw) && direct.raw == true {
-    // The binding slot holds the definition environment (never a value); the
-    // raw entry takes it plus one double per parameter. Arguments were proven
-    // Number and non-Error, so no annotation check or artifact buffer is owed.
-    let hit = lookupSlot(cname);
-    let off = emitBindingPtr(hit);
-    let envValue = temp(); line("  " + envValue + " = load %ql_value, ptr " + off);
-    let env = emitPointer(envValue);
-    let callText = "ptr " + env;
-    let ri = 0;
-    while ri < node.arguments.length {
-      callText = callText + ", double " + emitRawDouble(emitValue(node.arguments[ri]));
-      ri = ri + 1;
-    };
-    let result = temp();
-    line("  " + result + " = call %ql_value @" + direct.ir + "(" + callText + ")");
-    rawCalls = rawCalls + 1;
+    // Raw-return calls are normally intercepted by emitValue (raw Number); this
+    // path boxes only if a future caller bypasses that interception.
+    let wantDouble = !isError(direct.rawRet) && direct.rawRet == true;
+    let result = emitRawDirectCall(direct, node, cname, wantDouble);
+    if wantDouble { return emitFloatValue(result); };
     return result;
   };
   let FN = emitExpr(node.callee); let values = []; let i = 0;
@@ -2098,6 +2128,10 @@ let emitCall = (node) -> {
   let trusted = false;
   if inRuntime && calleeIsId && !isError(runtimeFunctions[cname]) {
     let hit = lookupSlot(cname); trusted = hit != null && hit.scope == globalScope;
+  };
+  // A call proven unable to return Error must have been emitted inline/raw.
+  if calleeIsId && !isError(node.cannotBeError) && node.cannotBeError == true {
+    addCompileError(node, "internal: proven-safe call is not directly dispatched");
   };
   if trusted { emitCallRegs(cname, values); }
   else { emitBorrowedCall(FN, values, emitBoolean({value: false})); };
@@ -2334,7 +2368,8 @@ let emitRawArith = (node) -> {
 let emitRawBoolean = (node) -> {
   if node.type == "UnaryOp" {
     let cv = emitValue(node.operand);
-    let b = if cv.raw == "Boolean" { cv.reg; } else { let t = temp(); line("  " + t + " = call i1 @ql_truthy(%ql_value " + cv.reg + ")"); t; };
+    let boxed = if cv.raw == "Number" { emitFloatValue(cv.reg); } else { cv.reg; };
+    let b = if cv.raw == "Boolean" { cv.reg; } else { let t = temp(); line("  " + t + " = call i1 @ql_truthy(%ql_value " + boxed + ")"); t; };
     let inv = temp(); line("  " + inv + " = xor i1 " + b + ", true");
     return inv;
   };
@@ -2353,6 +2388,15 @@ let emitValue = (node) -> {
     if !isError(sub) && sub != null { return sub; };
   };
   // 分析期已经算出这个值的自然表示;生成端只消费结论,不猜。裸值在边界处才装箱。
+  // A raw call whose callee is proven to return a safe Number yields the double
+  // directly: no box, no call-site Error test, no located-error cold path.
+  if !isError(node.type) && node.type == "Call"
+     && !isError(node.callee.type) && node.callee.type == "Identifier" {
+    let early = directCallTarget(node, node.callee.name);
+    if early != null && !isError(early.rawRet) && early.rawRet == true {
+      return { reg: emitRawDirectCall(early, node, node.callee.name, true), raw: "Number" };
+    };
+  };
   let sr = emitNaturalRep(node);
   let kind = node.type;
   // 只对**算出来的**节点保持裸表示:字面量本来就是零指令常量盒,标识符的普通读只有 1 条,
@@ -2519,9 +2563,16 @@ let main = (args) -> {
   inferTypes(libraryProgram.statements);
   typeSetStdNamespace(false);
   buildStdTypes(libraryProgram.statements);
+  typeSetCallSafety(true);
   let typeErrs = inferTypes(userProgram.statements);
+  typeSetCallSafety(false);
   let typePaths = std.Object.keys(moduleCache); let typeIndex = 0;
-  while typeIndex < typePaths.length { inferTypes(moduleCache[typePaths[typeIndex]].program.statements); typeIndex = typeIndex + 1; };
+  // Entry 也在 moduleCache 里,但上面已作为 userProgram 分析过;重复分析会重置
+  // cannotBeError/returnsNumberSafe 等结论(包括 safe-call 修正)。
+  while typeIndex < typePaths.length {
+    if typePaths[typeIndex] != path { inferTypes(moduleCache[typePaths[typeIndex]].program.statements); };
+    typeIndex = typeIndex + 1;
+  };
   let r = 0;
   while r < program.statements.length {
     let stmt = program.statements[r];
@@ -2604,7 +2655,8 @@ let main = (args) -> {
   line("; typeRep runtime: analysisErrors=" + std.String.toString(runtimeErrCount));
   // ②a:裸 ABI 的覆盖面(纯量测,不影响生成)。
   let ra = rawAbiReport();
-  line("; rawABI: funcs total=" + std.String.toString(ra[0]) + " allparams=" + std.String.toString(ra[1]) + " allraw=" + std.String.toString(ra[2]) + " anyparam=" + std.String.toString(ra[8]) + " rawparams=" + std.String.toString(ra[9]) + " retnum=" + std.String.toString(ra[7]) + " | calls total=" + std.String.toString(ra[3]) + " known=" + std.String.toString(ra[4]) + " arity=" + std.String.toString(ra[5]) + " rawable=" + std.String.toString(ra[6]) + " retfuel=" + std.String.toString(ra[10]) + " | numparams=" + std.String.toString(ra[11]) + " writable=" + std.String.toString(ra[12]) + " retany=" + std.String.toString(ra[13]) + " numargs=" + std.String.toString(ra[14]));
+  line("; safe-return: funcs=" + std.String.toString(typeSafeReturnReport()));
+  line("; rawABI: funcs total=" + std.String.toString(ra[0]) + " allparams=" + std.String.toString(ra[1]) + " allraw=" + std.String.toString(ra[2]) + " anyparam=" + std.String.toString(ra[8]) + " rawparams=" + std.String.toString(ra[9]) + " retnum=" + std.String.toString(ra[7]) + " | calls total=" + std.String.toString(ra[3]) + " known=" + std.String.toString(ra[4]) + " arity=" + std.String.toString(ra[5]) + " rawable=" + std.String.toString(ra[6]) + " retfuel=" + std.String.toString(ra[10]) + " | numparams=" + std.String.toString(ra[11]) + " writable=" + std.String.toString(ra[12]) + " retany=" + std.String.toString(ra[13]) + " numargs=" + std.String.toString(ra[14]) + " safemarked=" + std.String.toString(ra[15]));
   // ②a 补充:发射序折扣在主线末尾补发(见下文),因为函数体是在 main 发射过程中才发出的。
   coldHelperAt = out.length;
   if extensionMode { mainAt = out.length; line("define %ql_value @qlang_extension_init_v1(ptr %host_env) {"); }
@@ -2727,7 +2779,7 @@ let main = (args) -> {
   // 命中数:分析期证明不可能出错、因而整块省掉定位测试的节点数(主函数体发完之后才知道)。
   out[out.length] = "; located-error elided: " + std.String.toString(locErrorElided);
   // ②a 补充:发射序折扣(同样要等主函数体发完 —— 函数体是在 main 发射过程中才发现并发出的)。
-  out[out.length] = "; rawABI order: usercalls=" + std.String.toString(ordCallsTotal) + " emitted=" + std.String.toString(ordCallsEmitted) + " notyet=" + std.String.toString(ordCallsNotYet) + " retraw=" + std.String.toString(ordCallsRetRaw) + " direct=" + std.String.toString(directCalls) + " inline=" + std.String.toString(inlineUsed) + " rawcalls=" + std.String.toString(rawCalls) + " rawfuncs=" + std.String.toString(rawFuncs);
+  out[out.length] = "; rawABI order: usercalls=" + std.String.toString(ordCallsTotal) + " emitted=" + std.String.toString(ordCallsEmitted) + " notyet=" + std.String.toString(ordCallsNotYet) + " retraw=" + std.String.toString(ordCallsRetRaw) + " direct=" + std.String.toString(directCalls) + " inline=" + std.String.toString(inlineUsed) + " rawcalls=" + std.String.toString(rawCalls) + " rawfuncs=" + std.String.toString(rawFuncs) + " rawretcalls=" + std.String.toString(rawDoubleCalls) + " rawretfuncs=" + std.String.toString(rawDoubleReturns);
   // R10-c: out[0..mainAt) = prelude plus the cold helper, then every function body,
   // then main. Function bodies come before their direct callers because this
   // toolchain has no forward declarations; the closure boxes keep the order

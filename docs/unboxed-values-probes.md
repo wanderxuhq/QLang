@@ -445,3 +445,32 @@ println(v1 + v2 + v3 + v4 + v5);
 import(import 会覆盖同名槽)。`t60` 覆盖 5 调用点、全局读/写、逐帧 env(逃逸闭包)、
 value use、部分应用、参数写、循环内定义、零参、递归、Error-prone 实参、同名 import
 覆盖。native/boot 输出一致。
+
+
+## 17. 已实测:裸返回与 known-safe 传播(P2,2026-10-26)
+
+夹具 `t61_known_safe`。核心形状:
+
+```qlang
+let add = (a: Number, b: Number): Number -> a + b;
+let i = 0; let s = 0;
+while i < 5000000 { s = add(s, i); i = i + 1; };
+```
+
+| 形状 | 机器指令 | 用户态(5M) |
+|---|---:|---:|
+| 旧:累加器 prone ⇒ 通用分派 | 125,937 | 9.606s |
+| known-safe:累加器不再 prone ⇒ inline | **125,757** | **0.011s** |
+
+裸返回判别(5 次 raw 调用):125,766 → **125,762**(−4,`rawretcalls=5`)。
+小函数被 `clang -O2` 内联,box/unbox 本来就会被折叠;裸返回的主要作用是
+让「调用不可能 Error」可传播。空文件/t20 不变(125,673 / 125,735)。
+
+**失效条件(已加判别)**:多调用点、value use/export/import/重声明/赋值、
+参数被写、带注解的 Let/Assign、body 有调用、`?`、除法、返回注解不是 Number。
+`t61` 覆盖单调用点累加器、裸返回用于算术/条件/`!`、除法(不证明)、多调用点、
+别名、参数写入。native/boot 输出一致。
+
+**独立发现**:`moduleCache` 包含入口程序,旧 compiler 在 userProgram 之后又把
+入口当模块分析一遍;第二遍 `inferExpr` 会重置 `cannotBeError`/`returnsNumberSafe`
+等分析结论。P2 跳过入口路径后 known-safe 修正才生效;模块仍各分析一次。

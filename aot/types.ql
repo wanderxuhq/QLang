@@ -179,7 +179,7 @@ let rawAbiSigCount = {};
 let rawAbiSigAll = {};
 let rawAbiSigRet = {};
 let rawAbiKey = (name) -> std.String.toString(typeProgram) + ":" + name;
-let rawAbiReport = () -> [rawAbiFuncTotal, rawAbiFuncParams, rawAbiFuncAll, rawAbiCallTotal, rawAbiCallKnown, rawAbiCallArity, rawAbiCallRaw, rawAbiFuncRet, rawAbiFuncAny, rawAbiParamCount, rawAbiCallRet, rawAbiAnnotParams, rawAbiNoWriteParams, rawAbiCallRetAny, rawAbiCallNumArgs];
+let rawAbiReport = () -> [rawAbiFuncTotal, rawAbiFuncParams, rawAbiFuncAll, rawAbiCallTotal, rawAbiCallKnown, rawAbiCallArity, rawAbiCallRaw, rawAbiFuncRet, rawAbiFuncAny, rawAbiParamCount, rawAbiCallRet, rawAbiAnnotParams, rawAbiNoWriteParams, rawAbiCallRetAny, rawAbiCallNumArgs, typeSafeMarked];
 export rawAbiReport;
 
 // ---- 表示(裸值 / 装箱)的编译期结论 --------------------------------------------
@@ -477,6 +477,334 @@ let buildStdTypes = (stmts) -> {
   null;
 };
 
+// ---- 返回安全性证明(known-safe) --------------------------------------------
+// 两种强度:
+//  · returnsNumberPure:与绑定 prone 无关,只证明「参数是注解 Number 且从未被写,
+//    所有退出边只由参数/字面量的算术构成」。第一遍即可成立,供 safe-call 不动点。
+//  · returnsNumberSafe:允许读全局,使用第二遍的 cannotBeError 事实,供裸返回。
+// 证明失败一律保守为 false;它只影响优化,不改变语义。
+let typeValuePurelyNumber = (node, pids) -> {
+  if node == null || isError(node) { return false; };
+  let t = node.type;
+  if isError(t) { return false; };
+  if t == "Number" { return true; };
+  if t == "Identifier" {
+    if isError(node.bindId) || node.bindId < 0 { return false; };
+    let i = 0;
+    while i < pids.length { if pids[i] == node.bindId { return true; }; i = i + 1; };
+    return false;
+  };
+  if t == "UnaryOp" {
+    if node.operator == "-" || node.operator == "+" { return typeValuePurelyNumber(node.operand, pids); };
+    return false;
+  };
+  if t == "BinaryOp" {
+    let op = node.operator;
+    if op == "+" || op == "-" || op == "*" || op == "&" || op == "|" || op == "^" {
+      return typeValuePurelyNumber(node.left, pids) && typeValuePurelyNumber(node.right, pids);
+    };
+  };
+  false;
+};
+let typeIfValuePure = (node, prevSafe, pids) -> {
+  let all = true;
+  let b = 0;
+  while b < node.branches.length {
+    if !typeBlockValuePure(node.branches[b].body.statements, pids) { all = false; };
+    b = b + 1;
+  };
+  if node.elseBody != null && !isError(node.elseBody) {
+    if !typeBlockValuePure(node.elseBody.statements, pids) { all = false; };
+  } else if !prevSafe { all = false; };
+  all;
+};
+let typeBlockValuePure = (stmts, pids) -> {
+  let has = false; let lastSafe = false;
+  let i = 0;
+  while i < stmts.length {
+    let s = stmts[i];
+    let t = s.type;
+    if !isError(t) && t == "If" {
+      let prevSafe = if has { lastSafe; } else { false; };
+      lastSafe = typeIfValuePure(s, prevSafe, pids);
+      has = true;
+    } else if !isError(t) && (t == "Let" || t == "Assign" || t == "While" || t == "Return" || t == "Export") {
+      // 不改变块值。
+    } else {
+      lastSafe = typeValuePurelyNumber(s, pids);
+      has = true;
+    };
+    i = i + 1;
+  };
+  has && lastSafe;
+};
+let typeReturnsPure = (node, pids) -> {
+  if node == null || isError(node) { return true; };
+  if AnyArray.check(node) {
+    let i = 0; while i < node.length { if !typeReturnsPure(node[i], pids) { return false; }; i = i + 1; };
+  } else if AnyObject.check(node) {
+    let t = node.type;
+    if !isError(t) && t == "Function" { return true; };
+    if !isError(t) && t == "Return" {
+      if !typeValuePurelyNumber(node.value, pids) { return false; };
+    };
+    let keys = std.Object.keys(node); let i = 0;
+    while i < keys.length { if !typeReturnsPure(node[keys[i]], pids) { return false; }; i = i + 1; };
+  };
+  true;
+};
+// 函数体不能有:调用(leaf)、import、`?` 传播、带注解的 Let/Assign(注解检查可提前返回)。
+let typeBodyIsClean = (node) -> {
+  if node == null || isError(node) { return true; };
+  if AnyArray.check(node) {
+    let i = 0; while i < node.length { if !typeBodyIsClean(node[i]) { return false; }; i = i + 1; };
+  } else if AnyObject.check(node) {
+    let t = node.type;
+    if !isError(t) {
+      if t == "Function" { return true; };
+      if t == "Import" || t == "Call" { return false; };
+      if t == "UnaryOp" && (node.operator == "?" || node.operator == "?Option") { return false; };
+      if (t == "Let" || t == "Assign") && node.annotation != null && !isError(node.annotation) { return false; };
+    };
+    let keys = std.Object.keys(node); let i = 0;
+    while i < keys.length { if !typeBodyIsClean(node[keys[i]]) { return false; }; i = i + 1; };
+  };
+  true;
+};
+let typeFunctionReturnsPure = (node, pids) -> {
+  if !typeBodyIsClean(node.body) { return false; };
+  if !typeBlockValuePure(node.body.statements, pids) { return false; };
+  typeReturnsPure(node.body, pids);
+};
+// 完整证明:退出边使用第二遍的 cannotBeError(可以读全局/安全调用)。
+let typeValueIsSafeNumber = (node) -> {
+  node != null && !isError(node)
+    && !isError(node.staticType) && node.staticType == "Number"
+    && !isError(node.cannotBeError) && node.cannotBeError == true;
+};
+let typeIfValueSafe = (node, prevSafe) -> {
+  let all = true;
+  let b = 0;
+  while b < node.branches.length {
+    if !typeBlockValueSafe(node.branches[b].body.statements) { all = false; };
+    b = b + 1;
+  };
+  if node.elseBody != null && !isError(node.elseBody) {
+    if !typeBlockValueSafe(node.elseBody.statements) { all = false; };
+  } else if !prevSafe { all = false; };
+  all;
+};
+let typeBlockValueSafe = (stmts) -> {
+  let has = false; let lastSafe = false;
+  let i = 0;
+  while i < stmts.length {
+    let s = stmts[i];
+    let t = s.type;
+    if !isError(t) && t == "If" {
+      let prevSafe = if has { lastSafe; } else { false; };
+      lastSafe = typeIfValueSafe(s, prevSafe);
+      has = true;
+    } else if !isError(t) && (t == "Let" || t == "Assign" || t == "While" || t == "Return" || t == "Export") {
+    } else {
+      lastSafe = typeValueIsSafeNumber(s);
+      has = true;
+    };
+    i = i + 1;
+  };
+  has && lastSafe;
+};
+let typeReturnsAreSafe = (node) -> {
+  if node == null || isError(node) { return true; };
+  if AnyArray.check(node) {
+    let i = 0; while i < node.length { if !typeReturnsAreSafe(node[i]) { return false; }; i = i + 1; };
+  } else if AnyObject.check(node) {
+    let t = node.type;
+    if !isError(t) && t == "Function" { return true; };
+    if !isError(t) && t == "Return" {
+      if !typeValueIsSafeNumber(node.value) { return false; };
+    };
+    let keys = std.Object.keys(node); let i = 0;
+    while i < keys.length { if !typeReturnsAreSafe(node[keys[i]]) { return false; }; i = i + 1; };
+  };
+  true;
+};
+let typeFunctionReturnsNumberSafe = (node) -> {
+  if !typeBlockValueSafe(node.body.statements) { return false; };
+  if !typeBodyIsClean(node.body) { return false; };
+  typeReturnsAreSafe(node.body);
+};
+let typeSafeReturnCount = 0;
+let typeSafeReturnReport = () -> typeSafeReturnCount;
+
+// ---- 引用事实与 safe-call 不动点 ---------------------------------------------
+let typeRefFacts = {};
+// 只对用户程序启用:库/运行期/模块没有 inline/raw 候选表。
+let typeCallSafetyEnabled = false;
+let typeSetCallSafety = (v) -> { typeCallSafetyEnabled = v; null; };
+let typeScanRefs = (node, facts) -> {
+  if node == null || isError(node) { return null; };
+  if AnyArray.check(node) {
+    let i = 0; while i < node.length { typeScanRefs(node[i], facts); i = i + 1; };
+  } else if AnyObject.check(node) {
+    let t = node.type;
+    if !isError(t) {
+      if t == "Import" {
+        if isError(node.pathExpression) && !isError(node.module) && !isError(node.module.names) {
+          let i = 0; while i < node.module.names.length { facts.imports[node.module.names[i]] = true; i = i + 1; };
+        };
+        return null;
+      };
+      if t == "Export" {
+        if node.name != null { facts.exports[node.name] = true; }
+        else if !isError(node.value.type) && node.value.type == "Identifier" { facts.exports[node.value.name] = true; }
+        else if !isError(node.value.type) && node.value.type == "Object" {
+          let i = 0; while i < node.value.fields.length { facts.exports[node.value.fields[i].name] = true; i = i + 1; };
+        };
+      };
+      if t == "Let" && !isError(node.name) {
+        let n = facts.lets[node.name];
+        if isError(n) { n = 0; };
+        facts.lets[node.name] = n + 1;
+      };
+      if t == "Call" {
+        let callee = node.callee;
+        if !isError(callee.type) && callee.type == "Identifier" {
+          let bid = callee.bindId;
+          if !isError(bid) && bid >= 0 {
+            let n = facts.calls[bid];
+            if isError(n) { n = 0; };
+            facts.calls[bid] = n + 1;
+          };
+        } else {
+          typeScanRefs(callee, facts);
+        };
+        let ai = 0;
+        while ai < node.arguments.length { typeScanRefs(node.arguments[ai], facts); ai = ai + 1; };
+        return null;
+      };
+      if t == "Identifier" {
+        let bid = node.bindId;
+        if !isError(bid) && bid >= 0 {
+          let n = facts.uses[bid];
+          if isError(n) { n = 0; };
+          facts.uses[bid] = n + 1;
+        };
+      };
+    };
+    let keys = std.Object.keys(node); let i = 0;
+    while i < keys.length { typeScanRefs(node[keys[i]], facts); i = i + 1; };
+  };
+  null;
+};
+let typeSafeMap = {};
+let typeSafeMarked = 0;
+let typeExprSafeNumber = (node, safe) -> {
+  if node == null || isError(node) { return false; };
+  if isError(node.staticType) || node.staticType != "Number" { return false; };
+  let t = node.type;
+  if t == "Number" { return true; };
+  if t == "Identifier" {
+    let bid = node.bindId;
+    if isError(bid) || bid < 0 { return false; };
+    let state = safe[bid];
+    return !isError(state) && (state == 1 || state == 2);
+  };
+  if t == "UnaryOp" {
+    if node.operator == "-" || node.operator == "+" { return typeExprSafeNumber(node.operand, safe); };
+    return false;
+  };
+  if t == "BinaryOp" {
+    let op = node.operator;
+    if op == "+" || op == "-" || op == "*" || op == "&" || op == "|" || op == "^" {
+      return typeExprSafeNumber(node.left, safe) && typeExprSafeNumber(node.right, safe);
+    };
+    return false;
+  };
+  if t == "Call" { return typeCallSafe(node, safe); };
+  false;
+};
+let typeCallSafe = (node, safe) -> {
+  let callee = node.callee;
+  if isError(callee.type) || callee.type != "Identifier" { return false; };
+  let bid = callee.bindId;
+  if isError(bid) || bid < 0 { return false; };
+  let st = typeBindTable[typeProgram][bid];
+  if isError(st) || isError(st.writes) || st.writes.length != 1 { return false; };
+  let decl = st.decl;
+  if isError(decl) || decl == null { return false; };
+  if decl.annotation != null && !isError(decl.annotation) { return false; };
+  let fn = decl.value;
+  if isError(fn) || fn == null { return false; };
+  if isError(fn.type) || fn.type != "Function" { return false; };
+  if isError(fn.returnsNumberPure) || fn.returnsNumberPure != true { return false; };
+  if isError(fn.parameters) || fn.parameters.length == 0 { return false; };
+  if node.arguments.length != fn.parameters.length { return false; };
+  let facts = typeRefFacts[typeProgram];
+  if isError(facts) || facts == null { return false; };
+  if isError(facts.calls[bid]) || facts.calls[bid] != 1 { return false; };
+  if !isError(facts.uses[bid]) && facts.uses[bid] != 0 { return false; };
+  if !isError(facts.exports[decl.name]) { return false; };
+  if !isError(facts.imports[decl.name]) { return false; };
+  if !isError(facts.lets[decl.name]) && facts.lets[decl.name] > 1 { return false; };
+  if !isError(typeAssignedNames[typeProgram][decl.name]) { return false; };
+  let ai = 0;
+  while ai < node.arguments.length {
+    if !typeExprSafeNumber(node.arguments[ai], safe) { return false; };
+    ai = ai + 1;
+  };
+  true;
+};
+// 1=visiting(环内乐观)、2=safe、3=unsafe。带记忆的 DFS 是 O(绑定数 + 写入数);
+// 环内的乐观假设成立,因为环里的每一跳都必须通过纯调用/纯算术。
+let typeBindingSafe = (bid, safe) -> {
+  let state = safe[bid];
+  if !isError(state) {
+    if state == 1 || state == 2 { return true; };
+    return false;
+  };
+  safe[bid] = 1;
+  let st = typeBindTable[typeProgram][bid];
+  if isError(st) || isError(st.writes) || st.decl == null || isError(st.decl) || st.writes.length == 0 {
+    safe[bid] = 3; return false;
+  };
+  let i = 0;
+  while i < st.writes.length {
+    if !typeExprSafeNumber(st.writes[i], safe) { safe[bid] = 3; return false; };
+    i = i + 1;
+  };
+  safe[bid] = 2;
+  true;
+};
+let typeComputeSafeBindings = () -> {
+  let table = typeBindTable[typeProgram];
+  let safe = {};
+  let i = 0;
+  while i < table.length { typeBindingSafe(i, safe); i = i + 1; };
+  typeSafeMap = safe;
+};
+let typeApplySafeCalls = (node) -> {
+  if node == null || isError(node) { return null; };
+  if AnyArray.check(node) {
+    let i = 0; while i < node.length { typeApplySafeCalls(node[i]); i = i + 1; };
+  } else if AnyObject.check(node) {
+    let t = node.type;
+    if !isError(t) && t == "Import" { return null; };
+    let keys = std.Object.keys(node); let i = 0;
+    while i < keys.length { typeApplySafeCalls(node[keys[i]]); i = i + 1; };
+    if !isError(t) && t == "Identifier" {
+      let bid = node.bindId;
+      let state = typeSafeMap[bid];
+      if !isError(bid) && bid >= 0 && !isError(state) && (state == 1 || state == 2) {
+        node.cannotBeError = true; typeSafeMarked = typeSafeMarked + 1;
+      };
+    };
+    if !isError(t) && t == "Call" {
+      if typeCallSafe(node, typeSafeMap) { node.cannotBeError = true; };
+    };
+  };
+  null;
+};
+
 let inferExpr = (node) -> {
   let t = node.type;
   // 默认:可能产出 Error(定位测试必须保留)。只有下面能证明的地方才翻成 true。
@@ -588,6 +916,42 @@ let inferExpr = (node) -> {
     // 给生成端区分「作者声明的类型」(权威、要强制)与「推导出的类型」(只是近似)。
     node.declaredReturnType = declaredReturn;
     node.derivedReturnType = result;
+    // 这些证明只服务用户程序的 raw/known-safe;库/运行期/模块不参与,省掉
+    // 每个函数的 body 扫描。
+    node.returnsNumberSafe = false;
+    if typeCallSafetyEnabled {
+      // 纯参数证明只在第一遍做:safe-call 不动点在第一遍后就要用,第二遍不必重算。
+      if typeCollectWrites {
+        node.returnsNumberPure = false;
+        let purePids = [];
+        let pureParams = node.parameters.length > 0;
+        let pp = 0;
+        while pp < node.parameters.length {
+          let param = node.parameters[pp];
+          if annotationBuiltinName(param.annotation) != "Number" { pureParams = false; };
+          let pb = param.bindId;
+          if isError(pb) || pb < 0 { pureParams = false; }
+          else {
+            purePids[purePids.length] = pb;
+            let pst = typeBindTable[typeProgram][pb];
+            if isError(pst) || isError(pst.writes) || pst.writes.length != 0 { pureParams = false; };
+          };
+          pp = pp + 1;
+        };
+        let pureAnnOk = !(node.returnTypeAnnotation != null && !isError(node.returnTypeAnnotation))
+          || (declaredReturn == "Number" && result == "Number");
+        node.returnsNumberPure = pureAnnOk && pureParams && typeFunctionReturnsPure(node, purePids);
+      };
+      // 完整证明(权威遍):所有退出边都是已证的 Number,且返回注解检查是死代码。
+      if !typeCollectWrites {
+        let hasAnn = node.returnTypeAnnotation != null && !isError(node.returnTypeAnnotation);
+        let annOk = !hasAnn || (declaredReturn == "Number" && result == "Number");
+        if annOk && !isError(result) && result == "Number" && typeFunctionReturnsNumberSafe(node) {
+          node.returnsNumberSafe = true;
+          typeSafeReturnCount = typeSafeReturnCount + 1;
+        };
+      };
+    };
     // ②a:裸 ABI 候选 —— 参数全部「可裸」(注解 Number 且函数体内未被重赋值)。
     let rawAllParams = node.parameters.length > 0;
     let rpi = 0;
@@ -963,6 +1327,12 @@ let inferTypes = (stmts) -> {
   typeCollectWrites = true;
   inferStmts(stmts);
   typeCollectWrites = false;
+  // 第一遍已给节点 bindId;扫引用事实,供 safe-call 不动点判定稳定性。
+  // 只有用户程序需要(其他程序不会发射 raw/inline 候选)。
+  if typeCallSafetyEnabled {
+    typeRefFacts[typeProgram] = { calls: {}, uses: {}, exports: {}, lets: {}, imports: {} };
+    typeScanRefs(stmts, typeRefFacts[typeProgram]);
+  };
   // 第一遍收齐每次写入的右值后,解「谁可能是 Error」;第二遍据此给每个节点标注。
   typeSolveWrites(typeBindTable[typeProgram]);
   // 第二遍才是权威口径:第一遍只负责把每次写入的右值类型收齐,第二遍据此判定可解箱性;
@@ -979,6 +1349,11 @@ let inferTypes = (stmts) -> {
   typeDepth = 1;
   typeReturnDepth = 0;
   inferStmts(stmts);
+  // 只对用户程序补 safe-call 事实;库/运行期/模块没有 inline/raw 候选表。
+  if typeCallSafetyEnabled {
+    typeComputeSafeBindings();
+    typeApplySafeCalls(stmts);
+  };
   // The second pass rewrites runtimeTypeFree from the unknown-write set; refine
   // it now with the prone fixpoint so a known-but-fallible write keeps its check.
   typeRefreshRuntimeChecks(typeBindTable[typeProgram]);
@@ -1016,6 +1391,8 @@ export checkIsDead;
 export typeErrors;
 export typeUnboxList;
 export typeRepReport;
+export typeSetCallSafety;
+export typeSafeReturnReport;
 export typeRepPrograms;
 export typeBindsUnknown;
 export typeParamsUnknown;

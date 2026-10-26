@@ -243,6 +243,9 @@ source.ql
 - **2026-10-26**:P1 多调用点 raw 直接函数落地(无 value use 的注解 Number leaf:
   不生成闭包盒/annotations/boxed 入口,绑定槽存定义环境指针)。判别 `t60_raw_direct`;
   设计/边界见 `docs/direct-call-optimization.md`。
+- **2026-10-26**:P2 裸返回 + known-safe 传播(proven Number 的函数 `ret double`;
+  纯参数单调用点调用证明不可能 Error,累加器不再 prone,无新增运行期检查)。
+  判别 `t61_known_safe`;5M 累加器 9.6s→0.011s。放宽 leaf 未做。
 - 原分支 `error-carried` @ `5d0f4e8`(已推 `origin`);从 `unboxed-values` 的 `394e473` 切出。
 - `unboxed-values` 已推 `origin`,**未合并**;合并前需作者明确同意。
 - `backup/nan-removal-stage1` = "去 NaN/∞"回滚现场;`error-carried` 合并后可删。
