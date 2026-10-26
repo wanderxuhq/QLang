@@ -5,6 +5,27 @@ import ./tokens.ql;
 import ./stdlib.ql;
 import ./source.ql;
 
+// 逐字符分类表。等价于历史上每个字符现算的
+// `std.String.includes(<常量集合>)(c)`:那会为每个字符建一个部分应用闭包,
+// 再在集合串里逐位比较(每次比较还要新建两个单字符串)。集合是常量,建一次
+// ASCII 表即可。未列出的码位(非 ASCII、空串)查表得到 Error,一律判否,
+// 与集合里只有 ASCII 成员等价。
+// 注意:空白集合只有空格/TAB/LF/CR —— 不是 `\v`/`\f`(保留原判据)。
+let lexAscii = { ws: {}, digit: {}, identStart: {}, identChar: {} };
+let lexClassCode = 0;
+while lexClassCode < 128 {
+  let ch = std.String.fromCodePoint(lexClassCode);
+  let digit = lexClassCode >= 48 && lexClassCode <= 57;
+  let upper = lexClassCode >= 65 && lexClassCode <= 90;
+  let lower = lexClassCode >= 97 && lexClassCode <= 122;
+  let identStart = upper || lower || lexClassCode == 95;
+  lexAscii.ws[ch] = lexClassCode == 32 || lexClassCode == 9 || lexClassCode == 10 || lexClassCode == 13;
+  lexAscii.digit[ch] = digit;
+  lexAscii.identStart[ch] = identStart;
+  lexAscii.identChar[ch] = identStart || digit;
+  lexClassCode = lexClassCode + 1;
+};
+
 let Lexer = (source) -> {
   let chars = std.String.toChars(source);
   let sourceMap = SourceMap(chars);
@@ -57,7 +78,8 @@ let Lexer = (source) -> {
     let done = false;
     while !done {
       let c = peek();
-      if c != "" && std.String.includes(" \t\r\n")(c) {
+      let space = lexAscii.ws[c];
+      if !isError(space) && space {
         advance();
       } else if c == "/" && peekNext() == "/" {
         // Line comment: skip to end of line (\n is consumed as whitespace by the outer loop)
@@ -85,11 +107,15 @@ let Lexer = (source) -> {
     }
   };
 
-  let isDigit = (c) -> c != "" && std.String.includes("0123456789")(c);
+  let isDigit = (c) -> {
+    let flag = lexAscii.digit[c];
+    !isError(flag) && flag;
+  };
   let numberToken = (value) -> {
     let c = peek();
+    let tail = lexAscii.identChar[c];
     // Never split a malformed number into successful adjacent expressions.
-    if (c != "" && std.String.includes("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_0123456789")(c)) || (c == "." && (isDigit(peekNext()) || peekNext() == ".")) {
+    if (!isError(tail) && tail) || (c == "." && (isDigit(peekNext()) || peekNext() == ".")) {
       return stringError("Invalid number literal", startIndex);
     };
     { kind: TokenKind.Number, value: value, span: { start: startIndex, end: currentIndex } };
@@ -183,7 +209,7 @@ let Lexer = (source) -> {
         else if e == "f" { literal = literal + "\f"; }
         else if e == "v" { literal = literal + "\v"; }
         else if e == "0" {
-          if peek() != "" && std.String.includes("0123456789")(peek()) { return stringError("Invalid string escape", start); };
+          if isDigit(peek()) { return stringError("Invalid string escape", start); };
           literal = literal + "\0";
         }
         else if e == "x" || e == "u" {
@@ -234,8 +260,10 @@ let Lexer = (source) -> {
 
   let scanIdentifier = () -> {
     // Don't overwrite startIndex - it's already set correctly in scanToken
-    while peek() != "" && std.String.includes("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_")(peek()) {
-      advance();
+    let scanning = true;
+    while scanning {
+      let flag = lexAscii.identChar[peek()];
+      if !isError(flag) && flag { advance(); } else { scanning = false; };
     }
 
     let text = "";
@@ -270,6 +298,7 @@ let Lexer = (source) -> {
     }
 
     let c = advance();
+    let identStartFlag = lexAscii.identStart[c];
 
     if c == "(" { return { kind: TokenKind.LeftParen, span: { start: startIndex, end: currentIndex } }; }
     else if c == ")" { return { kind: TokenKind.RightParen, span: { start: startIndex, end: currentIndex } }; }
@@ -323,8 +352,8 @@ let Lexer = (source) -> {
       else { return { kind: TokenKind.Minus, span: { start: startIndex, end: currentIndex } }; };
     }
     else if c == "\"" || c == "'" || c == "`" { return scanString(c); }
-    else if std.String.includes("0123456789")(c) { return scanNumber(); }
-    else if std.String.includes("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_")(c) { return scanIdentifier(); }
+    else if isDigit(c) { return scanNumber(); }
+    else if !isError(identStartFlag) && identStartFlag { return scanIdentifier(); }
     else { return { kind: TokenKind.Error, value: "Unexpected character: " + c, span: { start: startIndex, end: currentIndex } }; };
   };
 
