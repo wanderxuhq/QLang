@@ -246,8 +246,19 @@ let argSlot = (bytes) -> {
   reg;
 };
 let line = (s) -> { curSink[curSink.length] = s; };
-let temp = () -> { tmpN = tmpN + 1; "%t" + std.String.toString(tmpN); };
-let lbl = () -> { lblN = lblN + 1; "bb" + std.String.toString(lblN); };
+// 冷助手(定位错误 / 契约违反)是编译尾声才发射的,却拼接在 prelude 之后。它们必须与
+// 用户程序无关,否则「prelude + 助手」不能当成固定前缀复用(S-3)。所以给它们一套独立
+// 的临时量/标签命名空间:名字只由助手自身的形状决定。
+let coldTmpN = 0;
+let coldLblN = 0;
+let temp = () -> {
+  if inColdHelper { coldTmpN = coldTmpN + 1; return "%h" + std.String.toString(coldTmpN); };
+  tmpN = tmpN + 1; "%t" + std.String.toString(tmpN);
+};
+let lbl = () -> {
+  if inColdHelper { coldLblN = coldLblN + 1; return "hL" + std.String.toString(coldLblN); };
+  lblN = lblN + 1; "bb" + std.String.toString(lblN);
+};
 // LLVM decimal floating constants require a decimal point or exponent.
 // Use exact JSON conversion for fractions; general display formatting may
 // deliberately differ and must never round/truncate compiled constants.
@@ -2695,6 +2706,9 @@ let main = (args) -> {
     r = r + 1;
   };
   emitPrelude();
+  // 助手插在 prelude 之后、按程序的计数注释之前:「prelude + 助手」因此是一段与用户
+  // 程序无关的连续前缀(调用点在 main/函数体里,顺序仍满足「先定义后引用」)。
+  coldHelperAt = out.length;
   line("; unboxable bindings: " + std.String.toString(typeUnboxList.length));
   // 诊断:编译期算出的表示各有多少(节点种类/静态类型/表示)。燃料 = 裸读,命中 = 裸比较;
   // 装箱的一侧按静态类型分层,才能分清「根本不是 Number」和「是 Number 但操作数不裸」。
@@ -2772,7 +2786,6 @@ let main = (args) -> {
   line("; safe-return: funcs=" + std.String.toString(typeSafeReturnReport()));
   line("; rawABI: funcs total=" + std.String.toString(ra[0]) + " allparams=" + std.String.toString(ra[1]) + " allraw=" + std.String.toString(ra[2]) + " anyparam=" + std.String.toString(ra[8]) + " rawparams=" + std.String.toString(ra[9]) + " retnum=" + std.String.toString(ra[7]) + " | calls total=" + std.String.toString(ra[3]) + " known=" + std.String.toString(ra[4]) + " arity=" + std.String.toString(ra[5]) + " rawable=" + std.String.toString(ra[6]) + " retfuel=" + std.String.toString(ra[10]) + " | numparams=" + std.String.toString(ra[11]) + " writable=" + std.String.toString(ra[12]) + " retany=" + std.String.toString(ra[13]) + " numargs=" + std.String.toString(ra[14]) + " safemarked=" + std.String.toString(ra[15]));
   // ②a 补充:发射序折扣在主线末尾补发(见下文),因为函数体是在 main 发射过程中才发出的。
-  coldHelperAt = out.length;
   if extensionMode { mainAt = out.length; line("define %ql_value @qlang_extension_init_v1(ptr %host_env) {"); }
   else { mainAt = out.length; line("define i32 @main(i32 %argc, ptr %argv) {"); };
   line("entry:");
