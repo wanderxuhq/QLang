@@ -239,7 +239,9 @@ source.ql
   Option 的 `?`（parser 内部标成 `?Option`,native 传 Null,boot 用 Return completion）、
   `cannotBeError` 健全性门、boot 库函数导出修复、用户级 `assert`(契约违反 ⇒ fatal,两引擎同一实现)。
 - **2026-10-26**:P0 直接调用/纯 Number 内联落地(不可变 leaf 绑定的直接 boxed 调用;
-  单调用点纯 Number 函数 raw 内联)。判别 `t58_direct_calls` / `t59_inline_pure`;
+  单调用点纯 Number 函数 raw 内联)。判别 `t58_direct_calls` / `t59_inline_pure`。
+- **2026-10-26**:P1 多调用点 raw 直接函数落地(无 value use 的注解 Number leaf:
+  不生成闭包盒/annotations/boxed 入口,绑定槽存定义环境指针)。判别 `t60_raw_direct`;
   设计/边界见 `docs/direct-call-optimization.md`。
 - 原分支 `error-carried` @ `5d0f4e8`(已推 `origin`);从 `unboxed-values` 的 `394e473` 切出。
 - `unboxed-values` 已推 `origin`,**未合并**;合并前需作者明确同意。
@@ -273,7 +275,8 @@ source.ql
     `E` 是 Error 家族的收窄,不是第二载体;载荷 schema 与穷尽性一起暂缓。
   - **F**:std 注解(作者要求零收益也要写):返回注解免费;参数注解 = 每调用点一次内联检查
     (实参类型已证才免费);对象/数组返回今天净负(+164),缓。改完重建 bundle。
-  - **G**:原始 ABI(`rawable=0`;第一步是造出能让调用点吃裸签名的条件,不是先改 ABI)。
+  - **G**:原始 ABI(P0/P1 已做直接调用、纯 Number 内联、多调用点注解 Number 参数;
+    余:裸返回、放宽 leaf/同名 import、prone 实参)。
   - **H**:std 整链(280 个函数中 189 个只能经闭包码指针到达;只有真惰性/按需实例化能删)。
   - **I**:穷尽性/消费点确认(无 `match`;可枚举联合可做成员级;谓词型只能"确认";
     落在 `types.ql` + `compileDiagnostic`;验收 IR/机器逐字节不变)。
@@ -340,7 +343,7 @@ source.ql
 | 语法/词法/解析/语法糖 | `bootstrapped/lexer.ql`, `parser.ql`, `ast.ql` |
 | 解释执行语义 | `bootstrapped/interpreter.ql`, `environment.ql`;`aot/runtime.ql` |
 | 编译期分析(类型/表示/收窄) | `aot/types.ql` |
-| 代码发射 | `aot/qlangc.ql`;直接调用/纯 Number 内联见 `docs/direct-call-optimization.md` |
+| 代码发射 | `aot/qlangc.ql`;直接调用/raw ABI/纯 Number 内联见 `docs/direct-call-optimization.md` |
 | 热机制/ABI 叶子 | `aot/value_abi.ql`;`aot/runtime.c` |
 | stdlib 算法 | `stdlib/*.ql` + `manifest.json` + 重建 `bundle.ql` |
 | 夹具/金文件 | `aot/tests/*.ql` / `.expected`;`bootstrapped/tests/*` |

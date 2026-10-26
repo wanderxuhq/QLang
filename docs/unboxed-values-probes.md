@@ -410,3 +410,38 @@ while j < 5 { t = pure(j, 1); j = j + 1; };
 Error 实参、注解参数、返回注解、leaf 内赋值与 body Error。
 同源 p0f:`stage2/stage3` IR 相同;interpreter 59 PASS;selfhost ALL CHECKS PASS;
 call/array/object/numeric/assignment/diagnostic ALL CHECKS PASS。
+
+## 16. 已实测:多调用点 raw 直接函数(P1,2026-10-26)
+
+判别夹具 `t60_raw_direct`。形状:注解 `Number` 参数、无参数写入、leaf、绑定无 value
+use/重声明/赋值/export,且**每个**调用点 arity 精确、每个实参 `staticType == Number`
+且 `cannotBeError == true`。
+
+```qlang
+// 5 个调用点:closure/annotations/boxed 入口都不再发出,绑定槽存定义环境指针
+let add = (a: Number, b: Number): Number -> a + b;
+let v1 = add(1, 2); let v2 = add(3, 4); let v3 = add(5, 6);
+let v4 = add(7, 8); let v5 = add(9, 10);
+println(v1 + v2 + v3 + v4 + v5);
+```
+
+| 形状 | 机器指令(旧 → P1) |
+|---|---:|
+| 空文件 | 125,673 |
+| t20 | 125,735(不变) |
+| 5 调用点注解函数 | 126,120 → **125,766**(−354) |
+| 非内联体 `max2`/`sq` 共 6 调用点 | 126,284 → **125,819**(−465) |
+
+上述两例的 `rawcalls`/`rawfuncs` 分别为 5/1、6/2。
+
+⇒ raw 入口 `%ql_value @ql_fnN(ptr %env, double %p0, ...)`;调用点把实参读成 double,
+不再构造 16 字节实参缓冲;函数体只发一份,调用点越多越划算。
+
+5M 次 `max2(i, i+1)` 微基准(同一编译器;raw 直接调用 vs `let f = max2` 强制通用
+路径):用户态 **0.059s vs 8.473s**,输出相同;静态 125,759 vs 125,993(−234)。
+
+**失效条件(已加判别)**:value use、部分应用、参数写入、任一实参可能为 Error、
+零参函数、非 leaf(含递归)、绑定注解、重声明/赋值/export、定义前调用、同名静态
+import(import 会覆盖同名槽)。`t60` 覆盖 5 调用点、全局读/写、逐帧 env(逃逸闭包)、
+value use、部分应用、参数写、循环内定义、零参、递归、Error-prone 实参、同名 import
+覆盖。native/boot 输出一致。

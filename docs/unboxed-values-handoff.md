@@ -185,7 +185,7 @@ runtime 注册为 native、boot 直接装同一实现;夹具 `t57_assert`,两个
 - 改 `stdlib/*.ql` 后**必须重建 `stdlib/bundle.ql`**(`--build_bundle.ql --check` 校验)。
 - 依赖:B 与 E 先定,否则注解的收益被错误模型挡住(派生返回类型已完整时注解 ±0)。
 
-### G. **⑪ 原始 ABI**(P0 已落地,继续)
+### G. **⑪ 原始 ABI**(P0/P1 已落地,继续)
 `rawable=0` ⇒ **第一步是造出能让调用点吃裸签名的条件**(参数注解 + 调用点类型已证),不是先改 ABI。
 计数器命令见 §3.3。
 
@@ -193,7 +193,12 @@ runtime 注册为 native、boot 直接装同一实现;夹具 `t57_assert`,两个
 单调用点、无 value use 的纯 Number 函数进一步 raw 内联,函数体/闭包不再发出。
 判别 `t58_direct_calls` / `t59_inline_pure`;机器指令 −19 / −195,20M 微基准内联路径
 用户态 ~0.05–0.08s vs 通用分派 ~36s。设计/边界见 `docs/direct-call-optimization.md`。
-多调用点、参数注解函数的 raw ABI 仍未做。
+
+**2026-10-26 P1**:多调用点、参数注解函数的 raw ABI 已落地(`t60_raw_direct`):
+无 value use 的注解 Number leaf 函数不再有闭包盒/annotations/boxed 入口,绑定槽存
+定义处环境指针,调用点直接传 double;判别程序机器指令 −354 / −465,5M 次微基准
+用户态 0.059s vs 通用 8.473s。仍限 leaf、
+无 value use、所有调用点实参已证 Number 且非 Error;返回仍 boxed。设计同见上文档。
 
 ### H. **⑦ std 整链**(特性级,未开工)
 280 个函数里 **189 个(67.5 %)** 只能经闭包码指针到达 ⇒ 静态**不可删**;只有真惰性/按需实例化能碰它。

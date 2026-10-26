@@ -163,7 +163,7 @@ let emitImport = (node) -> {
     let parent = temp(); line("  " + parent + " = load ptr, ptr " + curEnv);
     curEnv = parent; curScope = curScope.parent;
   };
-  let fn = emitFunction({ type: "Function", parameters: [], body: { statements: node.module.program.statements }, moduleBody: true, modulePath: node.module.path }, "");
+  let fn = emitFunction({ type: "Function", parameters: [], body: { statements: node.module.program.statements }, moduleBody: true, modulePath: node.module.path }, "", false);
   curScope = savedScope; curEnv = savedEnv;
   let flag = emitModuleFlag(node.module.path); let loading = temp(); let busy = temp();
   line("  " + loading + " = load %ql_value, ptr " + flag);
@@ -801,6 +801,31 @@ let collectAssignedNames = (node, names) -> {
   };
   null;
 };
+// Names that any import in this program may bind. Imports overwrite the
+// declared slot of the same name (and reserve optional slots up front), so a
+// direct/raw target must never be registered for such a name: the call would
+// bypass the imported value. Collect without following Import nodes (their
+// module ASTs form cycles).
+let importedNames = {};
+let collectImportedNames = (node) -> {
+  if AnyArray.check(node) {
+    let i = 0; while i < node.length { collectImportedNames(node[i]); i = i + 1; };
+  } else if AnyObject.check(node) {
+    let t = node.type;
+    if !isError(t) && t == "Import" {
+      // Static imports have no pathExpression; computed imports return a
+      // namespace and never create lexical bindings.
+      if isError(node.pathExpression) && !isError(node.module) && !isError(node.module.names) {
+        let i = 0;
+        while i < node.module.names.length { importedNames[node.module.names[i]] = true; i = i + 1; };
+      };
+      return null;
+    };
+    let keys = std.Object.keys(node); let i = 0;
+    while i < keys.length { collectImportedNames(node[keys[i]]); i = i + 1; };
+  };
+  null;
+};
 // A function is a leaf when its own body contains no call/import; nested
 // function definitions are values, not calls, and are skipped.
 let functionBodyIsLeaf = (node) -> {
@@ -837,21 +862,48 @@ let callArgsCannotBeError = (args) -> {
 let inlineSubst = null;
 let inlineCandidates = {};
 let inlineUsed = 0;
+// Raw direct functions: an immutable, never-valued function binding whose every
+// call site passes Number arguments. No closure box is created for it; the
+// binding slot stores the definition environment pointer instead, and calls
+// pass raw doubles. `rawCalls`/`rawFuncs` are the hit counters.
+let rawDirectCandidates = {};
+let rawCalls = 0;
+let rawFuncs = 0;
+let directSlots = [];
+let directScanSeq = 0;
+let directRefSlot = (refs, bid) -> {
+  let slot = refs[bid];
+  if isError(slot) || slot == null {
+    slot = { value: 0, callee: 0, firstCall: -1, letSeq: -1, calls: [], bid: bid, letNode: null, fnNode: null };
+    refs[bid] = slot;
+    directSlots[directSlots.length] = slot;
+  };
+  slot;
+};
 let collectDirectRefs = (node, refs) -> {
+  directScanSeq = directScanSeq + 1;
+  let here = directScanSeq;
   if AnyArray.check(node) {
     let i = 0; while i < node.length { collectDirectRefs(node[i], refs); i = i + 1; };
   } else if AnyObject.check(node) {
     let t = node.type;
     if !isError(t) && t == "Import" { return null; };
+    if !isError(t) && t == "Let" && node.value != null && !isError(node.value.type) && node.value.type == "Function" && !isError(node.bindId) && node.bindId >= 0 {
+      let declared = directRefSlot(refs, node.bindId);
+      declared.letSeq = here;
+      declared.letNode = node;
+      declared.fnNode = node.value;
+    };
     if !isError(t) && t == "Call" {
       let callee = node.callee;
       if !isError(callee) && !isError(callee.type) && callee.type == "Identifier" {
         let bid = callee.bindId;
         if !isError(bid) && bid >= 0 {
-          let slot = refs[bid];
-          if isError(slot) { slot = { value: 0, callee: 0, call: null }; refs[bid] = slot; };
+          let slot = directRefSlot(refs, bid);
           slot.callee = slot.callee + 1;
           slot.call = node;
+          slot.calls[slot.calls.length] = node;
+          if slot.firstCall < 0 { slot.firstCall = here; };
         };
       } else {
         collectDirectRefs(callee, refs);
@@ -863,8 +915,7 @@ let collectDirectRefs = (node, refs) -> {
     if !isError(t) && t == "Identifier" {
       let bid = node.bindId;
       if !isError(bid) && bid >= 0 {
-        let slot = refs[bid];
-        if isError(slot) { slot = { value: 0, callee: 0, call: null }; refs[bid] = slot; };
+        let slot = directRefSlot(refs, bid);
         slot.value = slot.value + 1;
       };
     };
@@ -912,7 +963,8 @@ let collectInlineCandidates = (node, refs, candidates) -> {
     if !isError(t) && t == "Import" { return null; };
     if !isError(t) && t == "Let" && node.value != null && !isError(node.value.type) && node.value.type == "Function"
        && !isError(node.bindId) && node.bindId >= 0 && (node.annotation == null || isError(node.annotation))
-       && isError(redeclaredUserNames[node.name]) && isError(exportedUserNames[node.name]) {
+       && isError(redeclaredUserNames[node.name]) && isError(exportedUserNames[node.name])
+       && isError(importedNames[node.name]) {
       let bid = node.bindId;
       let r = refs[bid];
       if !isError(r) && r != null && r.value == 0 && r.callee == 1 {
@@ -940,7 +992,7 @@ let collectInlineCandidates = (node, refs, candidates) -> {
           let pids = []; let pi = 0;
           while pi < params.length { pids[pids.length] = params[pi].bindId; pi = pi + 1; };
           if inlineBodyUsesOnlyParams(stmts[0], pids) {
-            candidates[bid] = { arity: params.length, params: pids, body: stmts[0] };
+            candidates[bid] = { arity: params.length, params: pids, body: stmts[0], node: node };
           };
         };
       };
@@ -950,10 +1002,61 @@ let collectInlineCandidates = (node, refs, candidates) -> {
   };
   null;
 };
+// A raw direct candidate must be provably unobservable as a value: no read or
+// export, no assignment/redeclaration, a leaf body, annotated Number parameters
+// that are never written, and every call site in source order after the
+// definition with the exact arity and statically Number, non-Error arguments.
+// Those are exactly the dispatcher duties the raw call site would otherwise owe.
+let collectRawCandidates = (candidates) -> {
+  let i = 0;
+  while i < directSlots.length {
+    let s = directSlots[i];
+    let ok = true;
+    if isError(s.fnNode) || s.fnNode == null { ok = false; };
+    if ok && (isError(s.letNode) || s.letNode == null) { ok = false; };
+    if ok && (isError(s.letSeq) || s.letSeq < 0) { ok = false; };
+    if ok && (isError(s.firstCall) || s.firstCall <= s.letSeq) { ok = false; };
+    if ok && s.value != 0 { ok = false; };
+    if ok && (isError(s.callee) || s.callee < 1) { ok = false; };
+    let fn = s.fnNode;
+    let letNode = s.letNode;
+    if ok && (isError(fn.rawAbiAll) || fn.rawAbiAll != true) { ok = false; };
+    if ok && (isError(fn.parameters) || fn.parameters.length == 0) { ok = false; };
+    if ok && !functionBodyIsLeaf(fn.body) { ok = false; };
+    if ok && letNode.annotation != null && !isError(letNode.annotation) { ok = false; };
+    if ok && !isError(assignedUserNames[letNode.name]) { ok = false; };
+    if ok && !isError(redeclaredUserNames[letNode.name]) { ok = false; };
+    if ok && !isError(exportedUserNames[letNode.name]) { ok = false; };
+    if ok && !isError(importedNames[letNode.name]) { ok = false; };
+    let ci = 0;
+    while ok && ci < s.calls.length {
+      let call = s.calls[ci];
+      if isError(call) || call.arguments.length != fn.parameters.length { ok = false; }
+      else {
+        let ai = 0;
+        while ai < call.arguments.length {
+          let arg = call.arguments[ai];
+          if arg.staticType != "Number" || arg.cannotBeError != true { ok = false; };
+          ai = ai + 1;
+        };
+      };
+      ci = ci + 1;
+    };
+    if ok { candidates[s.bid] = { arity: fn.parameters.length, name: letNode.name, node: letNode }; };
+    i = i + 1;
+  };
+};
 let buildInlineCandidates = (program) -> {
+  inlineCandidates = {};
+  rawDirectCandidates = {};
+  directSlots = [];
+  directScanSeq = 0;
+  importedNames = {};
+  collectImportedNames(program);
   let refs = {};
   collectDirectRefs(program, refs);
   collectInlineCandidates(program, refs, inlineCandidates);
+  collectRawCandidates(rawDirectCandidates);
 };
 let emitInlineDirect = (info, values) -> {
   let saved = inlineSubst; inlineSubst = {};
@@ -1137,13 +1240,18 @@ let emitLetStmt = (node) -> {
   if annotated && !typeFree { ty = emitExpr(node.annotation); text = internString(annotationText(node.annotation)); };
   let value = "null";
   let inline = null;
+  let rawInfo = null;
   if allowDirectUserCalls && node.value != null && !isError(node.value.type) && node.value.type == "Function" && !isError(node.bindId) {
     let candidate = inlineCandidates[node.bindId];
-    if !isError(candidate) && candidate != null { inline = candidate; };
+    // Bind ids restart for every program (entry/library/each module), so an
+    // id-only lookup could match a different AST. Compare the definition node.
+    if !isError(candidate) && candidate != null && candidate.node == node { inline = candidate; };
+    let rawCandidate = rawDirectCandidates[node.bindId];
+    if !isError(rawCandidate) && rawCandidate != null && rawCandidate.node == node { rawInfo = rawCandidate; };
   };
   if node.value != null {
     if inline != null { value = emitNull(); }
-    else if node.value.type == "Function" { value = emitFunction(node.value, node.name); }
+    else if node.value.type == "Function" { value = emitFunction(node.value, node.name, rawInfo != null); }
     else { value = emitExpr(node.value); };
     // A typed binding holds only its type. The check's value still goes through
     // __err_at first, so a failing check carries the declaration's source position,
@@ -1204,9 +1312,12 @@ let emitLetStmt = (node) -> {
     if isError(curScope.directFns) { curScope.directFns = {}; };
     curScope.directFns[node.name] = null;
     if node.value != null && !isError(node.value.type) && node.value.type == "Function"
-       && isError(assignedUserNames[node.name]) && isError(redeclaredUserNames[node.name]) && isError(exportedUserNames[node.name]) {
+       && isError(assignedUserNames[node.name]) && isError(redeclaredUserNames[node.name]) && isError(exportedUserNames[node.name])
+       && isError(importedNames[node.name]) {
       if inline != null {
         curScope.directFns[node.name] = { inline: true, arity: inline.arity, params: inline.params, body: inline.body };
+      } else if rawInfo != null && !isError(node.value.rawDirect) && node.value.rawDirect == true {
+        curScope.directFns[node.name] = { raw: true, ir: node.value.emittedIr, arity: node.value.parameters.length };
       } else if !isError(node.value.emittedIr) && node.value.directLeaf == true && node.value.directNoParamAnnotations == true {
         curScope.directFns[node.name] = { ir: node.value.emittedIr, arity: node.value.parameters.length };
       };
@@ -1319,20 +1430,26 @@ let emitAssignStmt = (node) -> {
 // R10-c:函数体写独立 fnBlocks 元素;闭包盒指令写回调用方当前块。R10-i:调用方必须先
 // defineSlot(name)(emitLetStmt 的 Function 分支负责),函数体里同名标识符沿 parent 链
 // depth 1 命中全局帧 → 递归成立。
-let emitFunction = (node, name) -> {
+let emitFunction = (node, name, rawDirect) -> {
+  let rawMode = !isError(rawDirect) && rawDirect == true;
   let isModule = !isError(node.moduleBody) && node.moduleBody;
   if isModule && !isError(moduleFactories[node.modulePath]) {
     return emitClosure(moduleFactories[node.modulePath], curEnv, 0, emitNull());
   };
+  // A raw direct function has no closure and no annotations array: every call
+  // site proved the builtin Number parameter annotations, so the check the
+  // dispatcher would perform is statically true.
   let captured = []; let hasAnnotations = false; let ai = 0;
-  while ai < node.parameters.length {
-    let ann = node.parameters[ai].annotation;
-    if ann != null {
-      let ty = emitExpr(ann);
-      captured[captured.length] = emitArrayRegs([ty, internString(annotationText(ann))]);
-      hasAnnotations = true;
-    } else { captured[captured.length] = emitNull(); };
-    ai = ai + 1;
+  if !rawMode {
+    while ai < node.parameters.length {
+      let ann = node.parameters[ai].annotation;
+      if ann != null {
+        let ty = emitExpr(ann);
+        captured[captured.length] = emitArrayRegs([ty, internString(annotationText(ann))]);
+        hasAnnotations = true;
+      } else { captured[captured.length] = emitNull(); };
+      ai = ai + 1;
+    };
   };
   let annotations = emitNull();
   if hasAnnotations { annotations = emitArrayRegs(captured); };
@@ -1379,7 +1496,17 @@ let emitFunction = (node, name) -> {
   let n = std.Object.keys(curScope.slots).length;
   let blk = [];
   curSink = blk;
-  line("define internal %ql_value @" + fname + "(ptr %env, ptr %args, i64 %argc, %ql_value %annotations) {");
+  if rawMode {
+    let signature = "ptr %env";
+    let sb = 0;
+    while sb < node.parameters.length {
+      signature = signature + ", double %p" + std.String.toString(sb);
+      sb = sb + 1;
+    };
+    line("define internal %ql_value @" + fname + "(" + signature + ") {");
+  } else {
+    line("define internal %ql_value @" + fname + "(ptr %env, ptr %args, i64 %argc, %ql_value %annotations) {");
+  };
   line("entry:");
   line(""); // Filled after emission with fixed entry-block stack slots.
   curLbl = "entry";
@@ -1388,19 +1515,29 @@ let emitFunction = (node, name) -> {
   curEnv = f;
   let a = 0;
   while a < k {
-    let ro = temp(); let rv = temp();
-    line("  " + ro + " = getelementptr %ql_value, ptr %args, i64 " + std.String.toString(a));
-    line("  " + rv + " = load %ql_value, ptr " + ro);
     let off = temp();
     let slot = curScope.slots[node.parameters[a].name];
     line("  " + off + " = getelementptr i8, ptr " + f + ", i64 " + std.String.toString(16 + 64 * slot));
-    let ty = "null"; let text = "null";
-    if node.parameters[a].annotation != null {
-      let entry = emitCallRegs("__get_index", ["%annotations", emitNumber({ value: a })]);
-      ty = emitCallRegs("__get_index", [entry, emitNumber({value: 0})]);
-      text = emitCallRegs("__get_index", [entry, emitNumber({value: 1})]);
+    if rawMode {
+      // The raw parameter is already a double; the slot is a legal Number box
+      // whose tag stays 1. It is never written (unboxType required no writes),
+      // so its annotation type/text slots are never consulted.
+      let bits = temp();
+      line("  " + bits + " = bitcast double %p" + std.String.toString(a) + " to i64");
+      let packed = emitPack("1", bits);
+      line("  store %ql_value " + packed + ", ptr " + off);
+    } else {
+      let ro = temp(); let rv = temp();
+      line("  " + ro + " = getelementptr %ql_value, ptr %args, i64 " + std.String.toString(a));
+      line("  " + rv + " = load %ql_value, ptr " + ro);
+      let ty = "null"; let text = "null";
+      if node.parameters[a].annotation != null {
+        let entry = emitCallRegs("__get_index", ["%annotations", emitNumber({ value: a })]);
+        ty = emitCallRegs("__get_index", [entry, emitNumber({value: 0})]);
+        text = emitCallRegs("__get_index", [entry, emitNumber({value: 1})]);
+      };
+      emitBindingStore(off, rv, ty, text);
     };
-    emitBindingStore(off, rv, ty, text);
     if !isError(node.parameters[a].unboxType) && node.parameters[a].unboxType == "Number" {
       if isError(curScope.unbox) { curScope.unbox = {}; };
       curScope.unbox[node.parameters[a].name] = true;
@@ -1480,7 +1617,16 @@ let emitFunction = (node, name) -> {
   curEnv = savedEnv;
   curLbl = savedLbl;
   if isModule { moduleFactories[node.modulePath] = fname; };
-  emitClosure(fname, savedEnv, k, annotations);
+  if rawMode {
+    rawFuncs = rawFuncs + 1;
+    node.rawDirect = true;
+    // The binding slot stores the definition environment instead of a closure:
+    // it is never readable as a value (the candidate scan proved that), and a
+    // call site needs exactly this pointer to run the raw entry.
+    emitPointerValue(savedEnv);
+  } else {
+    emitClosure(fname, savedEnv, k, annotations);
+  };
 };
 
 let emitClosure = (fname, env, arity, annotations) -> {
@@ -1762,6 +1908,15 @@ let emitBorrowedCall = (fn, values, exempt) -> {
   result;
 };
 
+let rawCallArgsOk = (args) -> {
+  let i = 0;
+  while i < args.length {
+    if args[i].staticType != "Number" { return false; };
+    if args[i].cannotBeError != true { return false; };
+    i = i + 1;
+  };
+  true;
+};
 let directCallTarget = (node, cname) -> {
   if !allowDirectUserCalls || inRuntime || inColdHelper { return null; };
   let hit = lookupSlot(cname);
@@ -1773,6 +1928,13 @@ let directCallTarget = (node, cname) -> {
   if !isError(assignedUserNames[cname]) && assignedUserNames[cname] == true { return null; };
   if node.arguments.length != info.arity { return null; };
   if !callArgsCannotBeError(node.arguments) { return null; };
+  // A raw target has no boxed entry at all; a call site that cannot prove
+  // Number arguments would be unrepresentable, so it is a compile error rather
+  // than a silent fallback (the candidate scan makes this unreachable).
+  if !isError(info.raw) && info.raw == true && !rawCallArgsOk(node.arguments) {
+    addCompileError(node, "raw direct call requires statically Number arguments");
+    return null;
+  };
   info;
 };
 let emitCall = (node) -> {
@@ -1896,6 +2058,25 @@ let emitCall = (node) -> {
     while ii < node.arguments.length { inlineValues.add(emitExpr(node.arguments[ii])); ii = ii + 1; };
     directCalls = directCalls + 1; inlineUsed = inlineUsed + 1;
     return emitInlineDirect(direct, inlineValues);
+  };
+  if direct != null && !isError(direct.raw) && direct.raw == true {
+    // The binding slot holds the definition environment (never a value); the
+    // raw entry takes it plus one double per parameter. Arguments were proven
+    // Number and non-Error, so no annotation check or artifact buffer is owed.
+    let hit = lookupSlot(cname);
+    let off = emitBindingPtr(hit);
+    let envValue = temp(); line("  " + envValue + " = load %ql_value, ptr " + off);
+    let env = emitPointer(envValue);
+    let callText = "ptr " + env;
+    let ri = 0;
+    while ri < node.arguments.length {
+      callText = callText + ", double " + emitRawDouble(emitValue(node.arguments[ri]));
+      ri = ri + 1;
+    };
+    let result = temp();
+    line("  " + result + " = call %ql_value @" + direct.ir + "(" + callText + ")");
+    rawCalls = rawCalls + 1;
+    return result;
   };
   let FN = emitExpr(node.callee); let values = []; let i = 0;
   while i < node.arguments.length { values.add(emitExpr(node.arguments[i])); i = i + 1; };
@@ -2229,7 +2410,7 @@ let emitExprInner = (node) -> {
   } else if t == "Function" {
     // R10-c/i:函数值 → 闭包盒 emit。name 参数仅作未来诊断用(v1 emitFunction 按 funcCounter
     // 生成 ql_fn<N>,不依赖 name)。调用方(emitLetStmt)已先 defineSlot(name),递归成立。
-    emitFunction(node, "");
+    emitFunction(node, "", false);
   } else if t == "String" {
     // M2 Task 2:字符串字面量 → interned 全局 STRING 地址包装的 %ql_value。
     emitStringLiteral(node);
@@ -2458,7 +2639,7 @@ let main = (args) -> {
     line("  call void @llvm.memcpy.p0.p0.i64(ptr " + dest + ", ptr " + src + ", i64 " + std.String.toString(baseNames.length * 64) + ", i1 false)");
     bi = 0; while bi < baseNames.length { curScope.active[baseNames[bi]] = true; bi = bi + 1; };
     inRuntime = false;
-    let factory = emitFunction({ type: "Function", parameters: [], body: {statements: userProgram.statements}, moduleBody: true, modulePath: path }, "");
+    let factory = emitFunction({ type: "Function", parameters: [], body: {statements: userProgram.statements}, moduleBody: true, modulePath: path }, "", false);
     let result = emitInvoke(factory, "null", "0");
     line("  ret %ql_value " + result);
   } else {
@@ -2546,7 +2727,7 @@ let main = (args) -> {
   // 命中数:分析期证明不可能出错、因而整块省掉定位测试的节点数(主函数体发完之后才知道)。
   out[out.length] = "; located-error elided: " + std.String.toString(locErrorElided);
   // ②a 补充:发射序折扣(同样要等主函数体发完 —— 函数体是在 main 发射过程中才发现并发出的)。
-  out[out.length] = "; rawABI order: usercalls=" + std.String.toString(ordCallsTotal) + " emitted=" + std.String.toString(ordCallsEmitted) + " notyet=" + std.String.toString(ordCallsNotYet) + " retraw=" + std.String.toString(ordCallsRetRaw) + " direct=" + std.String.toString(directCalls) + " inline=" + std.String.toString(inlineUsed);
+  out[out.length] = "; rawABI order: usercalls=" + std.String.toString(ordCallsTotal) + " emitted=" + std.String.toString(ordCallsEmitted) + " notyet=" + std.String.toString(ordCallsNotYet) + " retraw=" + std.String.toString(ordCallsRetRaw) + " direct=" + std.String.toString(directCalls) + " inline=" + std.String.toString(inlineUsed) + " rawcalls=" + std.String.toString(rawCalls) + " rawfuncs=" + std.String.toString(rawFuncs);
   // R10-c: out[0..mainAt) = prelude plus the cold helper, then every function body,
   // then main. Function bodies come before their direct callers because this
   // toolchain has no forward declarations; the closure boxes keep the order

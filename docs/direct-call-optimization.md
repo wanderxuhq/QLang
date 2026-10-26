@@ -1,9 +1,9 @@
 # 直接调用与纯 Number 内联(2026-10-26)
 
-这是 P0 切片(编译器优化,不改语言语义)的落地口径。判别夹具:
-`aot/tests/t58_direct_calls.ql`、`aot/tests/t59_inline_pure.ql`。
+这是 P0/P1 切片(编译器优化,不改语言语义)的落地口径。判别夹具:
+`aot/tests/t58_direct_calls.ql`、`aot/tests/t59_inline_pure.ql`、`aot/tests/t60_raw_direct.ql`。
 
-## 1. 两种形状
+## 1. 三种形状
 
 ### A. 直接调用(boxed ABI)
 
@@ -37,7 +37,29 @@
 用 inline 替换参数后直接生成 body 的 `fadd`/`fmul` 等,结果再装箱。
 单次调用、纯计算、无副作用。
 
-## 2. 判别数字(同源 `target/selfhost/stage2` 形态;下表是判别程序,不是夹具全文)
+### C. 多调用点 raw 直接函数(P1)
+
+在 A 的前提上,把「无参数注解」换成「每个参数都是内建 `Number` 注解且函数体内
+从未被赋值」(`aot/types.ql` 的 `rawAbiAll`),并额外要求:
+
+- 该绑定在用户程序里**没有任何 value use**(`refs.value == 0`);不是 export、
+  重声明目标或赋值目标;
+- 至少一个直接调用点,且**每个**调用点 arity 精确、每个实参
+  `staticType == "Number"` 且 `cannotBeError == true`;
+- 所有调用点在源序上都位于定义之后(定义前调用已经被前端报 undeclared);
+- 该名字不在任何静态 import 的导出候选集里(import 会覆盖同名槽,直接目标会绕过它);
+- 函数体 leaf(无 call/import),绑定本身无注解;零参函数不在本切片。
+
+发射效果:**不生成闭包盒、不生成 annotations 数组、不生成 boxed `@ql_fnN`**;
+函数体只发一份 raw 入口 `%ql_value @ql_fnN(ptr %env, double %p0, ...)`。
+绑定槽存**定义处环境指针**(不是函数值);调用点从槽取 env,实参经
+`emitRawDouble` 直接以 double 传参,结果仍是 boxed `%ql_value` ——
+错误边、返回注解检查、body 语义都不变。
+
+通用分派原本负责的四件事被静态消掉:arity、参数 Error 策略、
+内建 `Number` 注解检查、栈深度(leaf 无递归)。这是 P1 能直接调 raw 入口的前提。
+
+## 2. 判别数字(同源编译器;下表是判别程序,不是夹具全文)
 
 | 程序 | 机器指令 |
 |---|---:|
@@ -47,28 +69,46 @@
 | 同上走后门: `f = add; f(i,1)` | 125,889 |
 | 纯 Number 内联判别(5 次 `pure(i,1)`) | **125,744** |
 | 同上走后门: `f = pure; f(i,1)` | 125,939 |
+| 多调用点注解函数(5 次 `add(1,2)`…;P1 前) | 126,120 |
+| 同上(P1 后,5 raw calls / 1 raw function) | **125,766**(−354) |
+| 非内联体多调用点(`max2`/`sq` 共 6 次;P1 前) | 126,284 |
+| 同上(P1 后,6 raw calls / 2 raw functions) | **125,819**(−465) |
 
 - 直接调用:静态 **−19**,但循环体不再进入 771 条静态指令的通用分派体;
-- 纯 Number 内联:静态 **−195**,函数体/闭包被删掉,循环体成为 raw `fadd`。
+- 纯 Number 内联:静态 **−195**,函数体/闭包被删掉,循环体成为 raw `fadd`;
+- raw 直接函数:静态收益来自删掉闭包盒/annotations 数组/boxed 入口,
+  并把每个实参从 16 字节缓冲改成寄存器 double;函数体只发一份,调用点越多越划算。
 - 20M 次微基准(本机、受后台套件争用影响,只作量级参考):
   inline 用户态约 **0.05–0.08s**,通用分派路径约 **36s**。
+- 5M 次 `max2(i, i+1)`(同源 `target/selfhost/stage2`;raw 直接调用 vs
+  `let f = max2` 强制通用路径):用户态 **0.059s vs 8.473s**,输出相同;
+  静态 125,759 vs 125,993(**−234**)。
 
 ## 3. 同源验收(2026-10-26,最终编译器 `target/selfhost/stage2`)
 
-- `stage2` 自编译 `stage2/stage3` 的 IR **逐字节相同**;
-- `run_semantic_diagnostic_tests.py`:10/10;
-- `run_interpreter_tests.py`:ALL CHECKS PASS,59 PASS(含 `t58`/`t59`);
-- `run_assignment_tests.py`、`run_diagnostic_tests.py`、`run_call_tests.py`、
-  `run_numeric_tests.py`、`run_array_tests.py`、`run_object_tests.py`:ALL CHECKS PASS;
-- `run_selfhost_tests.py --self`:ALL REQUESTED CHECKS PASS(含 `t58`/`t59` 与 stage2/stage3 identical);
-- `/tmp/t20.ql` 仍是 IR 188,453 / 机器 125,735 / 输出 20(普通程序不变;收益只在已知目标/纯 Number 单点)。
+- `stage2` 自编译 `stage2/stage3` 的 IR **逐字节相同**(`target/selfhost/stage2.ll` / `stage3.ll`);
+- `run_selfhost_tests.py --self`:ALL REQUESTED CHECKS PASS(含 `t58`/`t59`/`t60`
+  与 stage2/stage3 identical);
+- `run_interpreter_tests.py`:ALL CHECKS PASS(含 `t58`/`t59`/`t60`;native/boot 输出一致);
+- `run_semantic_diagnostic_tests.py`、`run_assignment_tests.py`、`run_diagnostic_tests.py`、
+  `run_call_tests.py`、`run_numeric_tests.py`、`run_array_tests.py`、`run_object_tests.py`、
+  `run_json_numeric_tests.py`、`run_scoped_module_tests.py`、`run_lazy_module_tests.py`、
+  `run_gc_tests.py`、`run_lifetime_tests.py`:ALL CHECKS PASS(同源 stage2 + native boot);
+- `run_bundle_tests.py --bundler target/source-origins-check/bundler`:ALL CHECKS PASS;
+  `cargo test --offline`:14 passed;`stdlib/build_bundle.ql --check`:verified;
+- 已知红(既有,未触碰):`runtime_diag` 的 `t38:38` cause-provenance;
+- `/tmp/t20.ql` 仍是机器 125,735 / 输出 20(普通程序不变;收益只在已证目标/注解函数)。
 
 ## 4. 边界与后续
 
-- A 仍保留 boxed 参数缓冲/函数 frame/返回装箱;下一步是把多调用点、注解参数
-  的 raw ABI 形式做出来(而不是继续扩大内联)。
+- A 仍保留 boxed 参数缓冲/函数 frame/返回装箱;P1 已让「多调用点 + 参数注解」
+  的函数改走 raw 入口,不再经 A。
 - B 只覆盖单调用点的纯 Number 表达式;有 value use、重声明、赋值、调用、
   错误边、除零/取模、字符串/数组的函数一律回退到 A 或通用路径。
+- C 仍要求 leaf、无 value use、所有调用点实参已证 Number 且非 Error。
+  参数 prone(例如累加器来自可能失败的调用)时不能 raw;同名 import 会覆盖绑定槽,
+  也一律回退;返回仍是 boxed `%ql_value`(裸返回/裸多返回值是下一片)。
 - 判别套件:`run_selfhost_tests.py` + `run_interpreter_tests.py`(
-  `t58_direct_calls` / `t59_inline_pure`);两者 native/boot 输出必须一致。
+  `t58_direct_calls` / `t59_inline_pure` / `t60_raw_direct`);两者 native/boot
+  输出必须一致。
 - 静态指令数不是动态指令数;本机没有 perf/valgrind,20M 微基准只用于量级判断。
