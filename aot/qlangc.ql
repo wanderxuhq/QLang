@@ -847,6 +847,60 @@ let functionBodyIsLeaf = (node) -> {
   };
   true;
 };
+// Leaf 放宽:raw 函数体里允许调用,但必须能证明调用不会碰到「无闭包」的槽:
+//  · 自调用(递归)一律排除(槽里是 env 指针,不是函数值);
+//  · 调用本函数体内部声明的局部函数 OK(它们有正常闭包);
+//  · 调用源序在后面的函数一律排除(发射时直接目标尚未登记;若对方是 raw,
+//    运行时通用调用会把 env 指针当函数值)。
+// 函数体里的递归/前向引用在分析期可能没有 bindId,所以按名字判定(保守)。
+let collectBodyLetNames = (node, names) -> {
+  if AnyArray.check(node) {
+    let i = 0; while i < node.length { collectBodyLetNames(node[i], names); i = i + 1; };
+  } else if AnyObject.check(node) {
+    let t = node.type;
+    if !isError(t) && t == "Import" { return null; };
+    if !isError(t) && t == "Let" && !isError(node.name) { names[node.name] = true; };
+    let keys = std.Object.keys(node); let i = 0;
+    while i < keys.length { collectBodyLetNames(node[keys[i]], names); i = i + 1; };
+  };
+  null;
+};
+let bodyCallsResolvable = (node, selfName, mySeq, localNames, letSeqByName) -> {
+  if node == null || isError(node) { return true; };
+  if AnyArray.check(node) {
+    let i = 0; while i < node.length { if !bodyCallsResolvable(node[i], selfName, mySeq, localNames, letSeqByName) { return false; }; i = i + 1; };
+  } else if AnyObject.check(node) {
+    let t = node.type;
+    if !isError(t) && t == "Import" { return false; };
+    if !isError(t) && t == "Identifier" {
+      let nm = node.name;
+      if nm == selfName { return false; };
+      if isError(localNames[nm]) || localNames[nm] != true {
+        let later = letSeqByName[nm];
+        if !isError(later) && later > mySeq { return false; };
+      };
+    };
+    if !isError(t) && t == "Call" {
+      let callee = node.callee;
+      if !isError(callee.type) && callee.type == "Identifier" {
+        let nm = callee.name;
+        if nm == selfName { return false; };
+        if isError(localNames[nm]) || localNames[nm] != true {
+          let later = letSeqByName[nm];
+          if !isError(later) && later > mySeq { return false; };
+        };
+      } else {
+        if !bodyCallsResolvable(callee, selfName, mySeq, localNames, letSeqByName) { return false; };
+      };
+      let ai = 0;
+      while ai < node.arguments.length { if !bodyCallsResolvable(node.arguments[ai], selfName, mySeq, localNames, letSeqByName) { return false; }; ai = ai + 1; };
+      return true;
+    };
+    let keys = std.Object.keys(node); let i = 0;
+    while i < keys.length { if !bodyCallsResolvable(node[keys[i]], selfName, mySeq, localNames, letSeqByName) { return false; }; i = i + 1; };
+  };
+  true;
+};
 let callArgsCannotBeError = (args) -> {
   let i = 0;
   while i < args.length {
@@ -873,6 +927,7 @@ let rawDoubleReturns = 0;
 let rawDoubleCalls = 0;
 let directSlots = [];
 let directScanSeq = 0;
+let letSeqByName = {};
 let directRefSlot = (refs, bid) -> {
   let slot = refs[bid];
   if isError(slot) || slot == null {
@@ -895,6 +950,7 @@ let collectDirectRefs = (node, refs) -> {
       declared.letSeq = here;
       declared.letNode = node;
       declared.fnNode = node.value;
+      letSeqByName[node.name] = here;
     };
     if !isError(t) && t == "Call" {
       let callee = node.callee;
@@ -1009,7 +1065,7 @@ let collectInlineCandidates = (node, refs, candidates) -> {
 // that are never written, and every call site in source order after the
 // definition with the exact arity and statically Number, non-Error arguments.
 // Those are exactly the dispatcher duties the raw call site would otherwise owe.
-let collectRawCandidates = (candidates) -> {
+let collectRawCandidates = (candidates, refs) -> {
   let i = 0;
   while i < directSlots.length {
     let s = directSlots[i];
@@ -1024,7 +1080,11 @@ let collectRawCandidates = (candidates) -> {
     let letNode = s.letNode;
     if ok && (isError(fn.rawAbiAll) || fn.rawAbiAll != true) { ok = false; };
     if ok && (isError(fn.parameters) || fn.parameters.length == 0) { ok = false; };
-    if ok && !functionBodyIsLeaf(fn.body) { ok = false; };
+    if ok {
+      let bodyNames = {};
+      collectBodyLetNames(fn.body, bodyNames);
+      if !bodyCallsResolvable(fn.body, letNode.name, s.letSeq, bodyNames, letSeqByName) { ok = false; };
+    };
     if ok && letNode.annotation != null && !isError(letNode.annotation) { ok = false; };
     if ok && !isError(assignedUserNames[letNode.name]) { ok = false; };
     if ok && !isError(redeclaredUserNames[letNode.name]) { ok = false; };
@@ -1053,12 +1113,13 @@ let buildInlineCandidates = (program) -> {
   rawDirectCandidates = {};
   directSlots = [];
   directScanSeq = 0;
+  letSeqByName = {};
   importedNames = {};
   collectImportedNames(program);
   let refs = {};
   collectDirectRefs(program, refs);
   collectInlineCandidates(program, refs, inlineCandidates);
-  collectRawCandidates(rawDirectCandidates);
+  collectRawCandidates(rawDirectCandidates, refs);
 };
 let emitInlineDirect = (info, values) -> {
   let saved = inlineSubst; inlineSubst = {};

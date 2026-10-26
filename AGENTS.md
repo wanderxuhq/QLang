@@ -246,6 +246,8 @@ source.ql
 - **2026-10-26**:P2 裸返回 + known-safe 传播(proven Number 的函数 `ret double`;
   纯参数单调用点调用证明不可能 Error,累加器不再 prone,无新增运行期检查)。
   判别 `t61_known_safe`;5M 累加器 9.6s→0.011s。放宽 leaf 未做。
+- **2026-10-26**:P3 放宽 leaf(raw 函数体允许调用;排除自递归/后定义/Import,
+  允许局部函数与源序在前的函数)。判别 `t62_leaf_calls`;5M 组合调用 9.07s→0.039s。
 - 原分支 `error-carried` @ `5d0f4e8`(已推 `origin`);从 `unboxed-values` 的 `394e473` 切出。
 - `unboxed-values` 已推 `origin`,**未合并**;合并前需作者明确同意。
 - `backup/nan-removal-stage1` = "去 NaN/∞"回滚现场;`error-carried` 合并后可删。
