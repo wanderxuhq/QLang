@@ -121,6 +121,13 @@ HEAD 基线(`/tmp/sweep3/`):**17 绿**,含 `interpreter`(731s)、`selfhost`(1573
 `difftest` 在本机**不可裁决**(它的 boot 侧走 `cargo run`,120 秒超时;`cargo build` 已热只需 0.12s)
 ⇒ 替代:用 native 编译的 boot 做同样对照。
 
+### 3.5 门禁并行(2026-10-27)
+
+`run_selfhost_tests.py` / `run_interpreter_tests.py` 加 `--jobs N`(默认 1,行为不变)。
+夹具彼此独立(各自的 `<name>.ll` / `<name>` 在 work 目录里,`native_link` 本来就往私有临时
+目录链接),所以可以并行。实测 `--jobs 3` 跑完整 selfhost 套件约 20 分钟(此前宿主争抢时
+要 2 小时);机器内存有限,`clang -O2` 吃内存,别再往上加。
+
 ### 3.5 2026-10-26 新增切片(同源全绿)
 
 - `96cfcde` **lexer 字符分类改查表**:空程序前端 17.27/17.21s → 14.82/14.79s(−14%);

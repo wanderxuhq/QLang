@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Build a native QLang compiler; optionally verify its self-compilation fixed point."""
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import nullcontext
 import os
 from pathlib import Path
@@ -106,11 +107,30 @@ def check_return_scope_rejections(compiler, work):
            'let load = () -> { import "./bad.ql"; }; load();',
            source_path=modules / 'from-function.ql', diagnostic_path=bad_module)
 
+
+def run_program_tasks(compiler, tasks, work, jobs):
+    """Compile+link+run independent fixtures, optionally in parallel.
+
+    Each fixture owns its own `<name>.ll` / `<name>` inside `work`, so the tasks
+    are independent; `native_link` already links into a private temp dir. Keep
+    `--jobs 1` as the default so a plain run behaves exactly like before.
+    """
+    if jobs <= 1:
+        for source, expected, name in tasks:
+            check_program(compiler, source, expected, work, name)
+        return
+    with ThreadPoolExecutor(max_workers=jobs) as pool:
+        futures = [pool.submit(check_program, compiler, source, expected, work, name)
+                   for source, expected, name in tasks]
+        for future in as_completed(futures):
+            future.result()
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--compiler', type=Path, help='reuse an already built stage-1 compiler')
     parser.add_argument('--self', action='store_true', help='also build stages 2/3 and require identical emitted IR')
     parser.add_argument('--output-dir', type=Path, help='retain generated compilers and IR in this directory')
+    parser.add_argument('--jobs', type=int, default=1, help='fixtures to build in parallel (default 1)')
     options = parser.parse_args()
     if options.output_dir:
         options.output_dir = options.output_dir.resolve()
@@ -124,59 +144,55 @@ def main():
         check_rejections(stage1, work)
         source = ROOT / 'aot/tests/t16_functions.ql'
         expected = source.with_suffix('.expected').read_bytes()
-        check_program(stage1, source, expected, work, 'functions')
+        tasks = []
+        tasks.append((source, expected, 'functions'))
         literals = ROOT / 'aot/tests/t19_literals.ql'
-        check_program(stage1, literals, literals.with_suffix('.expected').read_bytes(), work, 'literals')
-        check_program(stage1, ROOT / 'bootstrapped/tests/function_ast.ql',
-                      b'PASS function AST contracts (15 valid, 10 invalid)\n', work, 'frontend')
-        check_program(stage1, ROOT / 'bootstrapped/tests/diagnostics.ql',
-                      b'PASS source diagnostics (39 invalid, 15 valid)\n', work, 'source-diagnostics')
+        tasks.append((literals, literals.with_suffix('.expected').read_bytes(), 'literals'))
+        tasks.append((ROOT / 'bootstrapped/tests/function_ast.ql', b'PASS function AST contracts (15 valid, 10 invalid)\n', 'frontend'))
+        tasks.append((ROOT / 'bootstrapped/tests/diagnostics.ql', b'PASS source diagnostics (39 invalid, 15 valid)\n', 'source-diagnostics'))
         return_scope = ROOT / 'bootstrapped/tests/return_scope.ql'
-        check_program(stage1, return_scope,
-                      return_scope.with_suffix('.expected').read_bytes(), work, 'return-scope-frontend')
-        check_program(stage1, ROOT / 'bootstrapped/tests/ast_locations.ql',
-                      b'PASS AST locations (24 spans, 8 trivia cases)\n', work, 'ast-locations')
-        check_program(stage1, ROOT / 'bootstrapped/tests/source_origins.ql',
-                      b'PASS bundled source origins (5 spans, wrappers, diagnostics, library)\n', work, 'source-origins')
-        check_program(stage1, ROOT / 'bootstrapped/tests/numeric_syntax.ql',
-                      b'PASS numeric syntax frontend (38 valid, 19 invalid)\n', work, 'numeric-syntax-frontend')
+        tasks.append((return_scope, return_scope.with_suffix('.expected').read_bytes(), 'return-scope-frontend'))
+        tasks.append((ROOT / 'bootstrapped/tests/ast_locations.ql', b'PASS AST locations (24 spans, 8 trivia cases)\n', 'ast-locations'))
+        tasks.append((ROOT / 'bootstrapped/tests/source_origins.ql', b'PASS bundled source origins (5 spans, wrappers, diagnostics, library)\n', 'source-origins'))
+        tasks.append((ROOT / 'bootstrapped/tests/numeric_syntax.ql', b'PASS numeric syntax frontend (38 valid, 19 invalid)\n', 'numeric-syntax-frontend'))
         values = ROOT / 'aot/tests/t23_inline_values.ql'
-        check_program(stage1, values, values.with_suffix('.expected').read_bytes(), work, 'inline-values')
+        tasks.append((values, values.with_suffix('.expected').read_bytes(), 'inline-values'))
         calls = ROOT / 'aot/tests/t24_call_buffers.ql'
-        check_program(stage1, calls, calls.with_suffix('.expected').read_bytes(), work, 'call-buffers')
+        tasks.append((calls, calls.with_suffix('.expected').read_bytes(), 'call-buffers'))
         numeric = ROOT / 'aot/tests/t25_numeric.ql'
-        check_program(stage1, numeric, numeric.with_suffix('.expected').read_bytes(), work, 'numeric')
+        tasks.append((numeric, numeric.with_suffix('.expected').read_bytes(), 'numeric'))
         extrema = ROOT / 'aot/tests/t26_extrema.ql'
-        check_program(stage1, extrema, extrema.with_suffix('.expected').read_bytes(), work, 'extrema')
+        tasks.append((extrema, extrema.with_suffix('.expected').read_bytes(), 'extrema'))
         native_calls = ROOT / 'aot/tests/t27_native_calls.ql'
-        check_program(stage1, native_calls, native_calls.with_suffix('.expected').read_bytes(), work, 'native-calls')
+        tasks.append((native_calls, native_calls.with_suffix('.expected').read_bytes(), 'native-calls'))
         objects = ROOT / 'aot/tests/t28_objects.ql'
-        check_program(stage1, objects, objects.with_suffix('.expected').read_bytes(), work, 'objects')
+        tasks.append((objects, objects.with_suffix('.expected').read_bytes(), 'objects'))
         arrays = ROOT / 'aot/tests/t29_arrays.ql'
-        check_program(stage1, arrays, arrays.with_suffix('.expected').read_bytes(), work, 'arrays')
+        tasks.append((arrays, arrays.with_suffix('.expected').read_bytes(), 'arrays'))
         strings = ROOT / 'aot/tests/t30_strings.ql'
-        check_program(stage1, strings, strings.with_suffix('.expected').read_bytes(), work, 'portable-strings')
+        tasks.append((strings, strings.with_suffix('.expected').read_bytes(), 'portable-strings'))
         libraries = ROOT / 'aot/tests/t31_library_loading.ql'
-        check_program(stage1, libraries, libraries.with_suffix('.expected').read_bytes(), work, 'library-loading')
+        tasks.append((libraries, libraries.with_suffix('.expected').read_bytes(), 'library-loading'))
         access = ROOT / 'aot/tests/t32_value_access.ql'
-        check_program(stage1, access, access.with_suffix('.expected').read_bytes(), work, 'value-access')
+        tasks.append((access, access.with_suffix('.expected').read_bytes(), 'value-access'))
         bindings = ROOT / 'aot/tests/t33_builtin_bindings.ql'
-        check_program(stage1, bindings, bindings.with_suffix('.expected').read_bytes(), work, 'builtin-bindings')
+        tasks.append((bindings, bindings.with_suffix('.expected').read_bytes(), 'builtin-bindings'))
         syntax = ROOT / 'aot/tests/t34_numeric_syntax.ql'
-        check_program(stage1, syntax, syntax.with_suffix('.expected').read_bytes(), work, 'numeric-syntax')
+        tasks.append((syntax, syntax.with_suffix('.expected').read_bytes(), 'numeric-syntax'))
         modules = ROOT / 'aot/tests/t35_scoped_modules.ql'
-        check_program(stage1, modules, modules.with_suffix('.expected').read_bytes(), work, 'scoped-modules')
+        tasks.append((modules, modules.with_suffix('.expected').read_bytes(), 'scoped-modules'))
         lazy = ROOT / 'aot/tests/t36_lazy_modules.ql'
-        check_program(stage1, lazy, lazy.with_suffix('.expected').read_bytes(), work, 'lazy-modules')
+        tasks.append((lazy, lazy.with_suffix('.expected').read_bytes(), 'lazy-modules'))
         math = ROOT / 'aot/tests/t41_math_library.ql'
-        check_program(stage1, math, math.with_suffix('.expected').read_bytes(), work, 'portable-math-base')
+        tasks.append((math, math.with_suffix('.expected').read_bytes(), 'portable-math-base'))
         number = ROOT / 'aot/tests/t43_number_library.ql'
-        check_program(stage1, number, number.with_suffix('.expected').read_bytes(), work, 'portable-number')
+        tasks.append((number, number.with_suffix('.expected').read_bytes(), 'portable-number'))
         members = ROOT / 'aot/tests/t45_native_function_members.ql'
-        check_program(stage1, members, members.with_suffix('.expected').read_bytes(), work, 'native-function-members')
+        tasks.append((members, members.with_suffix('.expected').read_bytes(), 'native-function-members'))
         for name in ['t46_number_literal_keys', 't47_finite_number_rendering', 't48_object_library', 't49_raw_object_index', 't50_raw_value_type_checks', 't51_value_access_errors', 't52_expression_return', 't53_return_boundaries', 't54_json_stringify', 't55_return_types', 't56_result_annotations', 't57_assert', 't58_direct_calls', 't59_inline_pure', 't60_raw_direct', 't61_known_safe', 't62_leaf_calls']:
             fixture = ROOT / 'aot/tests' / (name + '.ql')
-            check_program(stage1, fixture, fixture.with_suffix('.expected').read_bytes(), work, name)
+            tasks.append((fixture, fixture.with_suffix('.expected').read_bytes(), name))
+        run_program_tasks(stage1, tasks, work, options.jobs)
         check_assert_fatal(stage1, work)
         check_return_scope_rejections(stage1, work)
         if options.self:

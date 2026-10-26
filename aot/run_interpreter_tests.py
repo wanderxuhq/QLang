@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Compile and exercise the QLang interpreter without invoking the Rust runner."""
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import nullcontext
 from pathlib import Path
 import subprocess
@@ -29,6 +30,7 @@ def main():
     parser.add_argument('--compiler', required=True, type=Path)
     parser.add_argument('--interpreter', type=Path, help='reuse an already built interpreter')
     parser.add_argument('--output-dir', type=Path)
+    parser.add_argument('--jobs', type=int, default=1, help='fixtures to interpret in parallel (default 1)')
     options = parser.parse_args()
     compiler = options.compiler.resolve()
     if options.output_dir:
@@ -45,7 +47,7 @@ def main():
             link(ir, interpreter)
         subprocess.run([sys.executable, str(ROOT / 'aot/run_argument_tests.py'),
                         '--interpreter', str(interpreter)], check=True, timeout=TIMEOUT)
-        for name in ['t16_functions', 't17_bootstrap', 't19_literals', 't20_native_bridge', 't21_assignments', 't22_lifetimes', 't23_inline_values', 't24_call_buffers', 't25_numeric', 't26_extrema', 't27_native_calls', 't28_objects', 't29_arrays', 't30_strings', 't31_library_loading', 't32_value_access', 't33_builtin_bindings', 't34_numeric_syntax', 't35_scoped_modules', 't36_lazy_modules', 't41_math_library', 't43_number_library', 't48_object_library', 't49_raw_object_index', 't50_raw_value_type_checks', 't51_value_access_errors', 't52_expression_return', 't53_return_boundaries', 't54_json_stringify', 't55_return_types', 't56_result_annotations', 't57_assert', 't58_direct_calls', 't59_inline_pure', 't60_raw_direct', 't61_known_safe', 't62_leaf_calls', 't45_native_function_members', 't46_number_literal_keys', 't47_finite_number_rendering']:
+        def check_one(name):
             source = ROOT / 'aot/tests' / (name + '.ql')
             expected = source.with_suffix('.expected').read_bytes()
             # Run outside the repository: interpreter dependencies must be in the
@@ -53,6 +55,29 @@ def main():
             actual = body(execute(interpreter, source, cwd=work))
             assert actual == expected, (name, actual, expected)
             print('PASS native interpreter:', name, flush=True)
+
+        interpreter_fixtures = [
+            't16_functions', 't17_bootstrap', 't19_literals', 't20_native_bridge',
+            't21_assignments', 't22_lifetimes', 't23_inline_values', 't24_call_buffers',
+            't25_numeric', 't26_extrema', 't27_native_calls', 't28_objects', 't29_arrays',
+            't30_strings', 't31_library_loading', 't32_value_access', 't33_builtin_bindings',
+            't34_numeric_syntax', 't35_scoped_modules', 't36_lazy_modules', 't41_math_library',
+            't43_number_library', 't48_object_library', 't49_raw_object_index',
+            't50_raw_value_type_checks', 't51_value_access_errors', 't52_expression_return',
+            't53_return_boundaries', 't54_json_stringify', 't55_return_types',
+            't56_result_annotations', 't57_assert', 't58_direct_calls', 't59_inline_pure',
+            't60_raw_direct', 't61_known_safe', 't62_leaf_calls',
+            't45_native_function_members', 't46_number_literal_keys',
+            't47_finite_number_rendering',
+        ]
+        if options.jobs <= 1:
+            for name in interpreter_fixtures:
+                check_one(name)
+        else:
+            with ThreadPoolExecutor(max_workers=options.jobs) as pool:
+                futures = [pool.submit(check_one, name) for name in interpreter_fixtures]
+                for future in as_completed(futures):
+                    future.result()
         assert_source = work / 'assert-fatal.ql'
         assert_source.write_text('println("before");\nassert(false, "boom");\nprintln("after");\n')
         result = execute(interpreter, assert_source, cwd=work)
