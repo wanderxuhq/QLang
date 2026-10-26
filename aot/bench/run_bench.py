@@ -81,7 +81,7 @@ def main():
                 print(f"{name}: link failed\n{proc.stderr}", file=sys.stderr)
                 return 1
             best = None
-            for _ in range(3):
+            for _ in range(5):
                 t0 = time.monotonic()
                 proc = run([str(binary)], timeout=180)
                 elapsed = time.monotonic() - t0
