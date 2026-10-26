@@ -698,6 +698,11 @@ let typeScanRefs = (node, facts) -> {
 };
 let typeSafeMap = {};
 let typeSafeMarked = 0;
+// 记忆化 DFS 的跳板:typeExprSafeNumber 定义在 typeBindingSafe 之前,而这两者互相递归。
+// 这里留一个可替换的入口,等 typeBindingSafe 定义好再挂上(QLang 的前向引用不保证解析)。
+// 为什么必须真的算:绑定 a 的写入可能引用在表里更靠后的绑定 b;只读 safe[b] 会把
+// 「还没轮到」误当成「不安全」——累加器 `acc = f(acc, i)` 正是这种形状。
+let typeSafeBindingHook = {};
 let typeExprSafeNumber = (node, safe) -> {
   if node == null || isError(node) { return false; };
   if isError(node.staticType) || node.staticType != "Number" { return false; };
@@ -707,7 +712,10 @@ let typeExprSafeNumber = (node, safe) -> {
     let bid = node.bindId;
     if isError(bid) || bid < 0 { return false; };
     let state = safe[bid];
-    return !isError(state) && (state == 1 || state == 2);
+    if !isError(state) { return state == 1 || state == 2; };
+    // 未访问过的绑定 ⇒ 就地算一次(带 1=visiting 的环检测),不要把它当成不安全。
+    if !isError(typeSafeBindingHook.fn) && typeSafeBindingHook.fn != null { return typeSafeBindingHook.fn(bid, safe); };
+    false;
   };
   if t == "UnaryOp" {
     if node.operator == "-" || node.operator == "+" { return typeExprSafeNumber(node.operand, safe); };
@@ -775,6 +783,8 @@ let typeBindingSafe = (bid, safe) -> {
   safe[bid] = 2;
   true;
 };
+// 双向递归的另一半:把真正做 DFS 的入口挂到跳板上。
+typeSafeBindingHook.fn = typeBindingSafe;
 let typeComputeSafeBindings = () -> {
   let table = typeBindTable[typeProgram];
   let safe = {};

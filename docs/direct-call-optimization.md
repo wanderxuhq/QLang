@@ -245,3 +245,34 @@ raw 候选不再要求 body 是 leaf,而是要求 body 里的调用**不会碰�
 
 互递归 `a↔b` 时 `a` 因调用后定义的 `b` 被排除,`b` 调用已存在的 `a`(非 raw
 闭包)可以 raw;语义与输出不变。
+
+## 9. known-safe 的绑定证明必须按需求值(2026-10-26)
+
+判别:`let acc: Number = 0; … while … { acc = add(acc, i); i = i + 1; }`(注解
+Number 的累加器 + 注解 Number 的两参函数)。
+
+**症状**:这个循环拿不到 inline/raw,每轮走通用调用(2M 次 ≈ 5.7s,≈2.8µs/次)。
+`safemarked` 只有 3;`acc` 在安全判定里被判成 unsafe。
+
+**根因(不是证明规则太严,是求值顺序)**:`typeExprSafeNumber` 的 Identifier 分支
+只**读** `safe[bid]`,不**算**该绑定。而 `typeComputeSafeBindings` 按 bindId 顺序
+遍历;`acc` 的写入引用了表里更靠后的 `i`,于是"还没轮到 i"被当成"i 不安全",
+`acc` 被标 3,之后的 `typeApplySafeCalls` 也就不会给实参盖 `cannotBeError`。
+`typeBindingSafe` 本身是带 `1=visiting` 的记忆化 DFS,只是入口没接上。
+
+**修法**:Identifier 分支遇到未访问的 bid 就地调一次 `typeBindingSafe`(经
+`typeSafeBindingHook` 跳板,因为两个函数互相递归、QLang 不保证前向引用解析)。
+环仍然按 `1=visiting` 乐观 —— 环里每一跳都必须过纯调用/纯算术,藏不住 Error 源。
+
+**证据**:
+
+| 形状(2M 次调用) | 机器指令(整程序) | 用户态 |
+|---|---:|---:|
+| 旧:实参未盖章 ⇒ 通用调用 | 126,064 | 5.56 / 6.43 / 5.10s |
+| 新:safe 递归 ⇒ inline/raw | **125,772** | **0.28 / 0.27 / 0.25s** |
+
+`safemarked` 3 → 5。自举固定点成立(stage2/stage3 IR 逐字节一致);selfhost
+全套 + interpreter 全套全绿。前端耗时不变(新增的递归与省掉的检查大致抵消)。
+
+**别的教训**:整程序机器指令数对"热循环里每条语句少几条指令"并不敏感(126k 里
+程序自身只有几百条),所以这类切片必须看**运行时**,指令数只用来抓代码膨胀。

@@ -490,3 +490,18 @@ while i < 5000000 { s = add(s, i); i = i + 1; };
 
 判别覆盖:组合函数、局部闭包、自递归(排除)、自别名(`let g=selfAlias`)排除、
 后定义调用(排除)、互递归(`a` 排除/`b` 可 raw)。native/boot 输出一致。
+
+
+## 19. 已实测:累加器安全证明的顺序问题(2026-10-26)
+
+判别:注解 Number 累加器 `acc = add(acc, i)`(2M 次)。旧编译器把实参 `acc` 判成
+不安全,于是没有 inline/raw,每轮走通用调用。
+
+| 版本 | 整程序机器指令 | 用户态(交替跑 3 次) |
+|---|---:|---:|
+| 旧(Identifier 只读 `safe[bid]`) | 126,064 | 5.56 / 6.43 / 5.10s |
+| 新(未访问的 bid 就地 DFS) | **125,772** | **0.28 / 0.27 / 0.25s** |
+
+`safemarked` 3 → 5。复现:`aot/bench/run_bench.py --compiler <stage2> --only b_calls`。
+注意整程序指令数只差 292 条 —— 固定 runtime/stdlib 占满 126k,热循环改动要靠
+`run(s)` 而不是 `insns` 裁决(见 §3.4 的同一现象)。
