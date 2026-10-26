@@ -2899,9 +2899,23 @@ let main = (args) -> {
   // then main. Function bodies come before their direct callers because this
   // toolchain has no forward declarations; the closure boxes keep the order
   // irrelevant for every indirect call, and top-level globals are unordered.
+  // IR 写出:188k 行逐行 println 就是 188k 次 write 系统调用。这里按 4k 行拼成
+  // 一个字符串再一次写出 —— 字节完全相同(每行后面仍然是一个换行),只是把 syscall
+  // 数量从 18.8 万降到约 50。join 走库里的成对归并,不是逐行 `buf = buf + line`。
+  let chunkLines = [];
+  let flushLines = () -> {
+    if chunkLines.length > 0 {
+      print(std.String.join(chunkLines)("\n") + "\n");
+      chunkLines = [];
+    };
+  };
+  let emitLine = (s) -> {
+    chunkLines[chunkLines.length] = s;
+    if chunkLines.length >= 4096 { flushLines(); };
+  };
   let i2 = 0;
   while i2 < mainAt {
-    println(out[i2]);
+    emitLine(out[i2]);
     i2 = i2 + 1;
   };
   let b = 0;
@@ -2909,22 +2923,23 @@ let main = (args) -> {
     let blk = fnBlocks[b];
     let j = 0;
     while j < blk.length {
-      println(blk[j]);
+      emitLine(blk[j]);
       j = j + 1;
     };
     b = b + 1;
   };
   while i2 < out.length {
-    println(out[i2]);
+    emitLine(out[i2]);
     i2 = i2 + 1;
   };
   // M2 Task 2:flush 全局字符串常量/盒(LLVM 顶层实体无序,放函数定义之后合法)。
   // 注意:必须 println 直接落 IR —— line() 会追加到已 flush 过的 out(死数据,永不出现在 IR)。
   let si = 0;
   while si < strDecls.length {
-    println(strDecls[si]);
+    emitLine(strDecls[si]);
     si = si + 1;
   };
+  flushLines();
 };
 
 // The compiler CLI reports input-source diagnostics already carried by its
