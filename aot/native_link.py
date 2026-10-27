@@ -164,12 +164,7 @@ def qlang_link(ir, binary, stdlib_object, opt=2, shared=False):
     tool = ROOT / 'target' / 'tools' / 'link'
     if not tool.exists():
         return None
-    # 目前只接管 -O2:低优化级别下 lld 会丢掉未被引用的字符串符号,
-    # QLang 校验器因此报 missing symbol(见 probes §49)。
-    if opt != 2:
-        return None
-    if shared:
-        return None
+    # 共享库(扩展)也可以走 QLang 链接器:--shared 用 PIC + 共享库模板。
     # 只接管"已经拆好"的 IR(`--emit-llvm-split`)。单模块 IR 里自带 runtime,
     # 再叠 runtime.o 会 duplicate symbol(踩过:gc 套件)。这种留给 Python 侧的 split_file。
     try:
@@ -177,8 +172,11 @@ def qlang_link(ir, binary, stdlib_object, opt=2, shared=False):
             return None
     except OSError:
         return None
-    command = [str(tool), str(ir), '-o', str(binary), '--opt', str(opt),
-               '--stdlib-object', str(stdlib_object)]
+    command = [str(tool), str(ir), '-o', str(binary), '--opt', str(opt)]
+    if shared:
+        command.append('--shared')
+    else:
+        command += ['--stdlib-object', str(stdlib_object)]
     strings = Path(stdlib_object).with_name('strings.tsv')
     stdlib_ir = Path(stdlib_object).with_name('stdlib.ll')
     if strings.exists():

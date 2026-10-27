@@ -1259,3 +1259,34 @@ strings 表、分析接口、目标文件,全部 QLang(shell 只用 `sha256sum`/
 **仍走 Python 的两处**:扩展(`--shared`,QLang 链接器尚未支持;本机本来也因 Android
 dlopen 限制不可裁决)、以及非 -O2 的委托(可后续按需扩展)。`--check-only` 参照实现保留在
 `native_link.py`(测试侧对照用)。
+
+
+## 50. native 扩展:构建已全 QLang,运行受 Android 限制(2026-10-28)
+
+**native 扩展是什么**:用 `--emit-module` 把一份 QLang 源码编成独立 `.so`(没有 `@main`、
+不带自己的 runtime),宿主在运行期用 `import (路径)` 动态加载:`dlopen` → 校验
+`qlang_extension_abi_v1` 字符串 → 调 `qlang_extension_init_v1` 把导出装进当前程序。
+它是"预编译模块/插件"的机制。
+
+**构建**:`link.ql --shared`(PIC + 共享库模板,不链 runtime.o)已实现并验证:
+
+```
+target/tools/link plugin.ll -o plugin-O2.so --shared      # 17,800 字节
+nm -D plugin-O2.so | grep qlang_extension
+  0000000000000760 R qlang_extension_abi_v1
+  0000000000011f10 T qlang_extension_init_v1
+```
+
+扩展套件的**构建段全过**:`PASS compiled hosts before extensions existed`、
+`PASS independent extension: plugin / second / failure / cycle`(含故意坏 ABI、缺入口的变体)。
+
+**运行**:在本机必然失败 —— Android linker namespace 不允许 `dlopen` `/tmp/*.so`
+(`library ".../plugin-O0.so" ... is not accessible for the namespace`)。这是环境限制,
+与构建无关;套件里那 6 条 FAIL 全是 dlopen 失败导致的。
+
+**配置文件的教训(第二次)**:模板选择必须显式。现在 cfg 用 `exe ` / `shared ` 前缀区分,
+`link.ql` 按前缀取,不再依赖"最后一条非注释行"——上一版就是因为多了一条共享库模板,
+所有链接都用了它,产物里对象根本没链进去(probes §49)。
+
+**symbols.json**:Python 侧的 `split_file` 回落路径需要它;QLang 构建器现在也生成
+(567 函数 / 1,625 全局,键是**不带 @** 的名字 —— 和 Python 的 `GLOBAL` 正则一致)。

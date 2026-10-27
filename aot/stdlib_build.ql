@@ -279,6 +279,50 @@ while xi < symbolLines.length {
 };
 std.fs.writeText(outDir + "/symbols.tsv", std.String.join(sorted)("\n") + "\n");
 
+// symbols.json:给 Python 侧的 split_file 回落路径用(declare/external 文本)。
+let jsonLines = ["{"];
+let fnNames = [];
+let fi2 = 0;
+while fi2 < functions.length { if !isPinned(functions[fi2].body) { fnNames[fnNames.length] = functions[fi2].name; }; fi2 = fi2 + 1; };
+// 名字排序(字节序),和 Python 的 sort_keys 对齐
+let sortedFns = [];
+let remainingFns = fnNames;
+while remainingFns.length > 0 {
+  let bestIndex = 0; let bi3 = 1;
+  while bi3 < remainingFns.length { if lessBytes(remainingFns[bi3], remainingFns[bestIndex]) { bestIndex = bi3; }; bi3 = bi3 + 1; };
+  sortedFns[sortedFns.length] = remainingFns[bestIndex];
+  let keptFns = []; let ki2 = 0;
+  while ki2 < remainingFns.length { if ki2 != bestIndex { keptFns[keptFns.length] = remainingFns[ki2]; }; ki2 = ki2 + 1; };
+  remainingFns = keptFns;
+};
+let jsonChunks = ["{"];
+jsonChunks[jsonChunks.length] = " \"functions\": {";
+let jf = 0;
+while jf < sortedFns.length {
+  let name = sortedFns[jf]; let body = ""; let bi4 = 0;
+  while bi4 < functions.length { if functions[bi4].name == name { body = functions[bi4].body; bi4 = functions.length; } else { bi4 = bi4 + 1; }; };
+  let decl = declareFor(body);
+  let comma = if jf + 1 < sortedFns.length { ","; } else { ""; };
+  jsonChunks[jsonChunks.length] = "  \"" + name + "\": \"" + decl + "\"" + comma;
+  jf = jf + 1;
+};
+jsonChunks[jsonChunks.length] = " },";
+jsonChunks[jsonChunks.length] = " \"globals\": {";
+let jg = 0;
+while jg < globals.length {
+  let line2 = globals[jg];
+  let space = findFrom(line2, " ", 0);
+  // JSON 的键**不带 @**(Python 的 GLOBAL 正则捕获不含 @),split_file 按这个键查找。
+  let name = dropPrefix(std.Bytes.slice(line2, 0, space), "@");
+  let decl2 = externalFor(line2);
+  let comma2 = if jg + 1 < globals.length { ","; } else { ""; };
+  jsonChunks[jsonChunks.length] = "  \"" + name + "\": \"" + decl2 + "\"" + comma2;
+  jg = jg + 1;
+};
+jsonChunks[jsonChunks.length] = " }";
+jsonChunks[jsonChunks.length] = "}";
+std.fs.writeText(outDir + "/symbols.json", std.String.join(jsonChunks)("\n") + "\n");
+
 let stringLines = [];
 let slines = std.String.split(stdlibText)("\n");
 let buffers = {}; let li2 = 0;

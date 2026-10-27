@@ -9,10 +9,12 @@
 // 这是一个**顶层脚本**:运行时把命令行参数放进全局 `args`(不含程序名)。
 
 let fail = (message) -> { assert(false, "link: " + message); 1; };
+let startsWith = (text, prefix) -> std.String.startsWith(text)(prefix);
 let clean = (paths) -> { let i = 0; while i < paths.length { std.process.run(["rm", "-f", paths[i]]); i = i + 1; }; null; };
 
 let irPath = ""; let output = ""; let stdlibObject = ""; let runtimeObject = "";
 let verifyTool = "target/tools/verify"; let stdlibIr = ""; let skipVerify = false;
+let optLevel = "2"; let sharedMode = false;
 let ai = 0;
 while ai < args.length {
   let arg = args[ai];
@@ -22,6 +24,8 @@ while ai < args.length {
   else if arg == "--verify" { ai = ai + 1; verifyTool = args[ai]; }
   else if arg == "--stdlib-ir" { ai = ai + 1; stdlibIr = args[ai]; }   // 可以是 IR,也可以是对象旁的 strings.tsv
   else if arg == "--no-verify" { skipVerify = true; }
+  else if arg == "--opt" { ai = ai + 1; optLevel = args[ai]; }
+  else if arg == "--shared" { sharedMode = true; }
   else if irPath == "" { irPath = arg; };
   ai = ai + 1;
 };
@@ -37,24 +41,32 @@ if runtimeObject == "" {
   };
 };
 
+if sharedMode { runtimeObject = ""; };
 let bitcode = output + ".bc";
 let object = output + ".user.o";
 let staged = output + ".tmp";
 
 let optimized = std.process.run(["opt", "-O2", irPath, "-o", bitcode]);
 if optimized.status != 0 { fail("opt failed:\n" + optimized.stderr); };
-let compiled = std.process.run(["llc", "-O2", "-filetype=obj", bitcode, "-o", object]);
+let llcArgs = ["llc", "-O2", "-filetype=obj", bitcode, "-o", object];
+if sharedMode { llcArgs = ["llc", "-O2", "-relocation-model=pic", "-filetype=obj", bitcode, "-o", object]; };
+let compiled = std.process.run(llcArgs);
 if compiled.status != 0 { fail("llc failed:\n" + compiled.stderr); };
 
 let cfgText = std.fs.readFileText("aot/toolchain/aarch64-android24.cfg");
 if isError(cfgText) { fail("cannot read toolchain template"); };
 let lines = std.String.split(cfgText)("\n");
 let template = "";
+let wantKey = if sharedMode { "shared " } else { "exe " };
 let li = 0;
 while li < lines.length {
   let candidate = lines[li];
-  if candidate.length > 0 && candidate[0] != "#" { template = candidate; };
-  li = li + 1;
+  if startsWith(candidate, wantKey) {
+    template = std.Bytes.slice(candidate, wantKey.length, candidate.length - wantKey.length);
+    li = lines.length;
+  } else {
+    li = li + 1;
+  };
 };
 if template == "" { fail("empty toolchain template"); };
 
@@ -77,7 +89,7 @@ if linked.status != 0 {
 };
 
 // 校验:链接产物里的静态字符串必须和 IR 一致。校验不过就不发布(保留旧产物)。
-if !skipVerify {
+if !skipVerify && !sharedMode {
   let checkArgs = [verifyTool, staged, irPath];
   if stdlibIr != "" { checkArgs[checkArgs.length] = stdlibIr; };
   let checked = std.process.run(checkArgs);
