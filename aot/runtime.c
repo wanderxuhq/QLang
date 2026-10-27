@@ -267,6 +267,19 @@ void *ql_extension_open(const char *path, const char *abi, uint64_t *status) {
  * 返回值:子进程退出码(正常退出)或 128+信号;负数表示机制本身失败。 */
 long ql_getpid(void) { return (long)getpid(); }
 long ql_unlink(const char *path) { return unlink(path); }
+/* 写文件:构建驱动要把编译器输出(IR)落盘。返回 0 成功,负数失败。 */
+long ql_write_file(const char *path, const void *data, long length) {
+  int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+  if (fd < 0) return -1;
+  long offset = 0;
+  while (offset < length) {
+    long n = write(fd, (const char *)data + offset, (size_t)(length - offset));
+    if (n <= 0) { close(fd); return -2; }
+    offset += n;
+  }
+  close(fd);
+  return 0;
+}
 long ql_spawn(const char *argbuf, long nargs, const char *out_path, const char *err_path) {
   if (!argbuf || nargs <= 0 || nargs >= 64) return -1000;
   char *argv[64];

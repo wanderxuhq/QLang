@@ -1831,6 +1831,12 @@ let __fs_canonical = (path) -> {
 // 进程机制(std.process):argv 用 NUL 分隔的缓冲送进 C 叶子;stdout/stderr 落到
 // 两个临时文件,C 侧不需要 poll 管道。公开面是 std.process.run(args)。
 let __fs_remove = (path) -> { ql_unlink(ql_mem_get_ptr(path, 8)); null; };
+let __fs_write_text = (path, text) -> {
+  let name = __fs_path(path)?;
+  let status = ql_write_file(ql_mem_get_ptr(name, 8), ql_mem_get_ptr(text, 8), readU64(text, 16));
+  if status != 0 { return __err("IOError", "cannot write " + path); };
+  null;
+};
 let __procSeq = 0;
 let __spawnRaw = (args, outPath, errPath) -> {
   let n = args.length;
@@ -1932,7 +1938,7 @@ let __bytes_slice = (b, offset, count) -> {
   __str_new(out, count);
 };
 let stdBytes = { read: __bytes_read, length: __bytes_length, byteAt: __bytes_at, u32: __bytes_u32, u64: __bytes_u64, hex: __bytes_hex, slice: __bytes_slice };
-let stdFs = { readFileText: __fs_read_text, canonicalPath: __fs_canonical };
+let stdFs = { readFileText: __fs_read_text, canonicalPath: __fs_canonical, writeText: __fs_write_text, remove: __fs_remove };
 // 公开能力:运行一个外部程序并拿到 status/stdout/stderr。
 let stdProcess = { run: __procRun };
 

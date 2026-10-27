@@ -2196,7 +2196,7 @@ let directCallTarget = (node, cname) -> {
 let emitCall = (node) -> {
   let calleeIsId = node.callee.type == "Identifier";
   let cname = if calleeIsId { node.callee.name } else { "" };
-  let leaf = inRuntime && calleeIsId && (cname == "ql_alloc" || cname == "ql_write" || cname == "ql_mem_get" || cname == "ql_mem_store" || cname == "ql_mem_get_ptr" || cname == "ql_mem_store_ptr" || cname == "ql_value_get" || cname == "ql_value_store" || cname == "ql_integer_rem" || cname == "ql_number_bits" || cname == "ql_exit" || cname == "ql_openat" || cname == "ql_read" || cname == "ql_close" || cname == "ql_readlinkat" || cname == "ql_getrandom" || cname == "ql_extension_open" || cname == "ql_getpid" || cname == "ql_spawn" || cname == "ql_unlink");
+  let leaf = inRuntime && calleeIsId && (cname == "ql_alloc" || cname == "ql_write" || cname == "ql_mem_get" || cname == "ql_mem_store" || cname == "ql_mem_get_ptr" || cname == "ql_mem_store_ptr" || cname == "ql_value_get" || cname == "ql_value_store" || cname == "ql_integer_rem" || cname == "ql_number_bits" || cname == "ql_exit" || cname == "ql_openat" || cname == "ql_read" || cname == "ql_close" || cname == "ql_readlinkat" || cname == "ql_getrandom" || cname == "ql_extension_open" || cname == "ql_getpid" || cname == "ql_spawn" || cname == "ql_unlink" || cname == "ql_write_file");
   if inRuntime && (cname == "readU64" || cname == "writeU64") && lookupSlot(cname).scope == runtimeScope {
     let value = emitExpr(node.arguments[0]);
     let offset = emitInt(emitExpr(node.arguments[1]), "i64");
@@ -2297,7 +2297,8 @@ let emitCall = (node) -> {
     else if cname == "ql_readlinkat" { signature = ["i64", "ptr", "ptr", "i64"]; resultType = "i64"; }
     else if cname == "ql_getpid" { signature = []; resultType = "i64"; }
     else if cname == "ql_spawn" { signature = ["ptr", "i64", "ptr", "ptr"]; resultType = "i64"; }
-    else if cname == "ql_unlink" { signature = ["ptr"]; resultType = "i64"; };
+    else if cname == "ql_unlink" { signature = ["ptr"]; resultType = "i64"; }
+    else if cname == "ql_write_file" { signature = ["ptr", "ptr", "i64"]; resultType = "i64"; };
     let arguments = ""; i = 0;
     while i < signature.length {
       let value = if signature[i] == "ptr" { emitPointer(values[i]) } else { emitInt(values[i], signature[i]) };
@@ -2772,6 +2773,7 @@ let emitPrelude = () -> {
   line("declare i64 @ql_getpid()");
   line("declare i64 @ql_spawn(ptr, i64, ptr, ptr)");
   line("declare i64 @ql_unlink(ptr)");
+  line("declare i64 @ql_write_file(ptr, ptr, i64)");
 
   line(valueABI);
 };

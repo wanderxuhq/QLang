@@ -1169,3 +1169,26 @@ selfhost 全绿;自举固定点逐字节成立。
 
 自此:构建路径 = `emit → target/tools/link(QLang → opt/llc/ld.lld)→ target/tools/verify(QLang)`;
 Python 只剩 ①工具引导 ②单模块/扩展等回落路径 ③`--check-only` 参照实现。
+
+
+## 46. 工具链去 Python:写文件 + QLang 构建驱动(2026-10-27)
+
+**`std.fs.writeText(path, text)`**(机制叶子 `ql_write_file`):构建驱动必须把编译器输出(IR)
+落盘,而 `std.fs` 原来只有读。
+
+**`aot/build.ql`**:一条命令完成 `emit --emit-llvm-split`(捕获 stdout)→ 写临时 IR →
+`target/tools/link`(opt/llc/ld.lld + 校验)→ 发布。全程 QLang,不调用 Python:
+
+```
+target/tools/build aot/tests/t20_native_bridge.ql -o /tmp/t20_ql \
+  --compiler /tmp/stage2_w2 --stdlib-object <obj> --symbols <tsv> \
+  --interface <txt> --stdlib-strings <tsv>
+```
+
+实测:t20 构建 exit 0,输出与 `.expected` 一致。
+
+自举顺序(老规矩):新叶子 `ql_write_file` 先让编译器认识 —— 先用旧编译器 + **不含写文件
+的 runtime** 产出认识新叶子的编译器,再用它编完整 runtime。
+
+剩下唯一还在工具链里的 Python:`aot/stdlib_split.py`(标准库对象构建/缓存/拆分/接口)。
+下一步把它也用 QLang 重写,并提供 `target/tools/stdlib` 供 `build` 自动取对象。
