@@ -1192,3 +1192,28 @@ target/tools/build aot/tests/t20_native_bridge.ql -o /tmp/t20_ql \
 
 剩下唯一还在工具链里的 Python:`aot/stdlib_split.py`(标准库对象构建/缓存/拆分/接口)。
 下一步把它也用 QLang 重写,并提供 `target/tools/stdlib` 供 `build` 自动取对象。
+
+
+## 47. 标准库对象构建也用 QLang(2026-10-27)
+
+`aot/stdlib_build.ql` 取代 `stdlib_split.py` 的 `build_stdlib`:缓存键、IR 切分、符号表、
+strings 表、分析接口、目标文件,全部 QLang(shell 只用 `sha256sum`/`mkdir`/`llc`)。
+
+**验收方式**:用**同一个编译器**分别跑 Python 版和 QLang 版,逐个产物 `cmp`:
+
+| 产物 | 结果 |
+|---|---|
+| `stdlib.ll` | **逐字节相同** |
+| `symbols.tsv` | **逐字节相同** |
+| `strings.tsv` | **逐字节相同** |
+| `interface.txt` | **逐字节相同** |
+| `stdlib.o` | 大小不同(QLang 用 `llc -O2`、Python 用 `clang -O2 -c`,多出的只是 `.comment` 等元数据);用它构建的 t20 输出与 `.expected` 一致 |
+
+对齐过程中修掉的五个差异(都是"文本细节"):
+
+1. `define hidden ` + 原文会把 `define` 叠两遍;而且**冷助手**(`@__panic_exit`/`@__cold_located_error`/
+   `@__stdlib_init`)没有 `internal`,不能改成 `hidden`(改了用户模块就链接不上);
+2. preamble 与 ABI 声明之间多一个空行;
+3. `strings.tsv` 的名字多了 `@` 前缀;
+4. `symbols.tsv` 要按**字节序**排序(QLang 的字符串 `<` 顺序和 Python `sorted()` 不同);
+5. 同名符号以**最后**一次为准(Python 是 dict 覆盖)。
