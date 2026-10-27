@@ -14,6 +14,17 @@ import ../bootstrapped/library.ql;
 // Static graph loading reads source only; module initialization stays in the ELF.
 // 标准库对象化模式:stdio 模块只发用户部分,库函数按外部符号调用。
 // `stdlibSymbolMap` 来自对象构建时落盘的 name<TAB>ql_fnN 表。
+// 名字 → 寄存器实参入口的元数(缺失/-1 = 只有通用入口)。
+let fastArityOf = {};
+// 预编译对象里带寄存器入口的函数:名字 → 元数(symbols.tsv 第三列)。
+let stdlibFastArity = {};
+let fastArityFor = (name) -> {
+  let local = fastArityOf[name];
+  if !isError(local) && local != null { return local; };
+  let fromStd = stdlibFastArity[name];
+  if !isError(fromStd) && fromStd != null { return fromStd; };
+  -1;
+};
 let splitStdlibMode = false;
 // 分析接口是否可用:传给 `-` 表示强制走「从源码分析」的对照路径。
 let stdlibFromCache = false;
@@ -1438,7 +1449,8 @@ let emitLetStmt = (node) -> {
       } else if rawInfo != null && !isError(node.value.rawDirect) && node.value.rawDirect == true {
         curScope.directFns[node.name] = { raw: true, ir: node.value.emittedIr, arity: node.value.parameters.length, rawRet: !isError(node.value.returnsNumberSafe) && node.value.returnsNumberSafe == true };
       } else if !isError(node.value.emittedIr) && node.value.directLeaf == true && node.value.directNoParamAnnotations == true {
-        curScope.directFns[node.name] = { ir: node.value.emittedIr, arity: node.value.parameters.length };
+        curScope.directFns[node.name] = { ir: node.value.emittedIr, arity: node.value.parameters.length,
+                                          fast: fastArityFor(node.name) };
       };
     };
   };
@@ -1618,7 +1630,21 @@ let emitFunction = (node, name, rawDirect) -> {
   curSink = blk;
   // 名字 → 符号 的映射(注释,不进代码)。标准库对象化时靠它把「用户代码按名字直调的
   // 库函数」连到对象里的真实符号;单模块模式下这行只是自述。
-  if name != "" { line("  ; ql-symbol " + name + " " + fname); };
+  // 寄存器实参入口:直接调用方把 ≤3 个实参放在寄存器里,不再写实参缓冲。
+  // 只有「无参数注解」的函数可以这样 —— 注解检查要用闭包盒里的 annotations 数组。
+  // 闭包盒仍指向通用入口(= 包装函数),所以间接调用/部分应用不变。
+  let fastAbi = false;
+  if !rawMode && node.parameters.length <= 3 {
+    fastAbi = true;
+    let fa = 0;
+    while fa < node.parameters.length {
+      if node.parameters[fa].annotation != null { fastAbi = false; };
+      fa = fa + 1;
+    };
+  };
+  let fastName = fname + "_f";
+  if name != "" && fastAbi { fastArityOf[name] = node.parameters.length; };
+  if name != "" { line("  ; ql-symbol " + name + " " + fname + " " + std.String.toString(if fastAbi { node.parameters.length; } else { -1; })); };
   if rawMode {
     let signature = "ptr %env";
     let sb = 0;
@@ -1628,6 +1654,27 @@ let emitFunction = (node, name, rawDirect) -> {
     };
     let retTy = if rawNum { "double"; } else { "%ql_value"; };
     line("define internal " + retTy + " @" + fname + "(" + signature + ") {");
+  } else if fastAbi {
+    // 通用入口 = 包装:从实参缓冲取参,转调寄存器入口(闭包盒指向它)。
+    line("define internal %ql_value @" + fname + "(ptr %env, ptr %args, i64 %argc, %ql_value %annotations) {");
+    line("entry:");
+    let wargs = "ptr %env";
+    let wi = 0;
+    while wi < node.parameters.length {
+      let gp = temp(); let gv = temp();
+      line("  " + gp + " = getelementptr %ql_value, ptr %args, i64 " + std.String.toString(wi));
+      line("  " + gv + " = load %ql_value, ptr " + gp);
+      wargs = wargs + ", %ql_value " + gv;
+      wi = wi + 1;
+    };
+    let wr = temp();
+    line("  " + wr + " = call %ql_value @" + fastName + "(" + wargs + ")");
+    line("  ret %ql_value " + wr);
+    line("}");
+    let fsignature = "ptr %env";
+    let fi = 0;
+    while fi < node.parameters.length { fsignature = fsignature + ", %ql_value %p" + std.String.toString(fi); fi = fi + 1; };
+    line("define internal %ql_value @" + fastName + "(" + fsignature + ") {");
   } else {
     line("define internal %ql_value @" + fname + "(ptr %env, ptr %args, i64 %argc, %ql_value %annotations) {");
   };
@@ -1653,8 +1700,12 @@ let emitFunction = (node, name, rawDirect) -> {
       line("  store %ql_value " + packed + ", ptr " + off);
     } else {
       let ro = temp(); let rv = temp();
-      line("  " + ro + " = getelementptr %ql_value, ptr %args, i64 " + std.String.toString(a));
-      line("  " + rv + " = load %ql_value, ptr " + ro);
+      if fastAbi {
+        rv = "%p" + std.String.toString(a);
+      } else {
+        line("  " + ro + " = getelementptr %ql_value, ptr %args, i64 " + std.String.toString(a));
+        line("  " + rv + " = load %ql_value, ptr " + ro);
+      };
       let ty = "null"; let text = "null";
       if node.parameters[a].annotation != null {
         let entry = emitCallRegs("__get_index", ["%annotations", emitNumber({ value: a })]);
@@ -1963,11 +2014,20 @@ let emitInt = (value, width) -> {
 // A direct call to an already-defined runtime function: same frame/closure as the
 // boxed form, but the code address is known, so no pointer load and no indirect
 // branch. Arguments still go through the ordinary buffer.
-let emitDirectCallValue = (irName, FN, argRegs) -> {
+let emitDirectCallValue = (irName, FN, argRegs, fastArity) -> {
   let pointer = emitPointer(FN);
-  let ep = temp(); let env = temp(); let ap = temp(); let annotations = temp();
+  let ep = temp(); let env = temp();
   line("  " + ep + " = getelementptr i8, ptr " + pointer + ", i64 16");
   line("  " + env + " = load ptr, ptr " + ep);
+  if !isError(fastArity) && fastArity >= 0 && fastArity == argRegs.length {
+    let args = "ptr " + env;
+    let fi = 0;
+    while fi < argRegs.length { args = args + ", %ql_value " + argRegs[fi]; fi = fi + 1; };
+    let fr = temp();
+    line("  " + fr + " = call %ql_value @" + irName + "_f(" + args + ")");
+    return fr;
+  };
+  let ap = temp(); let annotations = temp();
   line("  " + ap + " = getelementptr i8, ptr " + pointer + ", i64 56");
   line("  " + annotations + " = load %ql_value, ptr " + ap);
   let narg = argRegs.length;
@@ -1988,7 +2048,7 @@ let emitDirectCallValue = (irName, FN, argRegs) -> {
 };
 let emitDirectCall = (irName, name, argRegs) -> {
   let FN = emitIdentifier({ type: "Identifier", name: name, internal: true });
-  emitDirectCallValue(irName, FN, argRegs);
+  emitDirectCallValue(irName, FN, argRegs, fastArityFor(name));
 };
 let emitCallRegs = (fname, argRegs) -> {
   // NOTE(deviation from brief): emitIdentifier 现签名取 Identifier 节点(读 node.name),
@@ -2244,7 +2304,9 @@ let emitCall = (node) -> {
     // arguments; the generic dispatcher's argument/arity/annotation/depth
     // checks are statically discharged, so a direct boxed-ABI call is safe.
     directCalls = directCalls + 1;
-    return emitDirectCallValue(direct.ir, FN, values);
+    let directFast = -1;
+    if !isError(direct.fast) && direct.fast != null { directFast = direct.fast; };
+    return emitDirectCallValue(direct.ir, FN, values, directFast);
   };
   let trusted = false;
   if inRuntime && calleeIsId && !isError(runtimeFunctions[cname]) {
@@ -2941,7 +3003,15 @@ let main = (args) -> {
     line("declare void @__stdlib_init(ptr, i32, ptr)");
     let symNames = std.Object.keys(stdlibSymbolMap); let sni = 0;
     while sni < symNames.length {
-      line("declare %ql_value @" + stdlibSymbolMap[symNames[sni]] + "(ptr, ptr, i64, %ql_value)");
+      let sym = stdlibSymbolMap[symNames[sni]];
+      line("declare %ql_value @" + sym + "(ptr, ptr, i64, %ql_value)");
+      let fdecl = stdlibFastArity[symNames[sni]];
+      if !isError(fdecl) && fdecl != null {
+        let sig = "ptr";
+        let ai = 0;
+        while ai < fdecl { sig = sig + ", %ql_value"; ai = ai + 1; };
+        line("declare %ql_value @" + sym + "_f(" + sig + ")");
+      };
       sni = sni + 1;
     };
   };

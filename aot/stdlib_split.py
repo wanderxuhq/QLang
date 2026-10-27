@@ -31,7 +31,7 @@ import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 CACHE_ROOT = ROOT / 'target' / 'stdlib'
-SPLIT_VERSION = '6'
+SPLIT_VERSION = '7'
 
 DEFINE = re.compile(r'^define\s')
 GLOBAL = re.compile(r'^@([A-Za-z0-9_$.]+)\s*=\s')
@@ -165,9 +165,11 @@ def build_stdlib(compiler, cache_root=CACHE_ROOT):
         if marker in line:
             _, rest = line.split(marker, 1)
             parts = rest.split()
-            if len(parts) == 2:
-                named[parts[0]] = parts[1]
-    (out / 'symbols.tsv').write_text(''.join(f'{k}\t{v}\n' for k, v in sorted(named.items())))
+            if len(parts) >= 3:
+                named[parts[0]] = (parts[1], parts[2])
+            elif len(parts) == 2:
+                named[parts[0]] = (parts[1], '-1')
+    (out / 'symbols.tsv').write_text(''.join(f'{k}\t{sym}\t{fa}\n' for k, (sym, fa) in sorted(named.items())))
 
     symbols = {
         'functions': {name: declare_for_function(body) for name, body in functions.items()
