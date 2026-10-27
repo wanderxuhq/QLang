@@ -1102,3 +1102,30 @@ ELF 校验需要**按字节**读文件,而 `std` 原来只有文本读(`readFile
 验收:读 `/tmp/q_out`(711,008 字节的 ELF)得到 length=711008、byteAt(0)=127、
 hex(0,4)="7f454c46"、u32(0)=1179403647(与 `readelf -h` 的 Magic 一致);
 selfhost 全绿;自举固定点逐字节成立。
+
+
+## 44. QLang 版 ELF 静态字符串校验(2026-10-27)
+
+`aot/verify.ql`:`verify <elf> <ir> [<extra-ir> ...]`,纯 QLang,不依赖 `readelf`/Python。
+它和 `native_link.py` 的 `validate` 同口径:每个 `.strbox<N>` 必须在 ELF 里有符号、header 是
+`{tag=2, 长度}`、buffer 指针由 `R_AARCH64_RELATIVE` 的 addend 给出、buffer 字节等于 IR 里的
+`c"..."` 字面量。
+
+验收(813 个字符串):
+
+| 用例 | 结果 |
+|---|---|
+| 好产物 | `verify: 813 static strings ok`,退出 0 |
+| 篡改 buffer 里一个字节 | 退出 1,`linked bytes do not match IR` |
+| 篡改盒子的长度字段 | 退出 1,`string size does not match IR` |
+
+**踩到的四个坑**(都是"EFL/ELF 细节",值得记):
+
+1. `e_shentsize`/`e_shnum`/`e_phentsize`/`e_phnum` 是 **2 字节**字段;用 `u64` 读会把相邻字段
+   吞进来 —— `shnum` 变成 25,771,311,129,循环无界分配直接 `OutOfMemory`。用 `u32 % 65536`。
+2. `.strbox` 是 **7** 个字符;从索引 8 取数字会把 `".strbox1000000"` 解析成 `"000000"` = 0,
+   于是查到对象里的 `.strbox0`,报出莫名其妙的长度不符。
+3. IR 的 `c"\61\72..."` 是十六进制转义:逐字节 `toString` 得到十进制;而整段 `hex` 再去掉
+   `5c` 会误伤数据里真的是 0x5c 的字节。正解:用 `std.Bytes.slice` 取字面量区文本,再
+   `replace("\\")("")`。
+4. 大小写:IR 字面量保留原样(`3D`),`std.Bytes.hex` 输出小写(`3d`)——先统一小写。

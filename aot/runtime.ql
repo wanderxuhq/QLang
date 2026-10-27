@@ -1921,7 +1921,17 @@ let __bytes_hex = (b, offset, count) -> {
   };
   __str_new(out, count * 2);
 };
-let stdBytes = { read: __bytes_read, length: __bytes_length, byteAt: __bytes_at, u32: __bytes_u32, u64: __bytes_u64, hex: __bytes_hex };
+let __bytes_slice = (b, offset, count) -> {
+  if !__bytes_check(b) { return __err("TypeMismatch", "std.Bytes.slice expects Bytes"); };
+  if offset < 0 || count < 0 || offset + count > readU64(b, 16) { return __err("IndexOutOfBounds", "Bytes.slice"); };
+  if count == 0 { return __str_new(ql_alloc(1), 0); };
+  let src = ql_mem_get_ptr(b, 8);
+  let out = ql_alloc(count);
+  let i = 0;
+  while i < count { ql_mem_store(out, i, ql_mem_get(src, offset + i)); i = i + 1; };
+  __str_new(out, count);
+};
+let stdBytes = { read: __bytes_read, length: __bytes_length, byteAt: __bytes_at, u32: __bytes_u32, u64: __bytes_u64, hex: __bytes_hex, slice: __bytes_slice };
 let stdFs = { readFileText: __fs_read_text, canonicalPath: __fs_canonical };
 // 公开能力:运行一个外部程序并拿到 status/stdout/stderr。
 let stdProcess = { run: __procRun };
