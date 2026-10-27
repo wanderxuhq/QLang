@@ -69,6 +69,12 @@ python3 aot/native_link.py /tmp/p.ll -o /tmp/p
 ```
 
 - `--emit-module` 用于单独编译的 native 扩展。
+- **快路径(2026-10 起)**:标准库可以只编一次再链接。
+  `aot/stdlib_split.py <compiler>` 产出 `target/stdlib/<hash>/{stdlib.o,symbols.tsv,interface.txt}`;
+  `stage2 --emit-llvm-split <源码> <runtime> <symbols.tsv> <interface.txt>` 只发用户模块
+  (`{interface}` 传 `-` 则回落到「从源码分析」的对照路径);`native_link.py --stdlib-object`
+  或环境变量 `QLANG_STDLIB_OBJECT` 链接对象。单夹具构建 ~22s → ~1.7s。
+  两套主门禁会自动构建并启用它。测量见 `docs/unboxed-values-probes.md` §22-§29。
 - `native_link.py` 用单线程 LLD,并校验每个静态字符串的 ELF 重定位/字节;不要绕过它直接 clang 链接。
 - 改 `aot/qlangc.ql` 之后必须重建编译器。编译器、源码、夹具必须**同源**(同一版本)。
 
@@ -98,6 +104,9 @@ cargo test --offline          # 14 tests;钉住 Rust 宿主行为,不等于 QLan
   `probes §11.1` 的两处漂移红恰好被这两套漏掉。
 - 基线必须**同源**:同一 commit 的源码 + 编译器 + boot + 夹具。混源只会制造假失败。
 - 长套件(interpreter ~731s、selfhost ~1573s)用可跟踪的后台任务跑,不要 `&`/`disown`。
+- `run_selfhost_tests.py` / `run_interpreter_tests.py` 支持 `--jobs N` 并行跑独立夹具
+  (默认 1)。配合标准库对象,selfhost 全套 ~3 min、interpreter ~6 min;内存是上限
+  (单个 `clang -O2` 吃 GB 级),别把 N 开太大。
 
 ### 2.5 头条指标
 
