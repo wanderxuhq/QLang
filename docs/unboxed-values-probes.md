@@ -990,3 +990,25 @@ println(0);          // f 从未调用
 产物里仍然有 `; ql-symbol helper ql_fn279` —— import 是**编译期静态解析**的,
 "未调用不初始化"只影响运行期初始化。要真省掉,必须让 `stdlib/bundle.ql` 从编译器的 import
 图里消失(例如生成纯文本 `stdlib/bundle.txt` + 独立 origins 表,需要时再读)。
+
+
+## 40. 遍历成本分项;`reserveModuleBindings` 收窄未落地(2026-10-27)
+
+`; astvisits` 现在带分项(自举一次,编译 qlangc.ql):
+
+```
+walkers=1423101  module=495300  slots=575005  names=300305  leaf=52491  bodylets=0
+```
+
+`slots`(`reserveModuleBindings`)最大:它对**每个语句列表**深度遍历整层表达式,只为找
+`Let`/`Import`。理论上 `Let`/`Import` 是语句、只能出现在语句列表这一层(块内的声明归那个
+Block 自己处理),所以试着收窄成"只扫语句层 + 下探 Let/Export 的值"。
+
+结果:**访问数 −33%(slots 575,005 → 108,298)**,但**产物变了** —— 运行时帧多了 1 个槽
+(后续槽位偏移 +64),169 个函数的 IR 变化,`typeRep` 计数也变(raw lit 574→578)。
+原因没查清(推测旧版会额外登记某些名字,多出来的槽是"历史行为"),所以**按纪律回滚**,
+只留下分项计数器。
+
+顺带:第一版收窄太狠,漏了 `let imported = import ./modules/extrema.ql;`(import 作为
+Let 的**值**),`t26_extrema` 直接抓红 —— 这类"看起来是语句、其实也能是表达式"的构造,
+在收窄前必须先查夹具里有没有反例。
