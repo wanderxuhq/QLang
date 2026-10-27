@@ -212,6 +212,10 @@ cp /tmp/qlang-library-bundle.ql stdlib/bundle.ql
 
 - 没有 `for`/`match`/try-catch;用 `while`/`if`;每句 `;`。
 - 用 `isError(x)` 守卫;不要用 `"x" + number` 当探针(它本身是 `TypeMismatch`,会污染观测)。
+
+- **数值热路径的函数值得写参数 + 返回注解**(`(a: Number, b: Number): Number`):实测同一
+  5M 循环,带注解 5.7ns/次、无注解 601.6ns/次(105×,probes §36)。字符串/对象搬运型函数
+  加了反而负收益(参数检查照付、String 没有裸表示),等 String 裸 ABI 再说。
 - 构造错误用 `std.Error.raise`;不要让 Error 作为普通实参。
 - 只消费分析结论,不在发射器里二次推断;新增机制先看 §4 的四条通道。
 
