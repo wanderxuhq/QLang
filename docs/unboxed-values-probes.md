@@ -878,3 +878,27 @@ noinfo=2776  args=1492  notable=180  成功 direct=529
 
 同性质的候选(下一轮):`reserveModuleBindings`(建立槽)与 `collectBodyLetNames`;
 `types.ql` 里 `typeBodyIsClean` / `typeReturnsPure` / `typeReturnsAreSafe` 对同一函数体的三趟。
+
+
+## 35. 分析:函数体三个判据合成一趟(2026-10-27)
+
+`typeFunctionReturnsPure` 与 `typeFunctionReturnsNumberSafe` 各自需要函数体的三个布尔事实:
+
+- `clean`:函数体没有 调用/import/`?`/带注解的 Let·Assign;
+- `pure`:每个 `return` 的值都是纯 Number(依赖参数 bindId);
+- `safe`:每个 `return` 的值都是安全 Number(依赖第二遍的 `cannotBeError`)。
+
+原来是三个独立 walker,`clean` 被两个判据各走一遍 ⇒ 干净函数体最多走 **4 遍全树**,含调用的
+函数体走 **2 遍**。合并成 `typeBodyFactsOf`:一趟收集三个事实,按 `typeProgram` 缓存
+(第二遍分析要重算 `safe`)。
+
+**关键细节**:提前退出必须放在函数入口。第一版把它放在对象分支里,语句列表仍会走完整棵树,
+实测**反而慢 26%**(CPU 39.5s vs 31.3s,同机重复 3 次)。挪到入口后,dirty 函数体只走 1 趟。
+
+| 度量 | 结果 |
+|---|---|
+| 结构 | 3 个 walker → 1 个;干净函数体 4 遍 → 1 遍,dirty 2 遍 → 1 遍 |
+| 墙钟/CPU | 本机噪声 ±30%(同一二进制两次量到 30.7s / 39.5s),**测不出差异** |
+| 验收 | 自举固定点逐字节成立;selfhost 绿;t58/t59/t60/t61/t62 等 10 个夹具输出一致 |
+
+教训:遍历合并必须保留原来的**提前退出位置**;把"少走一趟"换成"每趟走得更全"是负收益。

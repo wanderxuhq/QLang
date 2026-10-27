@@ -538,43 +538,61 @@ let typeBlockValuePure = (stmts, pids) -> {
   };
   has && lastSafe;
 };
-let typeReturnsPure = (node, pids) -> {
-  if node == null || isError(node) { return true; };
-  if AnyArray.check(node) {
-    let i = 0; while i < node.length { if !typeReturnsPure(node[i], pids) { return false; }; i = i + 1; };
-  } else if AnyObject.check(node) {
-    let t = node.type;
-    if !isError(t) && t == "Function" { return true; };
-    if !isError(t) && t == "Return" {
-      if !typeValuePurelyNumber(node.value, pids) { return false; };
-    };
-    let keys = std.Object.keys(node); let i = 0;
-    while i < keys.length { if !typeReturnsPure(node[keys[i]], pids) { return false; }; i = i + 1; };
-  };
-  true;
-};
 // 函数体不能有:调用(leaf)、import、`?` 传播、带注解的 Let/Assign(注解检查可提前返回)。
-let typeBodyIsClean = (node) -> {
-  if node == null || isError(node) { return true; };
+// One traversal per function body computes the three facts the raw/pure
+// decisions need: body has no call/import/`?`/annotated binding ("clean"),
+// every return is a pure Number ("pure"), every return is a safe Number
+// ("safe"). They used to be three separate walks of the same tree, and
+// `typeBodyIsClean` was walked twice (once per decision).
+//
+// `safe` depends on the second pass' cannotBeError, so the cache is keyed by
+// the analysis program counter (`typeProgram`): a new inferTypes pass
+// recomputes.
+let typeBodyFactsOf = (node, pids) -> {
+  let cached = node.bodyFacts;
+  if !isError(cached) && cached != null && !isError(cached.program) && cached.program == typeProgram {
+    return cached;
+  };
+  let facts = { program: typeProgram, clean: true, pure: true, safe: true };
+  typeScanBodyFacts(node.body, pids, facts);
+  node.bodyFacts = facts;
+  facts;
+};
+let typeScanBodyFacts = (node, pids, facts) -> {
+  // 两个判据都必须先「干净」才有意义;一旦不干净就整趟停 —— 这是原来
+  // typeBodyIsClean 的提前退出,必须在**函数入口**检查(放在对象分支里的话
+  // 语句列表仍会走完整棵树)。
+  if !facts.clean { return null; };
+  if node == null || isError(node) { return null; };
   if AnyArray.check(node) {
-    let i = 0; while i < node.length { if !typeBodyIsClean(node[i]) { return false; }; i = i + 1; };
-  } else if AnyObject.check(node) {
+    let i = 0; while i < node.length { typeScanBodyFacts(node[i], pids, facts); i = i + 1; };
+    return null;
+  };
+  if AnyObject.check(node) {
     let t = node.type;
     if !isError(t) {
-      if t == "Function" { return true; };
-      if t == "Import" || t == "Call" { return false; };
-      if t == "UnaryOp" && (node.operator == "?" || node.operator == "?Option") { return false; };
-      if (t == "Let" || t == "Assign") && node.annotation != null && !isError(node.annotation) { return false; };
+      if t == "Function" { return null; };
+      if facts.clean && (t == "Import" || t == "Call") { facts.clean = false; }
+      else if facts.clean && t == "UnaryOp" && (node.operator == "?" || node.operator == "?Option") { facts.clean = false; }
+      else if facts.clean && (t == "Let" || t == "Assign") && node.annotation != null && !isError(node.annotation) { facts.clean = false; };
+      if t == "Return" {
+        if facts.pure && !typeValuePurelyNumber(node.value, pids) { facts.pure = false; };
+        if facts.safe && !typeValueIsSafeNumber(node.value) { facts.safe = false; };
+      };
     };
+    // 两个判据都必须先「干净」才有意义(调用/import/`?`/注解绑定一律否决),
+    // 所以 clean 一旦为假就整趟停:这正是原来 typeBodyIsClean 的提前退出,
+    // 保留它才不会让"含调用的函数体"从"扫到第一个调用就停"退化成全扫。
+    if !facts.clean { return null; };
     let keys = std.Object.keys(node); let i = 0;
-    while i < keys.length { if !typeBodyIsClean(node[keys[i]]) { return false; }; i = i + 1; };
+    while i < keys.length { typeScanBodyFacts(node[keys[i]], pids, facts); i = i + 1; };
   };
-  true;
+  null;
 };
 let typeFunctionReturnsPure = (node, pids) -> {
-  if !typeBodyIsClean(node.body) { return false; };
-  if !typeBlockValuePure(node.body.statements, pids) { return false; };
-  typeReturnsPure(node.body, pids);
+  let facts = typeBodyFactsOf(node, pids);
+  if !facts.clean || !facts.pure { return false; };
+  typeBlockValuePure(node.body.statements, pids);
 };
 // 完整证明:退出边使用第二遍的 cannotBeError(可以读全局/安全调用)。
 let typeValueIsSafeNumber = (node) -> {
@@ -613,25 +631,11 @@ let typeBlockValueSafe = (stmts) -> {
   };
   has && lastSafe;
 };
-let typeReturnsAreSafe = (node) -> {
-  if node == null || isError(node) { return true; };
-  if AnyArray.check(node) {
-    let i = 0; while i < node.length { if !typeReturnsAreSafe(node[i]) { return false; }; i = i + 1; };
-  } else if AnyObject.check(node) {
-    let t = node.type;
-    if !isError(t) && t == "Function" { return true; };
-    if !isError(t) && t == "Return" {
-      if !typeValueIsSafeNumber(node.value) { return false; };
-    };
-    let keys = std.Object.keys(node); let i = 0;
-    while i < keys.length { if !typeReturnsAreSafe(node[keys[i]]) { return false; }; i = i + 1; };
-  };
-  true;
-};
 let typeFunctionReturnsNumberSafe = (node) -> {
   if !typeBlockValueSafe(node.body.statements) { return false; };
-  if !typeBodyIsClean(node.body) { return false; };
-  typeReturnsAreSafe(node.body);
+  // 参数 id 对 Number 纯净性的判据;safe 判据不看 pids,传空数组即可。
+  let facts = typeBodyFactsOf(node, []);
+  facts.clean && facts.safe;
 };
 let typeSafeReturnCount = 0;
 let typeSafeReturnReport = () -> typeSafeReturnCount;
