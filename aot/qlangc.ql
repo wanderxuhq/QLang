@@ -82,43 +82,49 @@ let reserveModuleGlobals = () -> {
 };
 // Resolve literal imports anywhere in the shared AST. Export names are a
 // candidate set; only entries actually produced at runtime are imported.
-let loadModuleNode = (node, path, depth, names) -> {
+// One pass over a freshly parsed module collects **both** facts we need:
+// export candidate names and every Import node in document order. The previous
+// version walked the whole AST twice (once for exports, once for imports) and
+// threaded an unused `names` parameter through the second walk. Import
+// resolution still happens after the scan — it is a different concern (it may
+// recurse into other modules), but it no longer needs its own traversal.
+let scanModuleFacts = (node, facts) -> {
   if AnyArray.check(node) {
-    let i = 0; while i < node.length { loadModuleNode(node[i], path, depth, names)?; i = i + 1; };
+    let i = 0; while i < node.length { scanModuleFacts(node[i], facts); i = i + 1; };
   } else if AnyObject.check(node) {
-    if !isError(node.type) && node.type == "Import" {
-      if !isError(node.pathExpression) {
-        node.origin = path;
-        loadModuleNode(node.pathExpression, path, depth, names)?;
-        return null;
+    let t = node.type;
+    if !isError(t) && t == "Import" { facts.imports[facts.imports.length] = node; };
+    if !isError(t) && t == "Export" {
+      if node.name != null { facts.exports[node.name] = true; }
+      else if !isError(node.value.type) && node.value.type == "Identifier" { facts.exports[node.value.name] = true; }
+      else if !isError(node.value.type) && node.value.type == "Object" {
+        let i = 0; while i < node.value.fields.length { facts.exports[node.value.fields[i].name] = true; i = i + 1; };
       };
+    };
+    let keys = std.Object.keys(node); let i = 0;
+    while i < keys.length {
+      // `module` 由解析阶段回填,里面是另一个模块的 AST,不能当子节点走。
+      if keys[i] != "module" { scanModuleFacts(node[keys[i]], facts); };
+      i = i + 1;
+    };
+  };
+  null;
+};
+// Resolve the imports collected by the scan, in document order.
+let resolveModuleImports = (imports, path, depth) -> {
+  let i = 0;
+  while i < imports.length {
+    let node = imports[i];
+    if !isError(node.pathExpression) {
+      node.origin = path;
+    } else {
       let resolved = modulePath(path, node.path);
       if isError(resolved) { return std.Error.raise("CompileError", compileDiagnostic(node, resolved.message), null); };
       let source = std.fs.readFileText(resolved);
       if isError(source) { return std.Error.raise("CompileError", compileDiagnostic(node, source.message), null); };
       node.module = loadModuleProgram(source, resolved, depth + 1)?;
-      return null;
     };
-    let keys = std.Object.keys(node); let i = 0;
-    while i < keys.length { loadModuleNode(node[keys[i]], path, depth, names)?; i = i + 1; };
-  };
-  null;
-};
-// Collect the complete export candidate set before following dependencies.
-// Partially discovered modules can then close a cyclic compile-time graph.
-let collectModuleExports = (node, names) -> {
-  if AnyArray.check(node) {
-    let i = 0; while i < node.length { collectModuleExports(node[i], names); i = i + 1; };
-  } else if AnyObject.check(node) {
-    if !isError(node.type) && node.type == "Export" {
-      if node.name != null { names[node.name] = true; }
-      else if node.value.type == "Identifier" { names[node.value.name] = true; }
-      else if node.value.type == "Object" {
-        let i = 0; while i < node.value.fields.length { names[node.value.fields[i].name] = true; i = i + 1; };
-      };
-    };
-    let keys = std.Object.keys(node); let i = 0;
-    while i < keys.length { collectModuleExports(node[keys[i]], names); i = i + 1; };
+    i = i + 1;
   };
   null;
 };
@@ -127,10 +133,11 @@ let loadModuleProgram = (source, path, depth) -> {
   if depth >= 128 { return std.Error.raise("CompileError", "module nesting limit exceeded", null); };
   let program = parseModule(source, path);
   if isError(program) { return std.Error.raise("CompileError", program.message, null); };
-  let names = {}; collectModuleExports(program.statements, names);
-  let module = { program: program, names: std.Object.keys(names), path: path };
+  let facts = { exports: {}, imports: [] };
+  scanModuleFacts(program.statements, facts);
+  let module = { program: program, names: std.Object.keys(facts.exports), path: path };
   moduleCache[path] = module;
-  loadModuleNode(program.statements, path, depth, names)?;
+  resolveModuleImports(facts.imports, path, depth)?;
   module;
 };
 // Reserve imports in the scope where their expression executes. Function

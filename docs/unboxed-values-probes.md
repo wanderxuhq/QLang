@@ -835,3 +835,25 @@ noinfo=2776  args=1492  notable=180  成功 direct=529
 `makeStringLibrary(...)` 里返回的对象字面量,成员是**匿名闭包**,`symbols.tsv` 里的
 `名字 → ql_fnN` 覆盖不到它们。需要在发射对象字面量时记录 `模块名.成员 → ql_fnN`,
 再让分析与发射共用这张表。
+
+
+## 33. 前端:模块事实一趟扫完(2026-10-27)
+
+`loadModuleProgram` 原本在新解析出的 AST 上走**两趟**:`collectModuleExports`(找导出名)和
+`loadModuleNode`(找 Import 并递归加载)。第二趟还带着一个从头到尾没被用过的 `names` 参数。
+导出名与 import 列表是**互不依赖的信息**,没有理由拆成两趟。
+
+合并成 `scanModuleFacts`(一次深搜同时收集 导出名 + Import 节点,文档序),解析仍然放在
+`resolveModuleImports` 之后做(它要递归进别的模块,属于不同关注点,不是"多一顿遍历")。
+注意 `module` 字段要跳过:它是解析阶段回填的别的模块的 AST。
+
+| 度量(交错跑两轮,机器当时较慢,看比例) | 旧 | 新 |
+|---|---:|---:|
+| 自举(编译 qlangc.ql) | 64,024 / 64,202 ms | **62,130 / 59,557 ms** |
+| 中位数 | 64.1s | 60.8s(−5.2%) |
+
+验收:自举固定点逐字节成立;scoped_module / lazy_module 两套门禁全绿;7 个带 `.expected`
+的夹具输出一致。
+
+下一笔同性质的合并:`collectAssignedNames`(赋值/导出/重声明)与 `collectImportedNames`
+(import 绑定的名字)也是对同一棵树的两趟,可以并成一次。
