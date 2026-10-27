@@ -857,3 +857,24 @@ noinfo=2776  args=1492  notable=180  成功 direct=529
 
 下一笔同性质的合并:`collectAssignedNames`(赋值/导出/重声明)与 `collectImportedNames`
 (import 绑定的名字)也是对同一棵树的两趟,可以并成一次。
+
+
+## 34. 前端:名字事实两趟遍历合成一趟(2026-10-27)
+
+`collectAssignedNames`(赋值/导出/重声明)与 `collectImportedNames`(静态 import 绑定的名字)
+是同一棵树上的两趟全树遍历,收集的是**互不依赖**的名字事实。合并进 `collectAssignedNames`
+的 Import 分支,删掉独立的 walker。
+
+**合并时踩到的坑(值得记)**:`buildInlineCandidates` 开头有一句 `importedNames = {};`
+再自己扫一遍。删掉扫描后,这句清空把 `main` 里刚扫好的表清掉了,于是"import 覆盖同名槽"
+的判据丢失 —— `t60_raw_direct` 的 `shadow` 被错当成 raw 目标,输出从 102 变成 3。
+自举门禁抓到;修法是删掉那句清空并注释原因。
+
+| 度量 | 结果 |
+|---|---|
+| 墙钟(交错两轮) | ds1 33.2/46.8s,n3 42.6/41.2s —— **在本机噪声内,测不出差异** |
+| 确定性收益 | 少一趟全树遍历、少一个 walker 函数 |
+| 验收 | 自举固定点逐字节成立;scoped_module / lazy_module / selfhost 全绿;t60 输出恢复 102 |
+
+同性质的候选(下一轮):`reserveModuleBindings`(建立槽)与 `collectBodyLetNames`;
+`types.ql` 里 `typeBodyIsClean` / `typeReturnsPure` / `typeReturnsAreSafe` 对同一函数体的三趟。

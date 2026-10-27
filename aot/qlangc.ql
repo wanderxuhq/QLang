@@ -857,11 +857,22 @@ let assignedUserNames = {};
 let letSeenNames = {};
 let redeclaredUserNames = {};
 let exportedUserNames = {};
+// One pass over the program collects every *name-level* fact the emitter needs:
+// assignments, exports, redeclarations and names bound by static imports. They
+// used to be two separate full-AST walks (collectAssignedNames +
+// collectImportedNames); they are independent facts about the same tree.
 let collectAssignedNames = (node, names) -> {
   if AnyArray.check(node) {
     let i = 0; while i < node.length { collectAssignedNames(node[i], names); i = i + 1; };
   } else if AnyObject.check(node) {
-    if !isError(node.type) && node.type == "Import" { return null; };
+    if !isError(node.type) && node.type == "Import" {
+      // 静态 import(无 pathExpression)会覆盖同名槽;计算式 import 不建词法绑定。
+      if isError(node.pathExpression) && !isError(node.module) && !isError(node.module.names) {
+        let i = 0;
+        while i < node.module.names.length { importedNames[node.module.names[i]] = true; i = i + 1; };
+      };
+      return null;
+    };
     if !isError(node.type) && node.type == "Export" && !isError(node.name) {
       exportedUserNames[node.name] = true;
     };
@@ -883,25 +894,6 @@ let collectAssignedNames = (node, names) -> {
 // bypass the imported value. Collect without following Import nodes (their
 // module ASTs form cycles).
 let importedNames = {};
-let collectImportedNames = (node) -> {
-  if AnyArray.check(node) {
-    let i = 0; while i < node.length { collectImportedNames(node[i]); i = i + 1; };
-  } else if AnyObject.check(node) {
-    let t = node.type;
-    if !isError(t) && t == "Import" {
-      // Static imports have no pathExpression; computed imports return a
-      // namespace and never create lexical bindings.
-      if isError(node.pathExpression) && !isError(node.module) && !isError(node.module.names) {
-        let i = 0;
-        while i < node.module.names.length { importedNames[node.module.names[i]] = true; i = i + 1; };
-      };
-      return null;
-    };
-    let keys = std.Object.keys(node); let i = 0;
-    while i < keys.length { collectImportedNames(node[keys[i]]); i = i + 1; };
-  };
-  null;
-};
 // A function is a leaf when its own body contains no call/import; nested
 // function definitions are values, not calls, and are skipped.
 let functionBodyIsLeaf = (node) -> {
@@ -1190,8 +1182,9 @@ let buildInlineCandidates = (program) -> {
   directSlots = [];
   directScanSeq = 0;
   letSeqByName = {};
-  importedNames = {};
-  collectImportedNames(program);
+  // importedNames 已由 main 里的 collectAssignedNames 一趟扫好(它同时收
+  // 赋值/导出/重声明/import 名字);这里不能再清空,否则 import 覆盖同名槽的
+  // 判据会丢(t60 的 `shadow` 就是这么被抓到的)。
   let refs = {};
   collectDirectRefs(program, refs);
   collectInlineCandidates(program, refs, inlineCandidates);
@@ -3019,7 +3012,6 @@ let main = (args) -> {
   collectAssignedNames(userProgram.statements, assignedUserNames);
   if foldEnabled {
     // 折叠还需要 import 名字:导入会覆盖同名槽,不能当成不可变本地函数。
-    collectImportedNames(userProgram.statements);
     let foldLets = {};
     let fi = 0;
     while fi < userProgram.statements.length {
