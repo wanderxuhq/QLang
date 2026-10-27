@@ -1129,3 +1129,30 @@ selfhost 全绿;自举固定点逐字节成立。
    `5c` 会误伤数据里真的是 0x5c 的字节。正解:用 `std.Bytes.slice` 取字面量区文本,再
    `replace("\\")("")`。
 4. 大小写:IR 字面量保留原样(`3D`),`std.Bytes.hex` 输出小写(`3d`)——先统一小写。
+
+
+## 45. QLang 工具链接管构建路径(2026-10-27)
+
+链路:`stage2 --emit-llvm-split` → **`target/tools/link`(QLang)** → `opt` → `llc` → `ld.lld`
+→ **`target/tools/verify`(QLang)** → 发布。构建路径上不再有 `python3 aot/native_link.py`。
+
+| 环节 | 现状 |
+|---|---|
+| 链接器 | `aot/link.ql`,QLang 驱动 opt/llc/ld.lld;clang 只用于一次性编译 runtime.c(缓存) |
+| 校验器 | `aot/verify.ql`,纯 QLang 解析 ELF;失败则不发布(保留旧产物) |
+| 工具构建 | `aot/toolchain_build.py`(Python,**只做引导**:用当前编译器 + native_link.py 产出 `target/tools/*`) |
+| 门禁 | `run_selfhost_tests.py` 在标准库对象存在时优先用 `target/tools/link` |
+
+| 度量 | Python 链接 | QLang 链接 + 校验 |
+|---|---:|---:|
+| 单次链接(小 IR) | ~1.1s | ~2.4s |
+| **selfhost 门禁全套(40+ 夹具,--jobs 3)** | 212–616s(随机器负载) | **295s** |
+
+**代价与取舍**:校验器每次链接要重新解析 ELF(符号表 + 重定位,约 0.5s)+ 逐条比对,
+所以单次构建从 ~1.0s 变成 ~2.4s。但**它把 Python 从构建路径里彻底移除**,而且门禁总耗时仍
+在合理区间(295s)。如果以后要恢复单次速度,方向是:校验按需(CI 默认开、本地 `--no-verify`),
+或者把符号/重定位解析做成 C 叶子。
+
+踩到的坑:校验器最初读对象的 `stdlib.ll`(7.3MB)来取期望值 —— 每次链接多花十几秒
+(门禁 1245s)。现在对象构建时顺手写一份 `strings.tsv`(`.strboxN<TAB>hex`),校验器读它,
+门禁回到 295s。

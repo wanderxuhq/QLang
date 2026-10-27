@@ -12,12 +12,16 @@ let fail = (message) -> { assert(false, "link: " + message); 1; };
 let clean = (paths) -> { let i = 0; while i < paths.length { std.process.run(["rm", "-f", paths[i]]); i = i + 1; }; null; };
 
 let irPath = ""; let output = ""; let stdlibObject = ""; let runtimeObject = "";
+let verifyTool = "target/tools/verify"; let stdlibIr = ""; let skipVerify = false;
 let ai = 0;
 while ai < args.length {
   let arg = args[ai];
   if arg == "-o" { ai = ai + 1; output = args[ai]; }
   else if arg == "--stdlib-object" { ai = ai + 1; stdlibObject = args[ai]; }
   else if arg == "--runtime-object" { ai = ai + 1; runtimeObject = args[ai]; }
+  else if arg == "--verify" { ai = ai + 1; verifyTool = args[ai]; }
+  else if arg == "--stdlib-ir" { ai = ai + 1; stdlibIr = args[ai]; }   // 可以是 IR,也可以是对象旁的 strings.tsv
+  else if arg == "--no-verify" { skipVerify = true; }
   else if irPath == "" { irPath = arg; };
   ai = ai + 1;
 };
@@ -70,6 +74,17 @@ let linked = std.process.run(command);
 if linked.status != 0 {
   clean([bitcode, object, staged]);
   fail("ld.lld failed:\n" + linked.stderr);
+};
+
+// 校验:链接产物里的静态字符串必须和 IR 一致。校验不过就不发布(保留旧产物)。
+if !skipVerify {
+  let checkArgs = [verifyTool, staged, irPath];
+  if stdlibIr != "" { checkArgs[checkArgs.length] = stdlibIr; };
+  let checked = std.process.run(checkArgs);
+  if checked.status != 0 {
+    clean([bitcode, object, staged]);
+    fail("verification failed:\n" + checked.stdout + checked.stderr);
+  };
 };
 
 let published = std.process.run(["mv", staged, output]);

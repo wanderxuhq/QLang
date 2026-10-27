@@ -169,6 +169,17 @@ def build_stdlib(compiler, cache_root=CACHE_ROOT):
                 named[parts[0]] = (parts[1], parts[2])
             elif len(parts) == 2:
                 named[parts[0]] = (parts[1], '-1')
+    # 校验器用的紧凑"期望字符串"表:每个 .strbox 一行 name<TAB>hex。
+    import re as _re
+    ir_text = (out / 'stdlib.ll').read_text()
+    buffers = {m.group(1): m.group(2).replace('\\', '')
+               for m in _re.finditer(r'^@\.str(\d+) = private unnamed_addr constant \[\d+ x i8\] c"((?:\\[0-9A-Fa-f]{2})*)"', ir_text, _re.M)}
+    rows = []
+    for m in _re.finditer(r'^@\.strbox(\d+) = .*?@\.str(\d+), i64 (\d+)', ir_text, _re.M):
+        payload = buffers.get(m.group(2))
+        if payload is not None:
+            rows.append(f'.strbox{m.group(1)}\t{payload.lower()}')
+    (out / 'strings.tsv').write_text(''.join(row + '\n' for row in rows))
     (out / 'symbols.tsv').write_text(''.join(f'{k}\t{sym}\t{fa}\n' for k, (sym, fa) in sorted(named.items())))
 
     symbols = {

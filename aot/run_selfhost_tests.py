@@ -23,6 +23,22 @@ def run(command, **kwargs):
     return result
 
 def link(ir, binary):
+    # 快路径:标准库对象 + QLang 链接器(opt/llc/ld.lld + 静态字符串校验)。
+    # 没有对象(单模块 IR,里面已含 runtime)或工具没构建时,回落到 Python 校验链接。
+    tool = ROOT / 'target' / 'tools' / 'link'
+    object_path = os.environ.get('QLANG_STDLIB_OBJECT')
+    if tool.exists() and object_path:
+        command = [str(tool), str(ir), '-o', str(binary), '--stdlib-object', object_path]
+        strings = Path(object_path).with_name('strings.tsv')
+        stdlib_ir = Path(object_path).with_name('stdlib.ll')
+        if strings.exists():
+            command += ['--stdlib-ir', str(strings)]
+        elif stdlib_ir.exists():
+            command += ['--stdlib-ir', str(stdlib_ir)]
+        result = subprocess.run(command, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(f'qlang link failed for {ir}:\n{result.stdout}{result.stderr}')
+        return
     checked_link(ir, binary, timeout=TIMEOUT)
 
 def emit(compiler, source, ir):
@@ -150,6 +166,12 @@ def _use_stdlib_object(compiler):
         interface = object_path.with_name('interface.txt')
         if interface.exists():
             os.environ['QLANG_STDLIB_INTERFACE'] = str(interface)
+        # 顺手构建 QLang 工具链(link/verify);构建失败不影响门禁,回落 Python 链接。
+        try:
+            from toolchain_build import ensure_tools
+            ensure_tools(compiler)
+        except Exception as error:  # pragma: no cover
+            print(f'note: QLang toolchain unavailable ({error}); linking with native_link.py', flush=True)
     except Exception as error:  # pragma: no cover - fall back to the monolithic link
         print(f'note: precompiled stdlib unavailable ({error}); linking monolithically', flush=True)
         os.environ.pop('QLANG_STDLIB_OBJECT', None)

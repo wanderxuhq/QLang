@@ -191,12 +191,48 @@ let relocs = relocations(elf, sections);
 let segments = loadSegments(elf, header);
 
 let buffers = {}; let boxes = {};
+// 紧凑表(对象构建时生成):每行 name<TAB>hex,直接进 buffers,省掉重扫 7MB IR。
+let expectDirect = {};
+let endsWith = (text, suffix) -> {
+  if text.length < suffix.length { return false; }
+  let i = 0; let ok = true;
+  while i < suffix.length {
+    if ascii(text, text.length - suffix.length + i) != ascii(suffix, i) { ok = false; i = suffix.length; } else { i = i + 1; };
+  };
+  ok;
+};
 let ai = 1;
 while ai < args.length {
-  let irBytes = std.Bytes.read(args[ai]);
-  if isError(irBytes) { fail("cannot read " + args[ai]); };
-  scanIr(irBytes, buffers, boxes);
+  if endsWith(args[ai], ".tsv") {
+    let text = std.fs.readFileText(args[ai]);
+    if isError(text) { fail("cannot read " + args[ai]); };
+    let lines = std.String.split(text)("\n");
+    let li = 0;
+    while li < lines.length {
+      let line = lines[li];
+      let tab = findFrom(line, "\t", 0);
+      if tab > 0 {
+        // 整段截取,不要逐字符 toString(那会变成十进制数字串)。
+        expectDirect[std.Bytes.slice(line, 0, tab)] = std.Bytes.slice(line, tab + 1, line.length - tab - 1);
+      };
+      li = li + 1;
+    };
+  } else {
+    let irBytes = std.Bytes.read(args[ai]);
+    if isError(irBytes) { fail("cannot read " + args[ai]); };
+    scanIr(irBytes, buffers, boxes);
+  };
   ai = ai + 1;
+};
+// 紧凑表里的条目直接作为期望值
+let directNames = std.Object.keys(expectDirect);
+let di = 0;
+while di < directNames.length {
+  let name = directNames[di];
+  let id = numberFromText(digitsFrom(name, 7));
+  boxes[name] = { buffer: -1, length: expectDirect[name].length / 2 };
+  buffers["direct:" + std.String.toString(id)] = expectDirect[name];
+  di = di + 1;
 };
 
 let counted = 0;
@@ -207,6 +243,7 @@ while bi < names.length {
   let box = boxes[name];
   let id = numberFromText(digitsFrom(name, 7));   // ".strbox" 是 7 个字符
   let payload = buffers[box.buffer];
+  if isError(payload) || payload == null { payload = buffers["direct:" + std.String.toString(id)]; };
   if isError(payload) || payload == null { fail(name + ": IR string box has no buffer"); };
   let size = payload.length / 2;
   if size != box.length { fail(name + ": IR length does not match its bytes"); };
