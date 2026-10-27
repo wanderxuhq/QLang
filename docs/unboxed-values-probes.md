@@ -1217,3 +1217,24 @@ strings 表、分析接口、目标文件,全部 QLang(shell 只用 `sha256sum`/
 3. `strings.tsv` 的名字多了 `@` 前缀;
 4. `symbols.tsv` 要按**字节序**排序(QLang 的字符串 `<` 顺序和 Python `sorted()` 不同);
 5. 同名符号以**最后**一次为准(Python 是 dict 覆盖)。
+
+
+## 48. 工具链去 Python:验收(2026-10-27)
+
+工具链四个工具全部是 QLang:`target/tools/{stdlib,build,link,verify}`(由
+`aot/{stdlib_build,build,link,verify}.ql` 编译而来;`aot/toolchain_build.py` 只负责**引导**
+编译它们,之后不再参与)。
+
+**没有 Python 参与的验收**(编译器 `/tmp/stage2_w2`,对象由 QLang 版构建器产出):
+
+| 动作 | 命令 | 结果 |
+|---|---|---|
+| 标准库对象构建 | `target/tools/stdlib --compiler … --cache-root …` | 67s,四个产物与 Python 版**逐字节相同** |
+| t20 构建 | `target/tools/build aot/tests/t20_native_bridge.ql -o …` | 输出与 `.expected` 一致 |
+| **重建编译器** | `target/tools/build aot/qlangc.ql -o /tmp/stage2_pure …` | **3m53s**,产物可用(能正常发 IR) |
+| selfhost 门禁(用 QLang 对象) | `run_selfhost_tests.py --jobs 3` | **206s 全绿** |
+| interpreter 门禁(用 QLang 对象) | `run_interpreter_tests.py --jobs 3` | 全绿(该轮机器很吵:1698s) |
+| 自举固定点 | stage2 → tools/link → stage3 | **IR 逐字节相同** |
+
+**仍然用 Python 的地方**(都是"引导/回落",不是工具链路径):`toolchain_build.py` 首次构建
+工具;`native_link.py` 处理单模块 IR 与扩展、以及 `--check-only` 参照校验;测试驱动本身。
