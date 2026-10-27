@@ -144,30 +144,51 @@ let loadModuleProgram = (source, path, depth) -> {
 // Reserve imports in the scope where their expression executes. Function
 // bodies and branch/loop bodies get separate frames; their annotations and
 // conditions still execute in the enclosing scope.
-let reserveModuleBindings = (node) -> {
-  astVisits = astVisits + 1; visitBy.slots = visitBy.slots + 1;
+// 预定义当前作用域的 Let / Import 绑定。语句层只扫这一层(Let/Import 是语句);
+// 但 Let/Export 的**值**里可能有 `let x = import "p";` 这种表达式位置的 import,
+// 所以值仍按剪枝逻辑下探(值是小表达式)。旧版对整个子表达式树深走,自举 57 万次访问。
+let reserveBindingsInValue = (node) -> {
+  if node == null || isError(node) { return null; };
   if AnyArray.check(node) {
-    let i = 0; while i < node.length { reserveModuleBindings(node[i]); i = i + 1; };
-  } else if AnyObject.check(node) {
+    let i = 0; while i < node.length { reserveBindingsInValue(node[i]); i = i + 1; };
+    return null;
+  };
+  if AnyObject.check(node) {
     let kind = node.type;
     if !isError(kind) {
       if kind == "Block" { return null; };
-      if kind == "Function" {
-        let i = 0; while i < node.parameters.length { reserveModuleBindings(node.parameters[i].annotation); i = i + 1; };
-        return null;
-      };
-      if kind == "Let" { defineSlot(node.name); };
+      if kind == "Function" { return null; };
       if kind == "Import" {
-        if !isError(node.pathExpression) { reserveModuleBindings(node.pathExpression); return null; };
+        if !isError(node.pathExpression) { reserveBindingsInValue(node.pathExpression); return null; };
         if isError(curScope.optional) { curScope.optional = {}; };
-        let i = 0; while i < node.module.names.length {
-          let name = node.module.names[i]; defineSlot(name); curScope.optional[name] = true; i = i + 1;
+        if !isError(node.module) && !isError(node.module.names) {
+          let i = 0;
+          while i < node.module.names.length {
+            let name = node.module.names[i]; defineSlot(name); curScope.optional[name] = true; i = i + 1;
+          };
         };
         return null;
       };
     };
     let keys = std.Object.keys(node); let i = 0;
-    while i < keys.length { reserveModuleBindings(node[keys[i]]); i = i + 1; };
+    while i < keys.length { reserveBindingsInValue(node[keys[i]]); i = i + 1; };
+  };
+  null;
+};
+let reserveModuleBindings = (node) -> {
+  astVisits = astVisits + 1; visitBy.slots = visitBy.slots + 1;
+  if !AnyArray.check(node) { reserveBindingsInValue(node); return null; };
+  let i = 0;
+  while i < node.length {
+    let stmt = node[i];
+    astVisits = astVisits + 1; visitBy.slots = visitBy.slots + 1;
+    let kind = stmt.type;
+    if !isError(kind) {
+      if kind == "Let" { defineSlot(stmt.name); reserveBindingsInValue(stmt.value); }
+      else if kind == "Export" { reserveBindingsInValue(stmt.value); }
+      else if kind == "Import" { reserveBindingsInValue(stmt); };
+    };
+    i = i + 1;
   };
   null;
 };
