@@ -1075,3 +1075,30 @@ runtime.ql。做法两步:①先用旧编译器 + **不含 process 的 runtime.q
 **还没做**:①把 runner 切到 `aot/link.ql`;②把 native_link.py 的**静态字符串校验**搬进
 link.ql(现在 QLang 版还没校验);③runtime.o 按发行版预编译(现在首次构建用 clang 编一次);
 ④boot 解释器侧的 `std.process.run` 一致性(否则两引擎会分叉)。
+
+
+## 43. `std.Bytes`(公开能力,2026-10-27)
+
+ELF 校验需要**按字节**读文件,而 `std` 原来只有文本读(`readFileText` 还会做 UTF-8 校验,
+二进制直接报 `invalid UTF-8`),`s[i]` 又是按字符(UTF-8 解码)而不是字节。
+
+新增公开面 `std.Bytes`(Bytes 值就是按字节存放的字符串):
+
+| 函数 | 说明 |
+|---|---|
+| `std.Bytes.read(path)` | 读文件全部字节;失败返回 Error |
+| `std.Bytes.length(b)` | **字节**长度(读字符串头的声明长度,不是 `__s_len` 的 UTF-8 字符数) |
+| `std.Bytes.byteAt(b, i)` | 0..255 |
+| `std.Bytes.u32(b, i)` / `u64(b, i)` | 小端读 |
+| `std.Bytes.hex(b, off, n)` | 小写十六进制串,一次分配(逐字节写缓冲) |
+
+**踩到的两个坑**:
+
+1. QLang 的 `/` 是浮点除法。十六进制取高半字节写成 `v / 16` 得到 7.9375,截断成 '7' 之后
+   低半字节算成 0 ⇒ 0x7f 输出 "70"。必须 `let low = v % 16; let high = (v - low) / 16;`。
+2. 字节长度不能复用 `__s_len`(它按 UTF-8 字符计数,对二进制是错的);字符串头 +16 才是
+   声明长度。一个 711,008 字节的 ELF 用 `__s_len` 会量出 462,045。
+
+验收:读 `/tmp/q_out`(711,008 字节的 ELF)得到 length=711008、byteAt(0)=127、
+hex(0,4)="7f454c46"、u32(0)=1179403647(与 `readelf -h` 的 Magic 一致);
+selfhost 全绿;自举固定点逐字节成立。

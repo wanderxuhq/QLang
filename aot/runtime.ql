@@ -1862,6 +1862,66 @@ let __procRun = (args) -> {
   __fs_remove(outPath); __fs_remove(errPath);
   { status: status, stdout: outText, stderr: errText };
 };
+// 二进制(std.Bytes):Bytes 值就是一个按字节存放的 QLang 字符串(字符串本身是
+// 字节序列,长度按字节算)。不要拿 String 的函数去量它的"字符数"。
+let __bytes_read = (path) -> {
+  let name = __fs_path(path)?;
+  let fd = ql_openat(-100, ql_mem_get_ptr(name, 8), 524288);
+  while fd == -4 { fd = ql_openat(-100, ql_mem_get_ptr(name, 8), 524288); };
+  if fd < 0 { return __err("IOError", "cannot read " + path); };
+  let chunks = []; let finished = false;
+  while !finished {
+    let buf = ql_alloc(65536); let n = ql_read(fd, buf, 65536);
+    while n == -4 { n = ql_read(fd, buf, 65536); };
+    if n < 0 { ql_close(fd); return __err("IOError", "cannot read " + path); };
+    if n == 0 { finished = true; } else { __arr_add(chunks, __str_new(buf, n)); };
+  };
+  ql_close(fd);
+  let data = ""; let ci = 0;
+  while ci < chunks.length { data = data + chunks[ci]; ci = ci + 1; };
+  data;
+};
+let __bytes_check = (b) -> readU64(b, 0) == 2;
+let __bytes_length = (b) -> {
+  if !__bytes_check(b) { return __err("TypeMismatch", "std.Bytes expects Bytes"); };
+  // 声明长度在字符串头 +16;__s_len 是 UTF-8 字符数,对二进制是错的。
+  readU64(b, 16);
+};
+let __bytes_at = (b, index) -> {
+  if !__bytes_check(b) || readU64(index, 0) != 1 { return __err("TypeMismatch", "std.Bytes.byteAt expects Bytes and Number"); };
+  let i = index;
+  if i < 0 || i >= readU64(b, 16) { return __err("IndexOutOfBounds", "Bytes.byteAt"); };
+  ql_mem_get(ql_mem_get_ptr(b, 8), i);
+};
+let __bytes_u32 = (b, index) -> {
+  if !__bytes_check(b) || readU64(index, 0) != 1 { return __err("TypeMismatch", "std.Bytes.u32 expects Bytes and Number"); };
+  let i = index;
+  if i < 0 || i + 4 > readU64(b, 16) { return __err("IndexOutOfBounds", "Bytes.u32"); };
+  let p = ql_mem_get_ptr(b, 8);
+  ql_mem_get(p, i) + ql_mem_get(p, i + 1) * 256 + ql_mem_get(p, i + 2) * 65536 + ql_mem_get(p, i + 3) * 16777216;
+};
+let __bytes_u64 = (b, index) -> {
+  let low = __bytes_u32(b, index)?;
+  let high = __bytes_u32(b, index + 4)?;
+  low + high * 4294967296;
+};
+let __hex_digit = (v) -> if v < 10 { 48 + v; } else { 87 + v; };
+let __bytes_hex = (b, offset, count) -> {
+  if !__bytes_check(b) { return __err("TypeMismatch", "std.Bytes.hex expects Bytes"); };
+  if offset < 0 || count < 0 || offset + count > readU64(b, 16) { return __err("IndexOutOfBounds", "Bytes.hex"); };
+  let src = ql_mem_get_ptr(b, 8);
+  let out = ql_alloc(count * 2 + 1);
+  let i = 0;
+  while i < count {
+    let v = ql_mem_get(src, offset + i);
+    let low = v % 16; let high = (v - low) / 16;
+    ql_mem_store(out, i * 2, __hex_digit(high));
+    ql_mem_store(out, i * 2 + 1, __hex_digit(low));
+    i = i + 1;
+  };
+  __str_new(out, count * 2);
+};
+let stdBytes = { read: __bytes_read, length: __bytes_length, byteAt: __bytes_at, u32: __bytes_u32, u64: __bytes_u64, hex: __bytes_hex };
 let stdFs = { readFileText: __fs_read_text, canonicalPath: __fs_canonical };
 // 公开能力:运行一个外部程序并拿到 status/stdout/stderr。
 let stdProcess = { run: __procRun };
@@ -1921,7 +1981,7 @@ while __asciiBuild < 128 {
   __asciiBuild = __asciiBuild + 1;
 };
 
-let std = { __diagnostics: __source_api, __callNative: __call_native, __panic: __panic, Type: Type, Error: stdError, Object: stdObject, Number: stdNumber, Array: stdArray, String: stdString, Math: stdMath, JSON: stdJSON, fs: stdFs, process: stdProcess };
+let std = { __diagnostics: __source_api, __callNative: __call_native, __panic: __panic, Type: Type, Error: stdError, Object: stdObject, Number: stdNumber, Array: stdArray, String: stdString, Math: stdMath, JSON: stdJSON, fs: stdFs, process: stdProcess, Bytes: stdBytes };
 // Copy namespace tables so augmenting std in one file cannot affect another.
 // Function values and canonical type values retain their identities.
 let __copy_table = (object) -> {
@@ -2128,6 +2188,7 @@ writeU64(__math_max, 32, 6);
 writeU64(__math_min, 32, 6);
 __native_module(stdJSON, "JSON");
 __native_module(stdFs, "fs");
+__native_module(stdBytes, "bytes");
 __native_module(stdProcess, "process");
 __native(__type_make, "Type.make", false);
 __native(__type_of_val, "Type.of", true);
