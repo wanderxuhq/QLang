@@ -1038,3 +1038,40 @@ Let 的**值**),`t26_extrema` 直接抓红 —— 这类"看起来是语句、�
 
 验收:42 个夹具里 41 个输出一致,`t37_extensions` 输出与改动前**逐字相同**(Android dlopen
 环境缺口,非本次引入);selfhost / interpreter 全绿;自举固定点逐字节成立。
+
+
+## 42. `std.process.run`(公开能力)+ QLang 链接器(2026-10-27)
+
+**动机**:构建路径中间夹着 `aot/native_link.py`(Python)。它做三件事:拼 clang 命令、
+跑静态字符串校验、把产物原子地替换上去。要把它换成 QLang,前提是 **QLang 能起子进程**。
+
+### 机制(四道门都过了)
+
+| 位置 | 变更 |
+|---|---|
+| `aot/runtime.c` | `ql_getpid()`、`ql_spawn(argbuf, nargs, out, err)`(fork/execvp/waitpid,stdout、stderr 落临时文件,避免 poll 管道)、`ql_unlink(path)` |
+| `aot/qlangc.ql` | prelude 的 `declare`、叶子白名单、叶子签名表 |
+| `aot/runtime.ql` | `__spawnRaw`(argv 以 NUL 分隔塞进缓冲)、`__procRun`(读回 stdout/stderr、清理临时文件)、`std.process = { run }` |
+| 用户面 | **`std.process.run(args)` → `{status, stdout, stderr}`** |
+
+**自举顺序(踩过)**:新叶子是"编译器自己的知识",所以不能直接用旧编译器编带新叶子的
+runtime.ql。做法两步:①先用旧编译器 + **不含 process 的 runtime.ql** 产出 stage2c(它已认识
+新叶子);②再用 stage2c 编完整 runtime.ql 得到 stage2d。
+
+### QLang 链接器 `aot/link.ql`
+
+`opt -O2`(IR 优化)→ `llc -O2 -filetype=obj`(代码生成)→ `ld.lld`(链接,模板来自
+`aot/toolchain/aarch64-android24.cfg`,由 `clang -###` 抓取的一次性事实)。`clang` 只剩
+"编译 runtime.c"一处,且结果按平台缓存在 `/tmp/.qlang-runtime-aarch64.o`。
+
+| 度量(同一个 IR) | Python 路径 | QLang 路径 |
+|---|---:|---:|
+| 链接耗时(3 次最小) | 1.109s | **0.868s(−22%)** |
+| 产物大小 | 711,080 | 711,008 |
+| 行为 | `argc=2 / one / two` | 相同 |
+
+段差异只有几十字节(`.text` +80、`.symtab` −96),是 lld 参数细节,不影响行为。
+
+**还没做**:①把 runner 切到 `aot/link.ql`;②把 native_link.py 的**静态字符串校验**搬进
+link.ql(现在 QLang 版还没校验);③runtime.o 按发行版预编译(现在首次构建用 clang 编一次);
+④boot 解释器侧的 `std.process.run` 一致性(否则两引擎会分叉)。

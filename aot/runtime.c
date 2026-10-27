@@ -5,6 +5,10 @@
 #include <stdint.h>
 #include <string.h>
 #include <dlfcn.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/wait.h>
 
 static inline long syscall1(long n, long a) {
   register long x0 __asm__("x0") = a;
@@ -255,4 +259,45 @@ void *ql_extension_open(const char *path, const char *abi, uint64_t *status) {
   if (!p) { dlclose(handle); *status = 1; return NULL; }
   p->handle = handle; p->next = extension_handles; extension_handles = p;
   return entry;
+}
+
+/* ---- 进程:语言表达不了的 exec 边界 -------------------------------------------
+ * argv 用 NUL 分隔的缓冲传进来,避免 QLang 侧拼 shell 命令;stdout/stderr 重定向到
+ * 两个临时文件(由调用方给路径),这样父进程不需要 poll 管道,也不可能死锁。
+ * 返回值:子进程退出码(正常退出)或 128+信号;负数表示机制本身失败。 */
+long ql_getpid(void) { return (long)getpid(); }
+long ql_unlink(const char *path) { return unlink(path); }
+long ql_spawn(const char *argbuf, long nargs, const char *out_path, const char *err_path) {
+  if (!argbuf || nargs <= 0 || nargs >= 64) return -1000;
+  char *argv[64];
+  const char *p = argbuf;
+  for (long i = 0; i < nargs; i++) {
+    if (!*p) return -1001;
+    argv[i] = (char *)p;
+    p += strlen(p) + 1;
+  }
+  argv[nargs] = NULL;
+  int out = -1, err = -1;
+  if (out_path && *out_path) {
+    out = open(out_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (out < 0) return -1002;
+  }
+  if (err_path && *err_path) {
+    err = open(err_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (err < 0) { if (out >= 0) close(out); return -1003; }
+  }
+  pid_t pid = fork();
+  if (pid < 0) { if (out >= 0) close(out); if (err >= 0) close(err); return -1004; }
+  if (pid == 0) {
+    if (out >= 0) { dup2(out, 1); close(out); }
+    if (err >= 0) { dup2(err, 2); close(err); }
+    execvp(argv[0], argv);
+    _exit(127);
+  }
+  int st = 0;
+  while (waitpid(pid, &st, 0) < 0) {}
+  if (out >= 0) close(out);
+  if (err >= 0) close(err);
+  if (WIFEXITED(st)) return WEXITSTATUS(st);
+  return 128 + (st & 0x7f);
 }

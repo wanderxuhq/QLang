@@ -1828,7 +1828,43 @@ let __fs_canonical = (path) -> {
   if !__valid_utf8(result) { return __err("IOError", "invalid UTF-8 in resolved path"); };
   result;
 };
+// 进程机制(std.process):argv 用 NUL 分隔的缓冲送进 C 叶子;stdout/stderr 落到
+// 两个临时文件,C 侧不需要 poll 管道。公开面是 std.process.run(args)。
+let __fs_remove = (path) -> { ql_unlink(ql_mem_get_ptr(path, 8)); null; };
+let __procSeq = 0;
+let __spawnRaw = (args, outPath, errPath) -> {
+  let n = args.length;
+  let total = 0; let i = 0;
+  while i < n { total = total + __s_len(args[i]) + 1; i = i + 1; };
+  let buf = ql_alloc(total);
+  let off = 0; i = 0;
+  while i < n {
+    let str = args[i]; let src = ql_mem_get_ptr(str, 8); let len = __s_len(str); let j = 0;
+    while j < len { ql_mem_store(buf, off + j, ql_mem_get(src, j)); j = j + 1; };
+    ql_mem_store(buf, off + len, 0);
+    off = off + len + 1; i = i + 1;
+  };
+  ql_spawn(buf, n, ql_mem_get_ptr(outPath, 8), ql_mem_get_ptr(errPath, 8));
+};
+let __procTemp = () -> {
+  __procSeq = __procSeq + 1;
+  "/tmp/.qlang-proc-" + __itoa(ql_getpid()) + "-" + __itoa(__procSeq);
+};
+let __procRun = (args) -> {
+  if readU64(args, 0) != 5 { return __err("TypeMismatch", "std.process.run expects an array of arguments"); };
+  let outPath = __procTemp(); let errPath = __procTemp();
+  let status = __spawnRaw(args, outPath, errPath);
+  let outText = ""; let errText = "";
+  let outRead = __fs_read_text(outPath);
+  if !isError(outRead) && outRead != null { outText = outRead; };
+  let errRead = __fs_read_text(errPath);
+  if !isError(errRead) && errRead != null { errText = errRead; };
+  __fs_remove(outPath); __fs_remove(errPath);
+  { status: status, stdout: outText, stderr: errText };
+};
 let stdFs = { readFileText: __fs_read_text, canonicalPath: __fs_canonical };
+// 公开能力:运行一个外部程序并拿到 status/stdout/stderr。
+let stdProcess = { run: __procRun };
 
 // Private embedding capability used by the QLang AST evaluator. Source points
 // are ordinary language data; LLVM does not recognize interpreter/library names.
@@ -1885,7 +1921,7 @@ while __asciiBuild < 128 {
   __asciiBuild = __asciiBuild + 1;
 };
 
-let std = { __diagnostics: __source_api, __callNative: __call_native, __panic: __panic, Type: Type, Error: stdError, Object: stdObject, Number: stdNumber, Array: stdArray, String: stdString, Math: stdMath, JSON: stdJSON, fs: stdFs };
+let std = { __diagnostics: __source_api, __callNative: __call_native, __panic: __panic, Type: Type, Error: stdError, Object: stdObject, Number: stdNumber, Array: stdArray, String: stdString, Math: stdMath, JSON: stdJSON, fs: stdFs, process: stdProcess };
 // Copy namespace tables so augmenting std in one file cannot affect another.
 // Function values and canonical type values retain their identities.
 let __copy_table = (object) -> {
@@ -2092,6 +2128,7 @@ writeU64(__math_max, 32, 6);
 writeU64(__math_min, 32, 6);
 __native_module(stdJSON, "JSON");
 __native_module(stdFs, "fs");
+__native_module(stdProcess, "process");
 __native(__type_make, "Type.make", false);
 __native(__type_of_val, "Type.of", true);
 __native(__error_raise, "Error.raise", true);
