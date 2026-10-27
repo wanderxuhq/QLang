@@ -564,6 +564,7 @@ let typeScanBodyFacts = (node, pids, facts) -> {
   // 语句列表仍会走完整棵树)。
   if !facts.clean { return null; };
   if node == null || isError(node) { return null; };
+  typeVisitCount = typeVisitCount + 1;
   if AnyArray.check(node) {
     let i = 0; while i < node.length { typeScanBodyFacts(node[i], pids, facts); i = i + 1; };
     return null;
@@ -638,6 +639,9 @@ let typeFunctionReturnsNumberSafe = (node) -> {
   facts.clean && facts.safe;
 };
 let typeSafeReturnCount = 0;
+// 确定性指标:分析阶段访问了多少个 AST 节点(不受机器负载影响)。
+let typeVisitCount = 0;
+let typeVisitReport = () -> typeVisitCount;
 let typeSafeReturnReport = () -> typeSafeReturnCount;
 
 // ---- 引用事实与 safe-call 不动点 ---------------------------------------------
@@ -645,6 +649,7 @@ let typeRefFacts = {};
 // 只对用户程序启用:库/运行期/模块没有 inline/raw 候选表。
 let typeCallSafetyEnabled = false;
 let typeSetCallSafety = (v) -> { typeCallSafetyEnabled = v; null; };
+let typeResetVisits = () -> { typeVisitCount = 0; null; };
 let typeScanRefs = (node, facts) -> {
   if node == null || isError(node) { return null; };
   if AnyArray.check(node) {
@@ -1410,6 +1415,8 @@ export typeErrors;
 export typeUnboxList;
 export typeRepReport;
 export typeSetCallSafety;
+export typeVisitReport;
+export typeResetVisits;
 export typeSafeReturnReport;
 // 标准库分析接口:对象化模式下由缓存的 interface 文本装载(qlangc 侧读写同一份表)。
 export stdModuleType;

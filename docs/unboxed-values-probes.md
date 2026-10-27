@@ -954,3 +954,39 @@ known-safe 证明,返回值拿到 `String` 静态类型也消不掉调用点的 
 
 注意:`std.String.toString(x)` 与 `` `${x}` `` 语义完全等价(后者省掉成员分发),但**不要**用
 "把源码里的调用改写成插值"来规避 —— 那是掩盖问题;根因是成员调用没有静态分派。
+
+
+## 38. 确定性指标:walker 访问的 AST 节点数(2026-10-27)
+
+本机墙钟与用户态 CPU 都能差 ±30%(§35),<5% 的改动量不出来。所以在 IR 头里加了一个
+**确定性**计数器:
+
+```
+; astvisits: walkers=1418787
+```
+
+含义:编译这一份源码时,q langc 的五个通用 walker(`scanModuleFacts` / `reserveModuleBindings` /
+`collectAssignedNames` / `functionBodyIsLeaf` / `collectBodyLetNames`)一共访问了多少个 AST 节点。
+同一输入重复跑,数字完全相同;改动遍历后应看到它下降。
+
+- 自举(编译 qlangc.ql,含 15 个 import 模块):**1,418,787**
+- 小夹具(t20):6,936 量级
+
+分析侧(types.ql)也加了同样的计数器,但它在多模块程序上统计不稳(同一程序时而为 0),
+所以**没有**打进报告行,只在 `typeVisitReport()` 里留着;要用的话先查清为什么。
+
+## 39. 已排除:把 bundle import 挪进函数(2026-10-27)
+
+原本设想:`library.ql` 静态 import 了 `stdlib/bundle.ql`(97KB),而 interface 模式下
+`parseStandardLibrary()` 不被调用,把 import 挪进函数体就能省掉那 97KB 的解析。
+
+**不成立。** 实测(`/tmp/lazy3.ql`):
+
+```qlang
+let f = () -> { import /tmp/lazymod/m.ql; 1; };
+println(0);          // f 从未调用
+```
+
+产物里仍然有 `; ql-symbol helper ql_fn279` —— import 是**编译期静态解析**的,
+"未调用不初始化"只影响运行期初始化。要真省掉,必须让 `stdlib/bundle.ql` 从编译器的 import
+图里消失(例如生成纯文本 `stdlib/bundle.txt` + 独立 origins 表,需要时再读)。

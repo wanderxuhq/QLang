@@ -89,6 +89,7 @@ let reserveModuleGlobals = () -> {
 // resolution still happens after the scan — it is a different concern (it may
 // recurse into other modules), but it no longer needs its own traversal.
 let scanModuleFacts = (node, facts) -> {
+  astVisits = astVisits + 1;
   if AnyArray.check(node) {
     let i = 0; while i < node.length { scanModuleFacts(node[i], facts); i = i + 1; };
   } else if AnyObject.check(node) {
@@ -144,6 +145,7 @@ let loadModuleProgram = (source, path, depth) -> {
 // bodies and branch/loop bodies get separate frames; their annotations and
 // conditions still execute in the enclosing scope.
 let reserveModuleBindings = (node) -> {
+  astVisits = astVisits + 1;
   if AnyArray.check(node) {
     let i = 0; while i < node.length { reserveModuleBindings(node[i]); i = i + 1; };
   } else if AnyObject.check(node) {
@@ -853,6 +855,9 @@ let directCalls = 0;
 // Conservative name-level assignment scan: a name assigned anywhere in the
 // user program is never direct-called (shadowing makes this over-approximate,
 // never unsound).
+// 确定性指标:遍历类 walker 一共看了多少个 AST 节点。改了遍历之后用它验收,
+// 不靠墙钟(本机噪声 ±30%)。
+let astVisits = 0;
 let assignedUserNames = {};
 let letSeenNames = {};
 let redeclaredUserNames = {};
@@ -862,6 +867,7 @@ let exportedUserNames = {};
 // used to be two separate full-AST walks (collectAssignedNames +
 // collectImportedNames); they are independent facts about the same tree.
 let collectAssignedNames = (node, names) -> {
+  astVisits = astVisits + 1;
   if AnyArray.check(node) {
     let i = 0; while i < node.length { collectAssignedNames(node[i], names); i = i + 1; };
   } else if AnyObject.check(node) {
@@ -897,6 +903,7 @@ let importedNames = {};
 // A function is a leaf when its own body contains no call/import; nested
 // function definitions are values, not calls, and are skipped.
 let functionBodyIsLeaf = (node) -> {
+  astVisits = astVisits + 1;
   if AnyArray.check(node) {
     let i = 0;
     while i < node.length {
@@ -922,6 +929,7 @@ let functionBodyIsLeaf = (node) -> {
 //    运行时通用调用会把 env 指针当函数值)。
 // 函数体里的递归/前向引用在分析期可能没有 bindId,所以按名字判定(保守)。
 let collectBodyLetNames = (node, names) -> {
+  astVisits = astVisits + 1;
   if AnyArray.check(node) {
     let i = 0; while i < node.length { collectBodyLetNames(node[i], names); i = i + 1; };
   } else if AnyObject.check(node) {
@@ -3009,6 +3017,7 @@ let main = (args) -> {
   // 名字事实(被赋值/重声明/导出/import)是直接调用、raw 与折叠共用的前提,必须
   // 无条件先收齐 —— 之前把它放在 `if foldEnabled` 里,导致关掉折叠时直接调用判据
   // 反而少了一层(t62 因此多了 32 条指令)。
+  // 计数器在进程启动时就是 0;不能在这里重置 —— 那会把已经跑完的分析阶段清零。
   collectAssignedNames(userProgram.statements, assignedUserNames);
   if foldEnabled {
     // 折叠还需要 import 名字:导入会覆盖同名槽,不能当成不可变本地函数。
@@ -3252,6 +3261,7 @@ let main = (args) -> {
   // 命中数:分析期证明不可能出错、因而整块省掉定位测试的节点数(主函数体发完之后才知道)。
   out[out.length] = "; located-error elided: " + std.String.toString(locErrorElided);
   out[out.length] = "; index-fast: " + std.String.toString(arrayIndexFastSites);
+  out[out.length] = "; astvisits: walkers=" + std.String.toString(astVisits);
   out[out.length] = "; constfold:" + foldReport;
   out[out.length] = "; directreject: nohit=" + std.String.toString(directReject.nohit) + " notable=" + std.String.toString(directReject.notable) + " noinfo=" + std.String.toString(directReject.noinfo) + " assigned=" + std.String.toString(directReject.assigned) + " arity=" + std.String.toString(directReject.arity) + " args=" + std.String.toString(directReject.args);
   // ②a 补充:发射序折扣(同样要等主函数体发完 —— 函数体是在 main 发射过程中才发现并发出的)。
