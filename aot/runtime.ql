@@ -1437,6 +1437,12 @@ let __s_at = (s, idx) -> {
   let len = readU64(s, 16);
   let width = __utf8_width(ql_mem_get(buf, pos));
   if pos + width > len { width = len - pos; };
+  // 单字节 ASCII ⇒ 共享盒(不做分配)。这里直接用叶子读表:走 `__get_index` 的话,
+  // 下标规整(有限/整数/回绕)比它省下的分配还贵。
+  if width == 1 {
+    let byte = ql_mem_get(buf, pos);
+    if byte < 128 { return ql_value_get(ql_mem_get_ptr(__asciiChars, 8), byte * 16); };
+  };
   let out = ql_alloc(width);
   let i = 0;
   while i < width { ql_mem_store(out, i, ql_mem_get(buf, pos + i)); i = i + 1; };
@@ -1867,6 +1873,18 @@ let __call_native = (fn, arguments) -> {
   __error_source = previous;
   result;
 };
+// ASCII 单字符盒:s[i]、split("") 这类操作每取一个字符就新建一个 STRING 盒,而 128 个
+// ASCII 字符的盒子是常量。预建一份共享盒(模块级数组 ⇒ 从运行期作用域可达 ⇒ GC 根),
+// `__s_at` 命中时直接返回共享盒,不再分配。
+let __asciiChars = [];
+let __asciiBuild = 0;
+while __asciiBuild < 128 {
+  let asciiBuf = ql_alloc(1);
+  ql_mem_store(asciiBuf, 0, __asciiBuild);
+  __asciiChars[__asciiBuild] = __str_new(asciiBuf, 1);
+  __asciiBuild = __asciiBuild + 1;
+};
+
 let std = { __diagnostics: __source_api, __callNative: __call_native, __panic: __panic, Type: Type, Error: stdError, Object: stdObject, Number: stdNumber, Array: stdArray, String: stdString, Math: stdMath, JSON: stdJSON, fs: stdFs };
 // Copy namespace tables so augmenting std in one file cannot affect another.
 // Function values and canonical type values retain their identities.
