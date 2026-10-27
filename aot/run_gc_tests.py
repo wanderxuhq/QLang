@@ -21,8 +21,11 @@ def main():
     with tempfile.TemporaryDirectory(prefix='qlang-gc-') as tmp:
         ir = Path(tmp) / 'stress.ll'
         with ir.open('wb') as output:
-            command = ([str(options.compiler.resolve()), '--emit-llvm', str(source),
-                        str(ROOT / 'aot/runtime.ql')] if options.compiler else
+            symbols = os.environ.get('QLANG_STDLIB_SYMBOLS')
+            interface = os.environ.get('QLANG_STDLIB_INTERFACE')
+            command = ([str(options.compiler.resolve()),
+                        '--emit-llvm-split' if symbols else '--emit-llvm', str(source),
+                        str(ROOT / 'aot/runtime.ql')] + ([str(symbols), str(interface or '-')] if symbols else []) if options.compiler else
                        [str(QLANG), 'aot/qlangc.ql', source.read_text(), str(source),
                         (ROOT / 'aot/runtime.ql').read_text()])
             subprocess.run(command, cwd=ROOT, stdout=output, check=True, timeout=TIMEOUT)

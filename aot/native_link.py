@@ -154,7 +154,7 @@ def validate(ir, binary, extra_ir=None):
     return len(expected)
 
 
-def qlang_link(ir, binary, stdlib_object, opt=2):
+def qlang_link(ir, binary, stdlib_object, opt=2, shared=False):
     """Delegate to the QLang linker (target/tools/link) when it exists.
 
     The Python linker stays as the bootstrap path and as the reference validator
@@ -162,16 +162,23 @@ def qlang_link(ir, binary, stdlib_object, opt=2):
     is unavailable so the caller falls back.
     """
     tool = ROOT / 'target' / 'tools' / 'link'
-    if not tool.exists() or opt != 2:
+    if not tool.exists():
+        return None
+    # 目前只接管 -O2:低优化级别下 lld 会丢掉未被引用的字符串符号,
+    # QLang 校验器因此报 missing symbol(见 probes §49)。
+    if opt != 2:
+        return None
+    if shared:
         return None
     # 只接管"已经拆好"的 IR(`--emit-llvm-split`)。单模块 IR 里自带 runtime,
     # 再叠 runtime.o 会 duplicate symbol(踩过:gc 套件)。这种留给 Python 侧的 split_file。
     try:
-        if '; split-stdlib' not in Path(ir).read_text(errors='ignore')[:200000]:
+        if not shared and '; split-stdlib' not in Path(ir).read_text(errors='ignore')[:200000]:
             return None
     except OSError:
         return None
-    command = [str(tool), str(ir), '-o', str(binary), '--stdlib-object', str(stdlib_object)]
+    command = [str(tool), str(ir), '-o', str(binary), '--opt', str(opt),
+               '--stdlib-object', str(stdlib_object)]
     strings = Path(stdlib_object).with_name('strings.tsv')
     stdlib_ir = Path(stdlib_object).with_name('stdlib.ll')
     if strings.exists():
@@ -189,7 +196,7 @@ def link(ir, binary, opt=2, timeout=600, clang='clang', shared=False, stdlib_obj
         stdlib_object = os.environ.get('QLANG_STDLIB_OBJECT')
     if stdlib_object is not None and not shared:
         # Fast path: hand the build to the QLang linker (opt/llc/ld.lld + verify).
-        delegated = qlang_link(ir, binary, stdlib_object, opt=opt)
+        delegated = qlang_link(ir, binary, stdlib_object, opt=opt, shared=shared)
         if delegated is not None:
             return delegated
     ir, binary = Path(ir).resolve(), Path(binary).absolute()

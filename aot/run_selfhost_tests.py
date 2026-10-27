@@ -166,10 +166,16 @@ def _use_stdlib_object(compiler):
         interface = object_path.with_name('interface.txt')
         if interface.exists():
             os.environ['QLANG_STDLIB_INTERFACE'] = str(interface)
-        # 顺手构建 QLang 工具链(link/verify);构建失败不影响门禁,回落 Python 链接。
+        # 顺手构建 QLang 工具链(link/verify/build/stdlib)。引导用 aot/bootstrap.sh
+        # (shell + clang,不用 Python);已有 tools/link 时可以 --self 自举重建。
+        # 构建失败不影响门禁,回落 native_link.py。
         try:
-            from toolchain_build import ensure_tools
-            ensure_tools(compiler)
+            script = ROOT / 'aot' / 'bootstrap.sh'
+            mode = '--self' if (ROOT / 'target' / 'tools' / 'link').exists() else '--compiler'
+            command = [str(script), mode, str(compiler)] if mode == '--compiler' else [str(script), '--self', '--compiler', str(compiler)]
+            result = subprocess.run(command, capture_output=True, text=True)
+            if result.returncode != 0:
+                raise RuntimeError((result.stdout + result.stderr).strip()[-400:])
         except Exception as error:  # pragma: no cover
             print(f'note: QLang toolchain unavailable ({error}); linking with native_link.py', flush=True)
     except Exception as error:  # pragma: no cover - fall back to the monolithic link

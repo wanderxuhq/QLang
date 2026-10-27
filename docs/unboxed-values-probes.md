@@ -1238,3 +1238,24 @@ strings 表、分析接口、目标文件,全部 QLang(shell 只用 `sha256sum`/
 
 **仍然用 Python 的地方**(都是"引导/回落",不是工具链路径):`toolchain_build.py` 首次构建
 工具;`native_link.py` 处理单模块 IR 与扩展、以及 `--check-only` 参照校验;测试驱动本身。
+
+
+## 49. 引导不再需要 Python;单模块回落基本消失(2026-10-28)
+
+**引导**:`aot/bootstrap.sh` 用 `clang` 直接链接工具的 IR(和原先 Python 版做的事一样),
+不经过 Python。工具存在之后 `aot/bootstrap.sh --self` 用 **`target/tools/link`** 重建四个工具
+(verify/link/build/stdlib),即工具链自举。`run_selfhost_tests.py` 现在调这个脚本,不再
+调用 Python 的 `toolchain_build.py`(已删除)。
+
+**单模块回落**:`run_gc_tests.py` 原来自己用 `--emit-llvm`(单模块 IR),所以只能走 Python 的
+`split_file`。现在有标准库对象时它发 `--emit-llvm-split`,于是 -O2 那条走 QLang 链接器
+(9s,-O0 仍走 Python,因为委托目前只接管 -O2)。
+
+**踩到的坑(值得记)**:`link.ql` 选模板时取的是 cfg 里**最后一条**非注释行。我给扩展加的
+"共享库模板"是第二条,于是所有链接都用了 10 个 token 的共享库模板 —— 产物里对象根本没链进去
+(`nm | grep -c strbox` 从 838 掉到 26),校验器报 `missing ELF symbol`。删掉第二条模板后恢复。
+教训:配置文件的"多条模板"必须有显式选择规则,不能依赖"最后一条"。
+
+**仍走 Python 的两处**:扩展(`--shared`,QLang 链接器尚未支持;本机本来也因 Android
+dlopen 限制不可裁决)、以及非 -O2 的委托(可后续按需扩展)。`--check-only` 参照实现保留在
+`native_link.py`(测试侧对照用)。
