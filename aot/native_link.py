@@ -154,9 +154,44 @@ def validate(ir, binary, extra_ir=None):
     return len(expected)
 
 
+def qlang_link(ir, binary, stdlib_object, opt=2):
+    """Delegate to the QLang linker (target/tools/link) when it exists.
+
+    The Python linker stays as the bootstrap path and as the reference validator
+    (`--check-only`); the build path itself is QLang. Returns None when the tool
+    is unavailable so the caller falls back.
+    """
+    tool = ROOT / 'target' / 'tools' / 'link'
+    if not tool.exists() or opt != 2:
+        return None
+    # 只接管"已经拆好"的 IR(`--emit-llvm-split`)。单模块 IR 里自带 runtime,
+    # 再叠 runtime.o 会 duplicate symbol(踩过:gc 套件)。这种留给 Python 侧的 split_file。
+    try:
+        if '; split-stdlib' not in Path(ir).read_text(errors='ignore')[:200000]:
+            return None
+    except OSError:
+        return None
+    command = [str(tool), str(ir), '-o', str(binary), '--stdlib-object', str(stdlib_object)]
+    strings = Path(stdlib_object).with_name('strings.tsv')
+    stdlib_ir = Path(stdlib_object).with_name('stdlib.ll')
+    if strings.exists():
+        command += ['--stdlib-ir', str(strings)]
+    elif stdlib_ir.exists():
+        command += ['--stdlib-ir', str(stdlib_ir)]
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise LinkError(f'QLang link failed:\n{result.stdout}{result.stderr}')
+    return 0
+
+
 def link(ir, binary, opt=2, timeout=600, clang='clang', shared=False, stdlib_object=None):
     if stdlib_object is None:
         stdlib_object = os.environ.get('QLANG_STDLIB_OBJECT')
+    if stdlib_object is not None and not shared:
+        # Fast path: hand the build to the QLang linker (opt/llc/ld.lld + verify).
+        delegated = qlang_link(ir, binary, stdlib_object, opt=opt)
+        if delegated is not None:
+            return delegated
     ir, binary = Path(ir).resolve(), Path(binary).absolute()
     # Parse before invoking Clang; never publish partial or unrelated output.
     ir_strings(ir)

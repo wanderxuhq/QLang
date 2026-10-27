@@ -1156,3 +1156,16 @@ selfhost 全绿;自举固定点逐字节成立。
 踩到的坑:校验器最初读对象的 `stdlib.ll`(7.3MB)来取期望值 —— 每次链接多花十几秒
 (门禁 1245s)。现在对象构建时顺手写一份 `strings.tsv`(`.strboxN<TAB>hex`),校验器读它,
 门禁回到 295s。
+
+### 45.1 让所有 runner 都走 QLang 链接器(2026-10-27)
+
+`native_link.link()` 现在**委托**给 `target/tools/link`:只要标准库对象存在、`opt==2`、
+并且 IR 带 `; split-stdlib` 标记,就用 QLang 链路;否则回落到 Python(单模块 IR 需要
+`split_file`,那是 Python 侧的职责)。
+
+踩到的坑:第一版没有检查 split 标记,gc 套件用的是**单模块 IR**(自带 runtime),再叠
+`runtime.o` 就 `duplicate symbol: __panic_exit / __cold_located_error / .strbox7`。
+加上标记检查后 gc/array/object 全绿(各 ~20s)。
+
+自此:构建路径 = `emit → target/tools/link(QLang → opt/llc/ld.lld)→ target/tools/verify(QLang)`;
+Python 只剩 ①工具引导 ②单模块/扩展等回落路径 ③`--check-only` 参照实现。
