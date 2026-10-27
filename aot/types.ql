@@ -1407,6 +1407,10 @@ export typeUnboxList;
 export typeRepReport;
 export typeSetCallSafety;
 export typeSafeReturnReport;
+// 标准库分析接口:对象化模式下由缓存的 interface 文本装载(qlangc 侧读写同一份表)。
+export stdModuleType;
+export stdModuleValues;
+export stdModuleCalls;
 export typeRepPrograms;
 export typeBindsUnknown;
 export typeParamsUnknown;

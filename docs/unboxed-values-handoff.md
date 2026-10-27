@@ -121,6 +121,16 @@ HEAD 基线(`/tmp/sweep3/`):**17 绿**,含 `interpreter`(731s)、`selfhost`(1573
 `difftest` 在本机**不可裁决**(它的 boot 侧走 `cargo run`,120 秒超时;`cargo build` 已热只需 0.12s)
 ⇒ 替代:用 native 编译的 boot 做同样对照。
 
+### 3.8 分析接口缓存(2026-10-27)
+
+`--emit-stdlib-interface` 把用户分析真正要读的那点东西导出(槽顺序、运行期函数/赋值名字、
+顶层「名字+元数」、`std.<模块>` 三张索引),和 `stdlib.o` 一起缓存;`--emit-llvm-split`
+的第 5 个参数装载它,**完全跳过** runtime/stdlib 的 parse+分析。第 5 个参数传 `-` 是从源码
+分析的对照路径。
+
+单夹具前端 9.7s → **0.45s**,整条构建 ~22s → **~1.7s**;selfhost 全套 **2.3 min**。
+两条路径的代码归一化后逐行相同;门禁全绿;固定点成立。门禁的 `emit()` 已自动使用它。
+
 ### 3.7 前端也跳过库(2026-10-27)
 
 编译器加了 `--emit-llvm-split <源码> <runtime> <symbols.tsv>`:只发用户部分,库函数按

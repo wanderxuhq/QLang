@@ -31,7 +31,7 @@ import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 CACHE_ROOT = ROOT / 'target' / 'stdlib'
-SPLIT_VERSION = '5'
+SPLIT_VERSION = '6'
 
 DEFINE = re.compile(r'^define\s')
 GLOBAL = re.compile(r'^@([A-Za-z0-9_$.]+)\s*=\s')
@@ -178,6 +178,13 @@ def build_stdlib(compiler, cache_root=CACHE_ROOT):
 
     subprocess.run(['clang', '-O2', '-c', str(stdlib_ll), '-o', str(object_path)],
                    cwd=ROOT, check=True)
+
+    # Analysis interface: the tables a user program's analysis reads from the
+    # runtime/stdlib analysis. Cached next to the object so `--emit-llvm-split`
+    # can skip re-parsing the standard library entirely.
+    (out / 'interface.txt').write_bytes(subprocess.run(
+        [str(compiler), '--emit-stdlib-interface', str(ROOT / 'aot' / 'runtime.ql')],
+        cwd=ROOT, check=True, capture_output=True).stdout)
     return object_path, symbols
 
 

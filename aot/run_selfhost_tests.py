@@ -29,9 +29,12 @@ def emit(compiler, source, ir):
     # When a precompiled stdlib object is available the compiler emits the user
     # module only (`--emit-llvm-split`); the object supplies everything else.
     symbols = os.environ.get('QLANG_STDLIB_SYMBOLS')
+    interface = os.environ.get('QLANG_STDLIB_INTERFACE')
     args = [compiler, '--emit-llvm-split' if symbols else '--emit-llvm', source, RUNTIME]
     if symbols:
         args.append(symbols)
+        # `-` = analyse the standard library from source (A/B control path).
+        args.append(interface if interface else '-')
     with ir.open('wb') as output:
         run(args, stdout=output)
 
@@ -144,10 +147,14 @@ def _use_stdlib_object(compiler):
         object_path, _symbols = build_stdlib(compiler)
         os.environ['QLANG_STDLIB_OBJECT'] = str(object_path)
         os.environ['QLANG_STDLIB_SYMBOLS'] = str(object_path.with_name('symbols.tsv'))
+        interface = object_path.with_name('interface.txt')
+        if interface.exists():
+            os.environ['QLANG_STDLIB_INTERFACE'] = str(interface)
     except Exception as error:  # pragma: no cover - fall back to the monolithic link
         print(f'note: precompiled stdlib unavailable ({error}); linking monolithically', flush=True)
         os.environ.pop('QLANG_STDLIB_OBJECT', None)
         os.environ.pop('QLANG_STDLIB_SYMBOLS', None)
+        os.environ.pop('QLANG_STDLIB_INTERFACE', None)
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)

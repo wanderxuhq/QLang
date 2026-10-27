@@ -15,6 +15,8 @@ import ../bootstrapped/library.ql;
 // 标准库对象化模式:stdio 模块只发用户部分,库函数按外部符号调用。
 // `stdlibSymbolMap` 来自对象构建时落盘的 name<TAB>ql_fnN 表。
 let splitStdlibMode = false;
+// 分析接口是否可用:传给 `-` 表示强制走「从源码分析」的对照路径。
+let stdlibFromCache = false;
 let stdlibSymbolMap = {};
 let markModuleBindingsActive = (stmts) -> {
   let i = 0;
@@ -2751,9 +2753,97 @@ let emitStdlibInit = (runtimeStmts, libraryStmts) -> {
   curReturnType = savedRetType; curReturnTy = savedRetTy; curReturnText = savedRetText; curReturnActive = savedRetActive;
   null;
 };
+// 标准库分析接口:用户程序的分析只读三张 std 索引 + 槽顺序 + 两个运行期名字集合。
+// 把它们落成文本,对象化模式就不必每次重新 lex/parse/分析 runtime 与 stdlib。
+let writeStdlibInterface = (runtimeProgram, libraryProgram) -> {
+  reserveModuleBindings(runtimeProgram.statements);
+  reserveModuleBindings(libraryProgram.statements);
+  let names = std.Object.keys(curScope.slots);
+  let ordered = []; let i = 0;
+  while i < names.length { ordered[ordered.length] = ""; i = i + 1; };
+  i = 0;
+  while i < names.length { ordered[curScope.slots[names[i]]] = names[i]; i = i + 1; };
+  i = 0;
+  while i < ordered.length { println("SLOT " + ordered[i]); i = i + 1; };
+  i = 0;
+  while i < libraryProgram.statements.length {
+    let stmt = libraryProgram.statements[i];
+    if !isError(stmt.type) && stmt.type == "Let" && stmt.value != null
+       && !isError(stmt.value.type) && stmt.value.type == "Function" {
+      println("DFN " + stmt.name + " " + std.String.toString(stmt.value.parameters.length));
+    };
+    i = i + 1;
+  };
+  i = 0;
+  while i < runtimeProgram.statements.length {
+    let stmt = runtimeProgram.statements[i];
+    if !isError(stmt.type) && stmt.type == "Let" && stmt.value != null
+       && !isError(stmt.value.type) && stmt.value.type == "Function" {
+      println("RFN " + stmt.name);
+      println("DFN " + stmt.name + " " + std.String.toString(stmt.value.parameters.length));
+    };
+    if !isError(stmt.type) && stmt.type == "Assign" && !isError(stmt.target.type)
+       && stmt.target.type == "Identifier" { println("ASG " + stmt.target.name); };
+    i = i + 1;
+  };
+  let modules = std.Object.keys(stdModuleType);
+  let mi = 0;
+  while mi < modules.length {
+    let module = modules[mi];
+    println("MT " + module + " " + stdModuleType[module]);
+    let values = stdModuleValues[module];
+    if !isError(values) && values != null {
+      let keys = std.Object.keys(values); let ki = 0;
+      while ki < keys.length { println("MV " + module + " " + keys[ki] + " " + values[keys[ki]]); ki = ki + 1; };
+    };
+    let calls = stdModuleCalls[module];
+    if !isError(calls) && calls != null {
+      let keys = std.Object.keys(calls); let ki = 0;
+      while ki < keys.length { println("MC " + module + " " + keys[ki] + " " + calls[keys[ki]]); ki = ki + 1; };
+    };
+    mi = mi + 1;
+  };
+  null;
+};
+// 对象化模式的消费端:按接口重建槽表/名字集合/std 索引。
+let loadStdlibInterface = (text) -> {
+  let lines = std.String.split(text)("\n");
+  let i = 0;
+  while i < lines.length {
+    let line = lines[i];
+    if line != "" {
+      let cells = std.String.split(line)(" ");
+      let kind = cells[0];
+      if kind == "SLOT" { defineSlot(cells[1]); curScope.active[cells[1]] = true; }
+      else if kind == "RFN" { runtimeFunctions[cells[1]] = true; }
+      else if kind == "ASG" { assignedRuntime[cells[1]] = true; }
+      else if kind == "MT" { stdModuleType[cells[1]] = cells[2]; }
+      else if kind == "DFN" {
+        // 直接调用目标:符号来自 symbols.tsv,元数来自接口。
+        let sym = stdlibSymbolMap[cells[1]];
+        if !isError(sym) && sym != "" {
+          runtimeFnIr[cells[1]] = sym;
+          if isError(curScope.directFns) { curScope.directFns = {}; };
+          curScope.directFns[cells[1]] = { ir: sym, arity: std.Number.parseFloat(cells[2]) };
+        };
+      }
+      else if kind == "MV" {
+        if isError(stdModuleValues[cells[1]]) { stdModuleValues[cells[1]] = {}; };
+        stdModuleValues[cells[1]][cells[2]] = cells[3];
+      }
+      else if kind == "MC" {
+        if isError(stdModuleCalls[cells[1]]) { stdModuleCalls[cells[1]] = {}; };
+        stdModuleCalls[cells[1]][cells[2]] = cells[3];
+      };
+    };
+    i = i + 1;
+  };
+  null;
+};
 let main = (args) -> {
-  splitStdlibMode = args.length == 4 && args[0] == "--emit-llvm-split";
-  if args.length != 3 && !splitStdlibMode { return std.Error.raise("CompileError", "usage: qlangc --emit-llvm|--emit-module source.ql runtime.ql | --emit-llvm-split source.ql runtime.ql symbols.tsv", null); };
+  let interfaceDump = args.length == 2 && args[0] == "--emit-stdlib-interface";
+  splitStdlibMode = args.length == 5 && args[0] == "--emit-llvm-split";
+  if args.length != 3 && !splitStdlibMode && !interfaceDump { return std.Error.raise("CompileError", "usage: qlangc --emit-llvm|--emit-module source.ql runtime.ql | --emit-llvm-split source.ql runtime.ql symbols.tsv interface.txt | --emit-stdlib-interface runtime.ql", null); };
   let source = args[0]; let sourcePath = args[1]; let runtimeSource = args[2];
   extensionMode = args[0] == "--emit-module";
   if splitStdlibMode {
@@ -2778,40 +2868,52 @@ let main = (args) -> {
       ri = ri + 1;
     };
     funcCounter = highest + 1;
+    stdlibFromCache = args[4] != "-";
+    if stdlibFromCache { loadStdlibInterface(std.fs.readFileText(args[4])?); };
   };
-  if args[0] == "--emit-llvm" || args[0] == "--emit-llvm-split" || extensionMode {
+  if interfaceDump {
+    source = ""; sourcePath = "<interface>"; runtimeSource = std.fs.readFileText(args[1])?;
+  } else if args[0] == "--emit-llvm" || args[0] == "--emit-llvm-split" || extensionMode {
     source = std.fs.readFileText(sourcePath)?;
     runtimeSource = std.fs.readFileText(args[2])?;
   };
   let path = std.fs.canonicalPath(sourcePath);
-  if isError(path) { std.Error.raise("CompileError", path.message, null)?; };
-  let root = loadModuleProgram(source, path, 0)?;
+  if isError(path) && !interfaceDump { std.Error.raise("CompileError", path.message, null)?; };
+  let root = loadModuleProgram(source, if interfaceDump { "<interface>"; } else { path; }, 0)?;
   let userProgram = root.program;
   // 类型信息在生成代码之前算好。顺序:运行期在先(它的成员签名要用来建模块索引),再分析
   // 标准库(它自己的推导结论同时补齐索引),最后是用户程序与已加载的 import 模块。
-  let runtimeParser = Parser(Lexer(runtimeSource).tokenize());
-  runtimeParser.setSource(runtimeSource);
-  runtimeParser.setSourcePath(if args[0] == "--emit-llvm" || extensionMode { args[2]; } else { "<runtime>"; });
-  let program = runtimeParser.parse();
-  if program.errors.length > 0 { return std.Error.raise("CompileError", "runtime: " + program.errors[0], null); };
-  // 运行期程序也走一遍分析:它的绑定与成员签名要能推导出来,库/用户才用得上。
-  // 它自己的静态类型错误不计入面向用户的诊断(底层代码 + 分析不认识宿主原语,现在多半
-  // 是误报),但条数要报出来,不悄悄丢掉 —— 那是「让运行期干净通过分析」的工作清单。
-  let runtimeErrBase = typeErrors.length;
-  typeSetStdNamespace(true);
-  typeSetDefinesBuiltins(true);
-  inferTypes(program.statements);
-  typeSetDefinesBuiltins(false);
-  typeSetStdNamespace(false);
-  let runtimeErrCount = typeErrors.length - runtimeErrBase;
-  while typeErrors.length > runtimeErrBase { typeErrors.remove(typeErrors.length - 1); };
-  // 运行期的导出表(std = {...})先进索引,库自己的 std.<模块>.<成员> 才解析得出。
-  buildStdTypes(program.statements);
-  let libraryProgram = parseStandardLibrary()?;
-  typeSetStdNamespace(true);
-  inferTypes(libraryProgram.statements);
-  typeSetStdNamespace(false);
-  buildStdTypes(libraryProgram.statements);
+  // 对象化模式(stdlib.o)下这两段都跳过:分析接口由 loadStdlibInterface 从缓存装载,
+  // 省掉每次编译 ~5s 的 lex/parse/分析。
+  let program = { statements: [] };
+  let libraryProgram = { statements: [] };
+  let runtimeErrCount = 0;
+  if !stdlibFromCache {
+    let runtimeParser = Parser(Lexer(runtimeSource).tokenize());
+    runtimeParser.setSource(runtimeSource);
+    runtimeParser.setSourcePath(if args[0] == "--emit-llvm" || extensionMode { args[2]; } else { "<runtime>"; });
+    program = runtimeParser.parse();
+    if program.errors.length > 0 { return std.Error.raise("CompileError", "runtime: " + program.errors[0], null); };
+    // 运行期程序也走一遍分析:它的绑定与成员签名要能推导出来,库/用户才用得上。
+    // 它自己的静态类型错误不计入面向用户的诊断(底层代码 + 分析不认识宿主原语,现在多半
+    // 是误报),但条数要报出来,不悄悄丢掉 —— 那是「让运行期干净通过分析」的工作清单。
+    let runtimeErrBase = typeErrors.length;
+    typeSetStdNamespace(true);
+    typeSetDefinesBuiltins(true);
+    inferTypes(program.statements);
+    typeSetDefinesBuiltins(false);
+    typeSetStdNamespace(false);
+    runtimeErrCount = typeErrors.length - runtimeErrBase;
+    while typeErrors.length > runtimeErrBase { typeErrors.remove(typeErrors.length - 1); };
+    // 运行期的导出表(std = {...})先进索引,库自己的 std.<模块>.<成员> 才解析得出。
+    buildStdTypes(program.statements);
+    libraryProgram = parseStandardLibrary()?;
+    typeSetStdNamespace(true);
+    inferTypes(libraryProgram.statements);
+    typeSetStdNamespace(false);
+    buildStdTypes(libraryProgram.statements);
+  };
+  if interfaceDump { writeStdlibInterface(program, libraryProgram); return null; };
   typeSetCallSafety(true);
   let typeErrs = inferTypes(userProgram.statements);
   typeSetCallSafety(false);
