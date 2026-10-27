@@ -9,6 +9,7 @@ import ../bootstrapped/modules.ql;
 import ./lifetime.ql;
 import ./types.ql;
 import ./value_abi.ql;
+import ./fold.ql;
 import ../bootstrapped/library.ql;
 
 // Static graph loading reads source only; module initialization stays in the ELF.
@@ -821,6 +822,7 @@ let coldHelperAt = 0;
 let locErrorElided = 0;
 // 走「内联数组取元素」快路径的调用点数(量测:每多一个,热循环就少一次通用分派)。
 let arrayIndexFastSites = 0;
+let foldReport = " disabled";
 // Runtime functions whose body is already emitted, keyed by source name: a call
 // after that point can be direct (this toolchain wants the definition first), and
 // runtime bindings are private, so they cannot be rebound by user code.
@@ -2139,17 +2141,18 @@ let rawCallArgsOk = (args) -> {
   };
   true;
 };
+let directReject = { nohit: 0, notable: 0, noinfo: 0, assigned: 0, arity: 0, args: 0 };
 let directCallTarget = (node, cname) -> {
   if !allowDirectUserCalls || inRuntime || inColdHelper { return null; };
   let hit = lookupSlot(cname);
-  if hit == null { return null; };
+  if hit == null { directReject.nohit = directReject.nohit + 1; return null; };
   let table = hit.scope.directFns;
-  if isError(table) || table == null { return null; };
+  if isError(table) || table == null { directReject.notable = directReject.notable + 1; return null; };
   let info = table[cname];
-  if isError(info) || info == null { return null; };
-  if !isError(assignedUserNames[cname]) && assignedUserNames[cname] == true { return null; };
-  if node.arguments.length != info.arity { return null; };
-  if !callArgsCannotBeError(node.arguments) { return null; };
+  if isError(info) || info == null { directReject.noinfo = directReject.noinfo + 1; return null; };
+  if !isError(assignedUserNames[cname]) && assignedUserNames[cname] == true { directReject.assigned = directReject.assigned + 1; return null; };
+  if node.arguments.length != info.arity { directReject.arity = directReject.arity + 1; return null; };
+  if !callArgsCannotBeError(node.arguments) { directReject.args = directReject.args + 1; return null; };
   // A raw target has no boxed entry at all; a call site that cannot prove
   // Number arguments would be unrepresentable, so it is a compile error rather
   // than a silent fallback (the candidate scan makes this unreachable).
@@ -2909,6 +2912,15 @@ let loadStdlibInterface = (text) -> {
   null;
 };
 let main = (args) -> {
+  // `--fold` 是独立选项(AST 级常量折叠),不属于 codegen;默认关闭。
+  let foldEnabled = false;
+  let keptArgs = [];
+  let argIndex = 0;
+  while argIndex < args.length {
+    if args[argIndex] == "--fold" { foldEnabled = true; } else { keptArgs[keptArgs.length] = args[argIndex]; };
+    argIndex = argIndex + 1;
+  };
+  args = keptArgs;
   let interfaceDump = args.length == 2 && args[0] == "--emit-stdlib-interface";
   splitStdlibMode = args.length == 5 && args[0] == "--emit-llvm-split";
   if args.length != 3 && !splitStdlibMode && !interfaceDump { return std.Error.raise("CompileError", "usage: qlangc --emit-llvm|--emit-module source.ql runtime.ql", null); };
@@ -2991,6 +3003,30 @@ let main = (args) -> {
   while typeIndex < typePaths.length {
     if typePaths[typeIndex] != path { inferTypes(moduleCache[typePaths[typeIndex]].program.statements); };
     typeIndex = typeIndex + 1;
+  };
+  // AST 级常量折叠(独立选项):把「已证纯 + 全字面量实参」的调用点替换成算出来的字面量。
+  // 位置在分析之后、发射之前 —— 发射器对此一无所知,它只会看到字面量。
+  // 名字事实(被赋值/重声明/导出/import)是直接调用、raw 与折叠共用的前提,必须
+  // 无条件先收齐 —— 之前把它放在 `if foldEnabled` 里,导致关掉折叠时直接调用判据
+  // 反而少了一层(t62 因此多了 32 条指令)。
+  collectAssignedNames(userProgram.statements, assignedUserNames);
+  if foldEnabled {
+    // 折叠还需要 import 名字:导入会覆盖同名槽,不能当成不可变本地函数。
+    collectImportedNames(userProgram.statements);
+    let foldLets = {};
+    let fi = 0;
+    while fi < userProgram.statements.length {
+      let st = userProgram.statements[fi];
+      if !isError(st.type) && st.type == "Let" && st.value != null
+         && !isError(st.value.type) && st.value.type == "Function"
+         && isError(assignedUserNames[st.name]) && isError(redeclaredUserNames[st.name])
+         && isError(exportedUserNames[st.name]) && isError(importedNames[st.name]) {
+        foldLets[st.name] = st;
+      };
+      fi = fi + 1;
+    };
+    let foldResult = foldProgram(userProgram.statements, foldLets);
+    foldReport = " folded=" + std.String.toString(foldResult.folded) + " bailed=" + std.String.toString(foldResult.bailed) + " lets=" + std.String.toString(foldResult.lets) + " calls=" + std.String.toString(foldResult.calls) + " reject=" + foldResult.reject;
   };
   let r = 0;
   while r < program.statements.length {
@@ -3161,7 +3197,6 @@ let main = (args) -> {
   let exportsOff = emitBindingPtr({depth: 0, slot: curScope.slots["$exports"]});
   emitBindingStore(exportsOff, moduleExportsReg, "null", "null");
   emitSetModuleLoading(path, true);
-  collectAssignedNames(userProgram.statements, assignedUserNames);
   buildInlineCandidates(userProgram.statements);
   allowDirectUserCalls = true;
   let last = emitBlockStmts(userProgram.statements);
@@ -3218,6 +3253,8 @@ let main = (args) -> {
   // 命中数:分析期证明不可能出错、因而整块省掉定位测试的节点数(主函数体发完之后才知道)。
   out[out.length] = "; located-error elided: " + std.String.toString(locErrorElided);
   out[out.length] = "; index-fast: " + std.String.toString(arrayIndexFastSites);
+  out[out.length] = "; constfold:" + foldReport;
+  out[out.length] = "; directreject: nohit=" + std.String.toString(directReject.nohit) + " notable=" + std.String.toString(directReject.notable) + " noinfo=" + std.String.toString(directReject.noinfo) + " assigned=" + std.String.toString(directReject.assigned) + " arity=" + std.String.toString(directReject.arity) + " args=" + std.String.toString(directReject.args);
   // ②a 补充:发射序折扣(同样要等主函数体发完 —— 函数体是在 main 发射过程中才发现并发出的)。
   out[out.length] = "; rawABI order: usercalls=" + std.String.toString(ordCallsTotal) + " emitted=" + std.String.toString(ordCallsEmitted) + " notyet=" + std.String.toString(ordCallsNotYet) + " retraw=" + std.String.toString(ordCallsRetRaw) + " direct=" + std.String.toString(directCalls) + " inline=" + std.String.toString(inlineUsed) + " rawcalls=" + std.String.toString(rawCalls) + " rawfuncs=" + std.String.toString(rawFuncs) + " rawretcalls=" + std.String.toString(rawDoubleCalls) + " rawretfuncs=" + std.String.toString(rawDoubleReturns);
   // R10-c: out[0..mainAt) = prelude plus the cold helper, then every function body,
