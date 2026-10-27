@@ -2715,17 +2715,22 @@ let emitPrelude = () -> {
   line("declare void @llvm.lifetime.end.p0(i64 immarg, ptr nocapture)");
   line("; qlangc v1 prelude");
   line("@ql_stack_top = external global ptr");
-  line("declare ptr  @ql_alloc(i64)");
-  line("declare void @ql_write(i32, ptr, i64)");
-  line("declare i8   @ql_mem_get(ptr, i64)");
-  line("declare void @ql_mem_store(ptr, i64, i8)");
-  line("declare ptr  @ql_mem_get_ptr(ptr, i64)");
-  line("declare void @ql_mem_store_ptr(ptr, i64, ptr)");
+  // `ql_alloc` 是分配器:返回的存储不与任何已有对象重叠(与 malloc 同理)。标成
+  // noalias 后 LLVM 才能证明「帧里的槽」与「别的指针」不别名,进而把循环里重复的
+  // env 槽 load 提出循环。
+  line("declare noalias ptr  @ql_alloc(i64)");
+  // 下面这些是「只碰实参所指内存」的叶子(逐字节拷贝/读取)。声明准确的内存效果后,
+  // LLVM 不必把它们当成任意内存写,循环里的 env 槽 load 才能被提升/复用。
+  line("declare void @ql_write(i32, ptr, i64) memory(argmem: read)");
+  line("declare i8   @ql_mem_get(ptr, i64) memory(argmem: read)");
+  line("declare void @ql_mem_store(ptr, i64, i8) memory(argmem: write)");
+  line("declare ptr  @ql_mem_get_ptr(ptr, i64) memory(argmem: read)");
+  line("declare void @ql_mem_store_ptr(ptr, i64, ptr) memory(argmem: write)");
   line("declare void @ql_exit(i32)");
   line("declare i64 @ql_openat(i64, ptr, i64)");
-  line("declare i64 @ql_read(i64, ptr, i64)");
+  line("declare i64 @ql_read(i64, ptr, i64) memory(argmem: write)");
   line("declare i64 @ql_close(i64)");
-  line("declare i64 @ql_getrandom(ptr, i64)");
+  line("declare i64 @ql_getrandom(ptr, i64) memory(argmem: write)");
   line("declare i64 @ql_readlinkat(i64, ptr, ptr, i64)");
 
   line(valueABI);

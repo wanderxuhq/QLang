@@ -777,3 +777,27 @@ t20 二进制机器指令数不变(126,713);selfhost / interpreter 两套门禁�
 代价:每个符合条件的函数多一个包装入口(用户函数多的程序 IR 会涨,编译器自身 +7%);
 产物机器指令净 −0.5%。门禁:selfhost / interpreter 全绿(各 ~10min / ~8min,当轮宿主较慢),
 自举固定点逐字节成立。
+
+
+## 31. 别名/内存效果注解(D 项,2026-10-27)
+
+想法:每条语句都从 env 帧重新 `load` 绑定,LLVM 不敢跨 store 提升。做法(全部是**声明**,
+不改代码):
+
+- `declare noalias ptr @ql_alloc(i64)` —— 分配器返回的存储不与任何已有对象重叠;
+- 内存叶子声明精确效果:`ql_mem_get`/`ql_mem_get_ptr`/`ql_write` → `memory(argmem: read)`,
+  `ql_mem_store`/`ql_mem_store_ptr`/`ql_read`/`ql_getrandom` → `memory(argmem: write)`。
+
+| stdlib 机器指令 | 值 |
+|---|---:|
+| 无注解 | 125,041 |
+| 只加 `ql_alloc noalias` | 124,528(−513) |
+| 再加内存效果 | **124,505(−536,−0.43%)** |
+
+b_chars 用户模块不变(126,015,用户代码不直接调这些 C 叶子);selfhost / interpreter 两套门禁
+全绿;固定点成立。
+
+**结论**:小但免费(两处声明、零 IR 增长),留下。但"重复 env load 提出循环"的期待不成立 ——
+LLVM 的 BasicAA 本来就能用同帧固定偏移区分不同绑定,SROA 也把局部往返消掉了;`noalias`
+真正帮到的是"堆帧 vs 其它分配"这一层。要再往下压,只能是算法级(见 §32 的功能分组)
+或惰性 std(C 项)。
