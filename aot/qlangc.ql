@@ -1632,6 +1632,7 @@ let emitFunction = (node, name, rawDirect) -> {
     line("define internal %ql_value @" + fname + "(ptr %env, ptr %args, i64 %argc, %ql_value %annotations) {");
   };
   line("entry:");
+  let entrySlot = blk.length;
   line(""); // Filled after emission with fixed entry-block stack slots.
   curLbl = "entry";
   let localFrame = !lifetimeMayCapture(node.body.statements);
@@ -1731,7 +1732,7 @@ let emitFunction = (node, name, rawDirect) -> {
   line("}");
   curRetv = savedRetv; curEpiLbl = savedEpi; isTopLevel = savedTop;
   curReturnType = savedRetType; curReturnTy = savedRetTy; curReturnText = savedRetText; curReturnActive = savedRetActive;
-  blk[2] = stackEntry();
+  blk[entrySlot] = stackEntry();
   stackSlots = savedStackSlots;
   argSlotPool = savedArgSlots;
   fnBlocks[fnBlocks.length] = blk;
@@ -2843,7 +2844,7 @@ let loadStdlibInterface = (text) -> {
 let main = (args) -> {
   let interfaceDump = args.length == 2 && args[0] == "--emit-stdlib-interface";
   splitStdlibMode = args.length == 5 && args[0] == "--emit-llvm-split";
-  if args.length != 3 && !splitStdlibMode && !interfaceDump { return std.Error.raise("CompileError", "usage: qlangc --emit-llvm|--emit-module source.ql runtime.ql | --emit-llvm-split source.ql runtime.ql symbols.tsv interface.txt | --emit-stdlib-interface runtime.ql", null); };
+  if args.length != 3 && !splitStdlibMode && !interfaceDump { return std.Error.raise("CompileError", "usage: qlangc --emit-llvm|--emit-module source.ql runtime.ql", null); };
   let source = args[0]; let sourcePath = args[1]; let runtimeSource = args[2];
   extensionMode = args[0] == "--emit-module";
   if splitStdlibMode {
