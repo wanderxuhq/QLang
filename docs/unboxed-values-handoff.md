@@ -121,6 +121,13 @@ HEAD 基线(`/tmp/sweep3/`):**17 绿**,含 `interpreter`(731s)、`selfhost`(1573
 `difftest` 在本机**不可裁决**(它的 boot 侧走 `cargo run`,120 秒超时;`cargo build` 已热只需 0.12s)
 ⇒ 替代:用 native 编译的 boot 做同样对照。
 
+### 3.7 前端也跳过库(2026-10-27)
+
+编译器加了 `--emit-llvm-split <源码> <runtime> <symbols.tsv>`:只发用户部分,库函数按
+`symbols.tsv` 里的 `名字 → ql_fnN` 表发 `declare`(表由 `stdlib_split.py` 从发射器写的
+`; ql-symbol` 注释里抽出来)。单夹具前端 9.7s / 188k 行 → **5.7s / 1.7k 行**,
+整条构建 ~22s → **~7s**。两套门禁全绿、split 模式下自举固定点逐字节成立。
+
 ### 3.6 标准库对象化(2026-10-27)
 
 `aot/stdlib_split.py` 把「preamble + 助手 + runtime/stdlib 函数体 + 字符串 + `@__stdlib_init`」

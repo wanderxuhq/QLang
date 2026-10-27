@@ -31,7 +31,7 @@ import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 CACHE_ROOT = ROOT / 'target' / 'stdlib'
-SPLIT_VERSION = '4'
+SPLIT_VERSION = '5'
 
 DEFINE = re.compile(r'^define\s')
 GLOBAL = re.compile(r'^@([A-Za-z0-9_$.]+)\s*=\s')
@@ -156,6 +156,18 @@ def build_stdlib(compiler, cache_root=CACHE_ROOT):
     stdlib_text += '\n'.join(globals_.values()) + '\n'
     stdlib_ll = out / 'stdlib.ll'
     stdlib_ll.write_text(stdlib_text)
+
+    # name -> symbol, recovered from the emitter's `; ql-symbol` comments; the
+    # compiler needs it in `--emit-llvm-split` mode to call library functions.
+    named = {}
+    for line in preamble + [b for body in functions.values() for b in body.splitlines()]:
+        marker = '; ql-symbol '
+        if marker in line:
+            _, rest = line.split(marker, 1)
+            parts = rest.split()
+            if len(parts) == 2:
+                named[parts[0]] = parts[1]
+    (out / 'symbols.tsv').write_text(''.join(f'{k}\t{v}\n' for k, v in sorted(named.items())))
 
     symbols = {
         'functions': {name: declare_for_function(body) for name, body in functions.items()

@@ -124,8 +124,12 @@ def ir_strings(ir):
     return result
 
 
-def validate(ir, binary):
+def validate(ir, binary, extra_ir=None):
     expected = ir_strings(ir)
+    if extra_ir is not None:
+        # Split build: the ELF also carries the runtime/stdlib object's strings.
+        # Validate them against the object's own IR instead of ignoring them.
+        expected.update(ir_strings(extra_ir))
     elf = ELF(binary)
     symbols = elf.symbols()
     relocations = elf.relocations()
@@ -157,9 +161,19 @@ def link(ir, binary, opt=2, timeout=600, clang='clang', shared=False, stdlib_obj
     # Parse before invoking Clang; never publish partial or unrelated output.
     ir_strings(ir)
     binary.parent.mkdir(parents=True, exist_ok=True)
+    stdlib_ir = None
+    if stdlib_object is not None and not shared:
+        candidate_ir = Path(stdlib_object).with_name('stdlib.ll')
+        if candidate_ir.exists():
+            stdlib_ir = candidate_ir
     with tempfile.TemporaryDirectory(prefix='.qlang-link-', dir=binary.parent) as tmp:
         candidate = Path(tmp) / 'program'
-        if stdlib_object is not None and not shared:
+        already_split = False
+        try:
+            already_split = '; split-stdlib' in Path(ir).read_text(errors='ignore')[:200000]
+        except OSError:
+            already_split = False
+        if stdlib_object is not None and not shared and not already_split:
             # Compile the runtime/stdlib bodies once (target/stdlib/<key>) and
             # link them instead of re-optimising ~180k IR lines every build.
             from stdlib_split import build_symbols_for_ir, split_file
@@ -168,12 +182,16 @@ def link(ir, binary, opt=2, timeout=600, clang='clang', shared=False, stdlib_obj
             split_file(ir, user_ir, symbols)
             inputs = [str(user_ir), str(ROOT / 'aot/runtime.c'), str(stdlib_object),
                       '-Wl,--export-dynamic', '-ldl']
+        elif stdlib_object is not None and not shared:
+            # The compiler already emitted the user-only module (`--emit-llvm-split`).
+            inputs = [str(ir), str(ROOT / 'aot/runtime.c'), str(stdlib_object),
+                      '-Wl,--export-dynamic', '-ldl']
         else:
             inputs = [str(ir), '-shared', '-fPIC'] if shared else [str(ir), str(ROOT / 'aot/runtime.c'), '-Wl,--export-dynamic', '-ldl']
         subprocess.run([str(clang), f'-O{opt}', '-fuse-ld=lld', '-Wl,--threads=1',
                         *inputs, '-o', str(candidate)],
                        cwd=ROOT, check=True, timeout=timeout)
-        count = validate(ir, candidate)
+        count = validate(ir, candidate, extra_ir=stdlib_ir)
         os.replace(candidate, binary)
     return count
 

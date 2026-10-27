@@ -12,6 +12,38 @@ import ./value_abi.ql;
 import ../bootstrapped/library.ql;
 
 // Static graph loading reads source only; module initialization stays in the ELF.
+// 标准库对象化模式:stdio 模块只发用户部分,库函数按外部符号调用。
+// `stdlibSymbolMap` 来自对象构建时落盘的 name<TAB>ql_fnN 表。
+let splitStdlibMode = false;
+let stdlibSymbolMap = {};
+let markModuleBindingsActive = (stmts) -> {
+  let i = 0;
+  while i < stmts.length {
+    let st = stmts[i];
+    if !isError(st.type) && st.type == "Let" && !isError(st.name) { curScope.active[st.name] = true; };
+    i = i + 1;
+  };
+  null;
+};
+// 把「名字 → 预编译对象里的符号」登记成直调目标:与单模块模式下 emitLetStmt 做的事一致
+// (只不过那些函数体根本不会被发射)。
+let registerStdlibSymbols = (stmts) -> {
+  let i = 0;
+  while i < stmts.length {
+    let st = stmts[i];
+    if !isError(st.type) && st.type == "Let" && st.value != null
+       && !isError(st.value.type) && st.value.type == "Function" {
+      let sym = stdlibSymbolMap[st.name];
+      if !isError(sym) && sym != "" {
+        runtimeFnIr[st.name] = sym;
+        if isError(curScope.directFns) { curScope.directFns = {}; };
+        curScope.directFns[st.name] = { ir: sym, arity: st.value.parameters.length };
+      };
+    };
+    i = i + 1;
+  };
+  null;
+};
 let moduleCache = {};
 // Cache emitted module code, never module values or initialization state.
 let moduleFactories = {};
@@ -1582,6 +1614,9 @@ let emitFunction = (node, name, rawDirect) -> {
   let n = std.Object.keys(curScope.slots).length;
   let blk = [];
   curSink = blk;
+  // 名字 → 符号 的映射(注释,不进代码)。标准库对象化时靠它把「用户代码按名字直调的
+  // 库函数」连到对象里的真实符号;单模块模式下这行只是自述。
+  if name != "" { line("  ; ql-symbol " + name + " " + fname); };
   if rawMode {
     let signature = "ptr %env";
     let sb = 0;
@@ -2717,10 +2752,34 @@ let emitStdlibInit = (runtimeStmts, libraryStmts) -> {
   null;
 };
 let main = (args) -> {
-  if args.length != 3 { return std.Error.raise("CompileError", "usage: qlangc --emit-llvm|--emit-module source.ql runtime.ql", null); };
+  splitStdlibMode = args.length == 4 && args[0] == "--emit-llvm-split";
+  if args.length != 3 && !splitStdlibMode { return std.Error.raise("CompileError", "usage: qlangc --emit-llvm|--emit-module source.ql runtime.ql | --emit-llvm-split source.ql runtime.ql symbols.tsv", null); };
   let source = args[0]; let sourcePath = args[1]; let runtimeSource = args[2];
   extensionMode = args[0] == "--emit-module";
-  if args[0] == "--emit-llvm" || extensionMode {
+  if splitStdlibMode {
+    let table = std.fs.readFileText(args[3])?;
+    let rows = std.String.split(table)("\n");
+    let ri = 0;
+    let highest = 0;
+    while ri < rows.length {
+      let row = rows[ri];
+      if row != "" {
+        let cells = std.String.split(row)("\t");
+        if cells.length == 2 {
+          stdlibSymbolMap[cells[0]] = cells[1];
+          // 用户函数接着库函数的编号往下排,否则会重定义对象里的 ql_fnN。
+          let digits = std.String.replace(cells[1])("ql_fn")("");
+          if digits != cells[1] {
+            let index = std.Number.parseFloat(digits);
+            if !isError(index) && index > highest { highest = index; };
+          };
+        };
+      };
+      ri = ri + 1;
+    };
+    funcCounter = highest + 1;
+  };
+  if args[0] == "--emit-llvm" || args[0] == "--emit-llvm-split" || extensionMode {
     source = std.fs.readFileText(sourcePath)?;
     runtimeSource = std.fs.readFileText(args[2])?;
   };
@@ -2771,6 +2830,18 @@ let main = (args) -> {
     r = r + 1;
   };
   emitPrelude();
+  if splitStdlibMode {
+    line("; split-stdlib");
+    // 库那部分在 stdlib.o 里:这里只声明接口。
+    line("declare %ql_value @__cold_located_error(ptr, %ql_value, %ql_value, %ql_value, %ql_value, %ql_value)");
+    line("declare void @__panic_exit(ptr, %ql_value, %ql_value)");
+    line("declare void @__stdlib_init(ptr, i32, ptr)");
+    let symNames = std.Object.keys(stdlibSymbolMap); let sni = 0;
+    while sni < symNames.length {
+      line("declare %ql_value @" + stdlibSymbolMap[symNames[sni]] + "(ptr, ptr, i64, %ql_value)");
+      sni = sni + 1;
+    };
+  };
   // 助手插在 prelude 之后、按程序的计数注释之前:「prelude + 助手」因此是一段与用户
   // 程序无关的连续前缀(调用点在 main/函数体里,顺序仍满足「先定义后引用」)。
   coldHelperAt = out.length;
@@ -2887,8 +2958,18 @@ let main = (args) -> {
     let result = emitInvoke(factory, "null", "0");
     line("  ret %ql_value " + result);
   } else {
-  // region B(runtime/stdlib 初始化)已提成独立函数 @__stdlib_init;这里只调它。
-  emitStdlibInit(program.statements, libraryProgram.statements);
+  // region B(runtime/stdlib 初始化)在 @__stdlib_init 里:单模块模式就地发它,
+  // 对象化模式它已经在 stdlib.o 里,只需登记符号并调用。
+  if splitStdlibMode {
+    // 库对象的字符串常量用的是 @.str0…;用户模块从一个大基址起编号,避免同名全局。
+    strCounter = 1000000;
+    markModuleBindingsActive(program.statements);
+    markModuleBindingsActive(libraryProgram.statements);
+    registerStdlibSymbols(program.statements);
+    registerStdlibSymbols(libraryProgram.statements);
+  } else {
+    emitStdlibInit(program.statements, libraryProgram.statements);
+  };
   line("  call void @__stdlib_init(ptr " + curEnv + ", i32 %argc, ptr %argv)");
   // 初始化函数内部借用了 inRuntime=true(runtime 段),返回后必须回到普通代码路径。
   inRuntime = false;
@@ -2924,7 +3005,7 @@ let main = (args) -> {
   out[mainStackAt] = stackEntry();
   // Splice the located-error helper in right after the prelude: the scope is fully
   // populated here, and the definition must precede every call site.
-  if needColdLocated {
+  if needColdLocated && !splitStdlibMode {
     let helper = emitColdLocatedHelper();
     let merged = [];
     let m = 0;
@@ -2936,7 +3017,7 @@ let main = (args) -> {
     mainAt = mainAt + helper.length;
   };
   // 致命助手同理:契约违反的调用点引用它,必须在调用点之前定义。
-  if needColdPanic {
+  if needColdPanic && !splitStdlibMode {
     let helper = emitColdPanicHelper();
     let merged = [];
     let m = 0;

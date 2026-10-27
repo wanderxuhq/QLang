@@ -26,8 +26,14 @@ def link(ir, binary):
     checked_link(ir, binary, timeout=TIMEOUT)
 
 def emit(compiler, source, ir):
+    # When a precompiled stdlib object is available the compiler emits the user
+    # module only (`--emit-llvm-split`); the object supplies everything else.
+    symbols = os.environ.get('QLANG_STDLIB_SYMBOLS')
+    args = [compiler, '--emit-llvm-split' if symbols else '--emit-llvm', source, RUNTIME]
+    if symbols:
+        args.append(symbols)
     with ir.open('wb') as output:
-        run([compiler, '--emit-llvm', source, RUNTIME], stdout=output)
+        run(args, stdout=output)
 
 def bootstrap(ir, binary):
     with ir.open('wb') as output:
@@ -137,9 +143,11 @@ def _use_stdlib_object(compiler):
         from stdlib_split import build_stdlib
         object_path, _symbols = build_stdlib(compiler)
         os.environ['QLANG_STDLIB_OBJECT'] = str(object_path)
+        os.environ['QLANG_STDLIB_SYMBOLS'] = str(object_path.with_name('symbols.tsv'))
     except Exception as error:  # pragma: no cover - fall back to the monolithic link
         print(f'note: precompiled stdlib unavailable ({error}); linking monolithically', flush=True)
         os.environ.pop('QLANG_STDLIB_OBJECT', None)
+        os.environ.pop('QLANG_STDLIB_SYMBOLS', None)
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
