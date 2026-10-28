@@ -63,6 +63,7 @@ let registerStdlibSymbols = (stmts) -> {
 // 源绑定名 -> 符号/元数 来自 emittedIr(单模块)或 symbols.tsv(对象化)。
 let stdChainTargets = {};
 let stdChainHits = 0;
+let stdCachedCalls = 0;
 let stdChainReject = { nokey: 0, arity: 0, args: 0, written: 0 };
 let stdMembersWritten = false;
 let stdMonoIr = {};
@@ -72,6 +73,10 @@ let stdMemberIr = {};
 let stdModuleBinding = {};
 let stdMonoArity = {};
 let stdSlotScope = null;
+// std.<模块>.<成员> 的闭包缓存:调用点一次 load 代替两次哈希查找。
+let stdCacheSlot = {};
+let stdCachePaths = [];
+let stdCacheSeq = 0;
 // 递归收库里的对象字面量成员(内联 lambda → ql_fnN)与导出表(模块名 -> 对象绑定名)。
 let collectLibraryFacts = (stmts) -> {
   let i = 0;
@@ -166,6 +171,74 @@ let buildStdChainTargets = (fromObject) -> {
         };
         j = j + 1;
       };
+    };
+    i = i + 1;
+  };
+  null;
+};
+// 收集用户程序里出现的 std.<模块>.<成员> 调用路径(去重,保持出现顺序)。
+let stdCacheScan = (node) -> {
+  if node == null || isError(node) { return null; };
+  if AnyArray.check(node) {
+    let i = 0; while i < node.length { stdCacheScan(node[i]); i = i + 1; };
+    return null;
+  };
+  if !AnyObject.check(node) { return null; };
+  let t = node.type;
+  if isError(t) { return null; };
+  if t == "Import" { return null; };
+  if t == "Call" {
+    let callee = node.callee;
+    if !isError(callee.type) && callee.type == "MemberAccess" {
+      let mid = callee.object;
+      if mid != null && !isError(mid) && !isError(mid.type) && mid.type == "MemberAccess" {
+        let root = mid.object;
+        if root != null && !isError(root) && !isError(root.type) && root.type == "Identifier" && root.name == "std" {
+          let key = mid.field + "." + callee.field;
+          if isError(stdCacheSlot[key]) {
+            stdCachePaths[stdCachePaths.length] = key;
+          };
+        };
+      };
+    };
+  };
+  let keys = std.Object.keys(node); let i = 0;
+  while i < keys.length {
+    let child = node[keys[i]];
+    if child != null && AnyObject.check(child) { stdCacheScan(child); }
+    else if AnyArray.check(child) { let j = 0; while j < child.length { stdCacheScan(child[j]); j = j + 1; }; };
+    i = i + 1;
+  };
+  null;
+};
+// 分配隐藏槽(必须在模块帧分配之前)。导入模块的代码看不到这些槽,所以只有主模块用。
+let prepareStdCache = (stmts) -> {
+  if stdMembersWritten { return null; };
+  stdCacheScan(stmts);
+  let i = 0;
+  while i < stdCachePaths.length {
+    let name = "$stdcache" + std.String.toString(stdCacheSeq);
+    stdCacheSeq = stdCacheSeq + 1;
+    defineSlot(name);
+    curScope.active[name] = true;
+    stdCacheSlot[stdCachePaths[i]] = name;
+    i = i + 1;
+  };
+  null;
+};
+// std 装好之后,把每个路径的闭包取一次存进槽里。
+let emitStdCacheInit = () -> {
+  let i = 0;
+  while i < stdCachePaths.length {
+    let key = stdCachePaths[i];
+    let slotName = stdCacheSlot[key];
+    if !isError(slotName) {
+      let parts = std.String.split(key)(".");
+      let stdV = emitIdentifier({ type: "Identifier", name: "std" });
+      let modV = emitCallRegs("__get_field", [stdV, internString(parts[0])]);
+      let fnV = emitCallRegs("__get_field", [modV, internString(parts[1])]);
+      let off = emitBindingPtr({ depth: 0, slot: curScope.slots[slotName] });
+      emitBindingStore(off, fnV, "null", "null");
     };
     i = i + 1;
   };
@@ -2374,15 +2447,29 @@ let emitStdChainCall = (node) -> {
   let hit = lookupSlot("std");
   if hit == null || stdSlotScope == null || hit.scope != stdSlotScope { return null; };
   if stdMembersWritten { stdChainReject.written = stdChainReject.written + 1; return null; };
-  let target = stdChainTargets[mid.field + "." + callee.field];
-  if isError(target) { stdChainReject.nokey = stdChainReject.nokey + 1; return null; };
-  if node.arguments.length != target.arity { stdChainReject.arity = stdChainReject.arity + 1; return null; };
-  if !callArgsCannotBeError(node.arguments) { stdChainReject.args = stdChainReject.args + 1; return null; };
-  let FN = emitExpr(callee);
+  let key = mid.field + "." + callee.field;
+  let target = stdChainTargets[key];
+  // 缓存槽只在主模块可见(导入模块有独立帧)。
+  let slotName = stdCacheSlot[key];
+  let cached = "";
+  if !isError(slotName) {
+    let hitSlot = lookupSlot(slotName);
+    if hitSlot != null && hitSlot.scope == stdSlotScope { cached = slotName; };
+  };
+  if isError(target) && cached == "" { stdChainReject.nokey = stdChainReject.nokey + 1; return null; };
+  let FN = "";
+  if cached != "" { FN = emitIdentifier({ type: "Identifier", name: cached }); } else { FN = emitExpr(callee); };
   let values = []; let i = 0;
   while i < node.arguments.length { values.add(emitExpr(node.arguments[i])); i = i + 1; };
-  stdChainHits = stdChainHits + 1;
-  emitDirectCallValue(target.ir, FN, values, target.fast);
+  if !isError(target) && node.arguments.length == target.arity && callArgsCannotBeError(node.arguments) {
+    stdChainHits = stdChainHits + 1;
+    emitDirectCallValue(target.ir, FN, values, target.fast);
+  } else {
+    if !isError(target) && node.arguments.length != target.arity { stdChainReject.arity = stdChainReject.arity + 1; }
+    else if !isError(target) && !callArgsCannotBeError(node.arguments) { stdChainReject.args = stdChainReject.args + 1; };
+    stdCachedCalls = stdCachedCalls + 1;
+    emitBorrowedCall(FN, values, emitBoolean({ value: false }));
+  };
 };
 let emitCall = (node) -> {
   let calleeIsId = node.callee.type == "Identifier";
@@ -3467,8 +3554,10 @@ let main = (args) -> {
   scopePush(runtimeScope);
   reserveModuleBindings(userProgram.statements);
   reserveModuleGlobals();
+  prepareStdCache(userProgram.statements);
   curEnv = emitFrame(parent, std.Object.keys(curScope.slots).length, false);
   emitModuleStd();
+  emitStdCacheInit();
   moduleExportsReg = emitObjectExpr({ fields: [] });
   let exportsOff = emitBindingPtr({depth: 0, slot: curScope.slots["$exports"]});
   emitBindingStore(exportsOff, moduleExportsReg, "null", "null");
@@ -3532,7 +3621,7 @@ let main = (args) -> {
   out[out.length] = "; astvisits: walkers=" + std.String.toString(astVisits) + " module=" + std.String.toString(visitBy.module) + " slots=" + std.String.toString(visitBy.slots) + " names=" + std.String.toString(visitBy.names) + " leaf=" + std.String.toString(visitBy.leaf) + " bodylets=" + std.String.toString(visitBy.bodylets);
   out[out.length] = "; constfold:" + foldReport;
   out[out.length] = "; directreject: nohit=" + std.String.toString(directReject.nohit) + " notable=" + std.String.toString(directReject.notable) + " noinfo=" + std.String.toString(directReject.noinfo) + " assigned=" + std.String.toString(directReject.assigned) + " arity=" + std.String.toString(directReject.arity) + " args=" + std.String.toString(directReject.args) + " ann=" + std.String.toString(directReject.ann);
-  out[out.length] = "; stdchain: hits=" + std.String.toString(stdChainHits) + " nokey=" + std.String.toString(stdChainReject.nokey) + " arity=" + std.String.toString(stdChainReject.arity) + " args=" + std.String.toString(stdChainReject.args) + " written=" + std.String.toString(stdChainReject.written);
+  out[out.length] = "; stdchain: hits=" + std.String.toString(stdChainHits) + " cached=" + std.String.toString(stdCachedCalls) + " nokey=" + std.String.toString(stdChainReject.nokey) + " arity=" + std.String.toString(stdChainReject.arity) + " args=" + std.String.toString(stdChainReject.args) + " written=" + std.String.toString(stdChainReject.written);
   let staticLine = knownReportLine();
   if staticLine != "" { out[out.length] = "; staticcall: " + staticLine; };
   // ②a 补充:发射序折扣(同样要等主函数体发完 —— 函数体是在 main 发射过程中才发现并发出的)。

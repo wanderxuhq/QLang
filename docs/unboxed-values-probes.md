@@ -1515,3 +1515,30 @@ roadmap 的「库调用图的 known-safe 证明」(handoff 待办 M)。
 selfhost ALL PASS;interpreter ALL CHECKS PASS。
 
 注:`typeBuiltins` 现在从 `types.ql` 导出(qlangc 需要判断注解是不是内建类型名)。
+
+## 61. 成员闭包缓存:一次 load 代替两次哈希查找(2026-10-28)
+
+`std.M.f(...)` 的调用点原来每次要 `__get_field(std,"M")`、`__get_field(mod,"f")` 两次哈希查找。
+现在在模块初始化时**每个用到的路径只查一次**,把闭包存进隐藏槽(`$stdcacheN`),调用点一次 load:
+
+- 有直接目标且实参可证 ⇒ 直调(省两次查找 + `__call`);
+- 没有目标或实参不可证 ⇒ 仍走 `__call`,但省掉两次查找。
+
+前提:程序里没写过 `std` 的成员(`stdWriteScan`);导入模块有独立帧,看不到这些槽,所以只有主模块用。
+
+| 指标 | 直调(§60) | 加缓存 |
+|---|---|---|
+| t41_math_library | 136,781 | **136,393(−388)** |
+| t30_strings | 155,219 | **151,256(−3,963,−2.55%)** |
+| t28_objects | 148,362 | **146,026(−2,336,−1.57%)** |
+
+**运行时**(1M 次 `std.Math.abs`,用户态中位数):
+
+| 构建 | 时间 |
+|---|---|
+| HEAD(无直调) | ~1.90s |
+| 只做直调(§60) | ~0.69s |
+| 直调 + 闭包缓存 | **~0.31s(比 HEAD 快 6×)** |
+
+验收:demo 419/419;stage2/stage3 固定点成立;selfhost ALL PASS;interpreter ALL CHECKS PASS。
+计数器 `; stdchain: hits= cached= nokey= arity= args= written=`,`cached` = 走缓存的调用点数。
