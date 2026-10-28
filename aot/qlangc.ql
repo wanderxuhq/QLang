@@ -59,6 +59,89 @@ let registerStdlibSymbols = (stmts) -> {
   };
   null;
 };
+// 静态派发:std.<模块>.<成员> 链。成员 -> 源绑定名 来自分析(对象化模式来自 interface),
+// 源绑定名 -> 符号/元数 来自 emittedIr(单模块)或 symbols.tsv(对象化)。
+let stdChainTargets = {};
+let stdChainHits = 0;
+let stdChainReject = { nokey: 0, arity: 0, args: 0, written: 0 };
+let stdMembersWritten = false;
+let stdMonoIr = {};
+let stdMonoArity = {};
+let stdSlotScope = null;
+// 单模块模式:库函数是包在 __build_standard_library 里的嵌套 let,所以递归收。
+let collectMonoFns = (stmts) -> {
+  let i = 0;
+  while i < stmts.length {
+    let st = stmts[i];
+    if !isError(st.type) && st.type == "Let" && st.value != null && !isError(st.value.type) && st.value.type == "Function" {
+      if !isError(st.value.emittedIr) {
+        stdMonoIr[st.name] = st.value.emittedIr;
+        stdMonoArity[st.name] = st.value.parameters.length;
+      };
+      if st.value.body != null { collectMonoFns(st.value.body.statements); };
+    };
+    i = i + 1;
+  };
+  null;
+};
+// 由「模块 -> 成员 -> 源绑定名」和「源绑定名 -> 符号/元数」拼出 std 链的直调目标。
+let buildStdChainTargets = (fromObject) -> {
+  let table = stdMemberBindingGet();
+  let mods = std.Object.keys(table);
+  let i = 0;
+  while i < mods.length {
+    let members = table[mods[i]];
+    if !isError(members) {
+      let mk = std.Object.keys(members);
+      let j = 0;
+      while j < mk.length {
+        let name = members[mk[j]];
+        let sym = "";
+        let arity = -1;
+        if fromObject {
+          sym = stdlibSymbolMap[name];
+          let decl = curScope.directFns[name];
+          if !isError(decl) && decl != null && !isError(decl.arity) { arity = decl.arity; };
+        } else {
+          sym = stdMonoIr[name];
+          if !isError(sym) { arity = stdMonoArity[name]; };
+        };
+        if !isError(sym) && sym != "" && !isError(arity) && arity >= 0 {
+          stdChainTargets[mods[i] + "." + mk[j]] = { ir: sym, arity: arity, fast: fastArityFor(name) };
+        };
+        j = j + 1;
+      };
+    };
+    i = i + 1;
+  };
+  null;
+};
+// 用户程序只要写过 std 的成员,整条链的直调证明就作废(保守到整个程序)。
+let stdWriteScan = (node) -> {
+  if node == null || isError(node) { return null; };
+  if AnyArray.check(node) {
+    let i = 0; while i < node.length { stdWriteScan(node[i]); i = i + 1; };
+    return null;
+  };
+  if !AnyObject.check(node) { return null; };
+  let t = node.type;
+  if isError(t) { return null; };
+  if t == "Import" { return null; };
+  if t == "Assign" && node.target != null && !isError(node.target.type) && node.target.type == "MemberAccess" {
+    let root = node.target;
+    while !isError(root.type) && root.type == "MemberAccess" { root = root.object; };
+    if !isError(root.type) && root.type == "Identifier" && root.name == "std" { stdMembersWritten = true; };
+  };
+  let keys = std.Object.keys(node); let i = 0;
+  while i < keys.length {
+    let child = node[keys[i]];
+    if child != null && AnyObject.check(child) { stdWriteScan(child); }
+    else if AnyArray.check(child) { let j = 0; while j < child.length { stdWriteScan(child[j]); j = j + 1; }; };
+    i = i + 1;
+  };
+  null;
+};
+
 let moduleCache = {};
 // Cache emitted module code, never module values or initialization state.
 let moduleFactories = {};
@@ -2196,6 +2279,28 @@ let directCallTarget = (node, cname) -> {
   };
   info;
 };
+// std.<模块>.<成员>(...):成员在库里是某个顶层函数,链解析成功后直接调用它,
+// 跳过 __call 的元数/部分应用/Error 实参分派(env 仍从闭包取)。
+let emitStdChainCall = (node) -> {
+  let callee = node.callee;
+  if isError(callee.type) || callee.type != "MemberAccess" { return null; };
+  let mid = callee.object;
+  if mid == null || isError(mid) || isError(mid.type) || mid.type != "MemberAccess" { return null; };
+  let root = mid.object;
+  if root == null || isError(root) || isError(root.type) || root.type != "Identifier" || root.name != "std" { return null; };
+  let hit = lookupSlot("std");
+  if hit == null || stdSlotScope == null || hit.scope != stdSlotScope { return null; };
+  if stdMembersWritten { stdChainReject.written = stdChainReject.written + 1; return null; };
+  let target = stdChainTargets[mid.field + "." + callee.field];
+  if isError(target) { stdChainReject.nokey = stdChainReject.nokey + 1; return null; };
+  if node.arguments.length != target.arity { stdChainReject.arity = stdChainReject.arity + 1; return null; };
+  if !callArgsCannotBeError(node.arguments) { stdChainReject.args = stdChainReject.args + 1; return null; };
+  let FN = emitExpr(callee);
+  let values = []; let i = 0;
+  while i < node.arguments.length { values.add(emitExpr(node.arguments[i])); i = i + 1; };
+  stdChainHits = stdChainHits + 1;
+  emitDirectCallValue(target.ir, FN, values, target.fast);
+};
 let emitCall = (node) -> {
   let calleeIsId = node.callee.type == "Identifier";
   let cname = if calleeIsId { node.callee.name } else { "" };
@@ -2314,6 +2419,9 @@ let emitCall = (node) -> {
     let number = temp(); line("  " + number + " = sitofp i64 " + result + " to double");
     return emitFloatValue(number);
   };
+  let chain = null;
+  if !calleeIsId { chain = emitStdChainCall(node); };
+  if chain != null { return chain; };
   let direct = null;
   if calleeIsId { direct = directCallTarget(node, cname); };
   if direct != null && !isError(direct.inline) && direct.inline == true {
@@ -2787,6 +2895,7 @@ let emitPrelude = () -> {
 // Nested scopes use ordinary shadowing, assignment and closure capture rules.
 // Imports may replace these bindings without mutating private library bindings.
 let emitModuleStd = () -> {
+  stdSlotScope = curScope;
   let value = emitCallRegs("__fresh_std", []);
   let off = emitBindingPtr({ depth: 0, slot: curScope.slots["std"] });
   emitBindingStore(off, value, "null", "null");
@@ -2854,7 +2963,17 @@ let emitStdlibInit = (runtimeStmts, libraryStmts) -> {
   buildInlineCandidates(libraryStmts);
   allowDirectUserCalls = true;
   let li = 0;
-  while li < libraryStmts.length { emitTopLevelStmt(libraryStmts[li]); li = li + 1; };
+  while li < libraryStmts.length {
+    let stmt = libraryStmts[li];
+    emitTopLevelStmt(stmt);
+    if !isError(stmt.type) && stmt.type == "Let" && stmt.value != null
+       && !isError(stmt.value.type) && stmt.value.type == "Function" && !isError(stmt.value.emittedIr) {
+      stdMonoIr[stmt.name] = stmt.value.emittedIr;
+      stdMonoArity[stmt.name] = stmt.value.parameters.length;
+    };
+    li = li + 1;
+  };
+  collectMonoFns(libraryStmts);
   allowDirectUserCalls = false;
   let libraryBase = emitCallRegs("__fresh_std", []);
   let library = emitCallRegs("__build_standard_library", [libraryBase]);
@@ -2892,6 +3011,21 @@ let writeStdlibInterface = (runtimeProgram, libraryProgram) -> {
       println("DFN " + stmt.name + " " + std.String.toString(stmt.value.parameters.length));
     };
     i = i + 1;
+  };
+  let memberTable = stdMemberBindingGet();
+  let mods = std.Object.keys(memberTable);
+  let mi = 0;
+  while mi < mods.length {
+    let members = memberTable[mods[mi]];
+    if !isError(members) {
+      let mk = std.Object.keys(members);
+      let mj = 0;
+      while mj < mk.length {
+        println("MEM " + mods[mi] + " " + mk[mj] + " " + members[mk[mj]]);
+        mj = mj + 1;
+      };
+    };
+    mi = mi + 1;
   };
   i = 0;
   while i < runtimeProgram.statements.length {
@@ -2953,7 +3087,8 @@ let loadStdlibInterface = (text) -> {
       else if kind == "MC" {
         if isError(stdModuleCalls[cells[1]]) { stdModuleCalls[cells[1]] = {}; };
         stdModuleCalls[cells[1]][cells[2]] = cells[3];
-      };
+      }
+      else if kind == "MEM" { stdMemberBindingSet(cells[1], cells[2], cells[3]); };
     };
     i = i + 1;
   };
@@ -3066,6 +3201,7 @@ let main = (args) -> {
   // 反而少了一层(t62 因此多了 32 条指令)。
   // 计数器在进程启动时就是 0;不能在这里重置 —— 那会把已经跑完的分析阶段清零。
   collectAssignedNames(userProgram.statements, assignedUserNames);
+  stdWriteScan(userProgram.statements);
   if foldEnabled {
     // 折叠还需要 import 名字:导入会覆盖同名槽,不能当成不可变本地函数。
     let foldLets = {};
@@ -3239,6 +3375,7 @@ let main = (args) -> {
   } else {
     emitStdlibInit(program.statements, libraryProgram.statements);
   };
+  buildStdChainTargets(splitStdlibMode);
   line("  call void @__stdlib_init(ptr " + curEnv + ", i32 %argc, ptr %argv)");
   // 初始化函数内部借用了 inRuntime=true(runtime 段),返回后必须回到普通代码路径。
   inRuntime = false;
@@ -3311,6 +3448,7 @@ let main = (args) -> {
   out[out.length] = "; astvisits: walkers=" + std.String.toString(astVisits) + " module=" + std.String.toString(visitBy.module) + " slots=" + std.String.toString(visitBy.slots) + " names=" + std.String.toString(visitBy.names) + " leaf=" + std.String.toString(visitBy.leaf) + " bodylets=" + std.String.toString(visitBy.bodylets);
   out[out.length] = "; constfold:" + foldReport;
   out[out.length] = "; directreject: nohit=" + std.String.toString(directReject.nohit) + " notable=" + std.String.toString(directReject.notable) + " noinfo=" + std.String.toString(directReject.noinfo) + " assigned=" + std.String.toString(directReject.assigned) + " arity=" + std.String.toString(directReject.arity) + " args=" + std.String.toString(directReject.args);
+  out[out.length] = "; stdchain: hits=" + std.String.toString(stdChainHits) + " nokey=" + std.String.toString(stdChainReject.nokey) + " arity=" + std.String.toString(stdChainReject.arity) + " args=" + std.String.toString(stdChainReject.args) + " written=" + std.String.toString(stdChainReject.written);
   let staticLine = knownReportLine();
   if staticLine != "" { out[out.length] = "; staticcall: " + staticLine; };
   // ②a 补充:发射序折扣(同样要等主函数体发完 —— 函数体是在 main 发射过程中才发现并发出的)。

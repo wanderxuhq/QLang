@@ -360,10 +360,13 @@ let typeRuntimePredicates = {
 // 将来也包括用户模块的导出。成员类型只在该模块值静态可见(对象字面量)时才有,所以工厂
 // 产出的模块其成员仍是未知 —— 这是可知性限制,不是特权。
 let stdLetValues = {};     // 绑定名 -> 其值节点(判断模块值的种类)
-let stdFieldCall = {};     // 绑定名 -> { 成员 -> 成员函数返回类型 }(静态可见的对象字面量)
+let stdFieldCall = {};
+let stdFieldMember = {};   // 模块对象绑定名 -> { 成员 -> 源绑定名 }     // 绑定名 -> { 成员 -> 成员函数返回类型 }(静态可见的对象字面量)
 let stdFieldValue = {};    // 绑定名 -> { 成员 -> 成员值类型 }
 let stdModuleType = {};    // 模块名 -> 导出值的类型(Object/Function/"")
 let stdModuleCalls = {};   // 模块名 -> { 成员 -> 成员函数返回类型 }
+// 模块名 -> { 成员 -> 源绑定名 }:静态派发靠它把 std.M.f 解析到库里那个函数。
+let stdModuleMemberBinding = {};
 let stdModuleValues = {};  // 模块名 -> { 成员 -> 成员值类型 }
 let stdValueBinds = {};    // 库内顶层绑定名 -> 其值节点(用于识别函数成员)
 // 命中数:能解析成已知类型的 std.<模块>.<成员> 有多少,解析不出的有多少(按程序)。
@@ -393,7 +396,7 @@ let stdScanLet = (node) -> {
   if isError(node.type) || node.type != "Let" || node.value == null { return null; };
   stdLetValues[node.name] = node.value;
   if !isError(node.value.type) && node.value.type == "Object" {
-    let callMap = {}; let valueMap = {}; let fieldIndex = 0;
+    let callMap = {}; let valueMap = {}; let memberMap = {}; let fieldIndex = 0;
     while fieldIndex < node.value.fields.length {
       let field = node.value.fields[fieldIndex];
       let fv = field.value;
@@ -401,6 +404,7 @@ let stdScanLet = (node) -> {
         let target = stdValueBinds[fv.name];
         if !isError(target) && !isError(target.type) && target.type == "Function" {
           if !isError(target.returnType) && target.returnType != "" { callMap[field.name] = target.returnType; };
+          memberMap[field.name] = fv.name;
         } else if !isError(target) { valueMap[field.name] = target.staticType; };
       } else if !isError(fv.staticType) && fv.staticType != "" {
         valueMap[field.name] = fv.staticType;
@@ -409,6 +413,7 @@ let stdScanLet = (node) -> {
     };
     stdFieldCall[node.name] = callMap;
     stdFieldValue[node.name] = valueMap;
+    stdFieldMember[node.name] = memberMap;
   } else if !isError(node.value.type) && node.value.type == "Function" {
     stdValueBinds[node.name] = node.value;
   };
@@ -473,11 +478,49 @@ let stdScanExports = (node, isTail) -> {
   };
   null;
 };
+// 只收「模块 -> 成员 -> 源绑定名」,不动类型表。导出表在包的包装函数
+// `let __build_standard_library = (std) -> { ...; {String: StringLibrary, ...}; }` 的
+// 尾值里,所以要像 stdScanLet 一样递归进函数体。
+let stdScanExportMembersOnly = (node) -> {
+  if isError(node) || node == null { return null; };
+  if AnyArray.check(node) {
+    let i = 0; while i < node.length { stdScanExportMembersOnly(node[i]); i = i + 1; };
+    return null;
+  };
+  if !AnyObject.check(node) { return null; };
+  let t = node.type;
+  if isError(t) { return null; };
+  if t == "Object" {
+    let fields = node.fields; let j = 0;
+    while j < fields.length {
+      let fv = fields[j].value;
+      if !isError(fv.type) && fv.type == "Identifier" {
+        let members = stdFieldMember[fv.name];
+        if !isError(members) {
+          let moduleName = fields[j].name;
+          if isError(stdModuleMemberBinding[moduleName]) { stdModuleMemberBinding[moduleName] = {}; };
+          let mk = std.Object.keys(members); let mv = 0;
+          while mv < mk.length { stdModuleMemberBinding[moduleName][mk[mv]] = members[mk[mv]]; mv = mv + 1; };
+        };
+      };
+      j = j + 1;
+    };
+    return null;
+  };
+  if t == "Let" && node.value != null && !isError(node.value.type) && node.value.type == "Function"
+     && node.value.body != null {
+    let i = 0;
+    while i < node.value.body.statements.length { stdScanExportMembersOnly(node.value.body.statements[i]); i = i + 1; };
+  };
+  null;
+};
 let buildStdTypes = (stmts) -> {
   let i = 0;
   while i < stmts.length { stdScanLet(stmts[i]); i = i + 1; };
   i = 0;
   while i < stmts.length { stdScanExports(stmts[i], false); i = i + 1; };
+  i = 0;
+  while i < stmts.length { stdScanExportMembersOnly(stmts[i]); i = i + 1; };
   null;
 };
 
@@ -1424,6 +1467,14 @@ export typeResetVisits;
 export typeSafeReturnReport;
 // 标准库分析接口:对象化模式下由缓存的 interface 文本装载(qlangc 侧读写同一份表)。
 export stdModuleType;
+let stdMemberBindingSet = (moduleName, member, name) -> {
+  if isError(stdModuleMemberBinding[moduleName]) { stdModuleMemberBinding[moduleName] = {}; };
+  stdModuleMemberBinding[moduleName][member] = name;
+  null;
+};
+let stdMemberBindingGet = () -> stdModuleMemberBinding;
+export stdMemberBindingSet;
+export stdMemberBindingGet;
 export stdModuleValues;
 export stdModuleCalls;
 export typeRepPrograms;

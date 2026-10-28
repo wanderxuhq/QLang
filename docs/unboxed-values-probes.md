@@ -1429,3 +1429,25 @@ arity/部分应用;这与 "hosting runtime 的派发器拥有 arity 与 Error �
 
 教训:对象化(split)模式有两个前提 —— 链接给对象,**编译也要给接口**;只给一半,症状会伪装成
 「代码生成发出了重复符号」。
+
+## 57. `std.<模块>.<成员>` 链直调(2026-10-28)
+
+**做法**:分析期把「模块 → 成员 → 源绑定名」收下来(库的导出表在包的包装函数
+`let __build_standard_library = (std) -> { ...; {String: StringLibrary, Math: MathLibrary, ...}; }`
+的尾值里,必须递归进函数体才看得到);发射期把它和「源绑定名 → 符号/元数」拼成目标表,
+`std.M.f(...)` 命中就用库函数的装箱入口直调 —— 签名正好是 `(ptr env, ptr args, i64 n, %ql_value ann)`,
+与对象化模式 `declare %ql_value @ql_fnN(ptr, ptr, i64, %ql_value)` 一致。
+
+**门槛**(全成立才发):链根必须是模块级 `std`(没被遮蔽)、该路径没被cfg写、实参个数等于元数、
+实参已证不可能为 Error。计数器 `; stdchain: hits= nokey= arity= args= written=`。
+
+**命中数**:`std.Math.sqrt` / `std.Math.pow` 这类「成员是标识符绑定」的命中;
+`std.Object.keys`、`std.String.length` 这类**成员是内联 lambda** 的仍是 `nokey`(它们没有名字,
+也就没有可调的符号 —— 这是下一片:让对象构建时给匿名函数也发符号)。
+
+| 指标 | 之前 | 之后 |
+|---|---|---|
+| `t41_math_library` 机器指令 | 138,002 | **136,925(−1,077,−0.78%)** |
+
+验收:demo/type_gymnastics 419/419;stage2/stage3 固定点成立;selfhost 套件 ALL PASS;
+interpreter 套件 ALL CHECKS PASS。
