@@ -10,6 +10,7 @@ import ./lifetime.ql;
 import ./types.ql;
 import ./value_abi.ql;
 import ./fold.ql;
+import ./known_values.ql;
 import ../bootstrapped/library.ql;
 
 // Static graph loading reads source only; module initialization stays in the ELF.
@@ -2953,13 +2954,18 @@ let loadStdlibInterface = (text) -> {
 let main = (args) -> {
   // `--fold` 是独立选项(AST 级常量折叠),不属于 codegen;默认关闭。
   let foldEnabled = false;
+  // `--static-scan` 只做统计(静态派发候选/拒绝原因),不改发射;默认关闭。
+  let staticScan = false;
   let keptArgs = [];
   let argIndex = 0;
   while argIndex < args.length {
-    if args[argIndex] == "--fold" { foldEnabled = true; } else { keptArgs[keptArgs.length] = args[argIndex]; };
+    if args[argIndex] == "--fold" { foldEnabled = true; }
+    else if args[argIndex] == "--static-scan" { staticScan = true; }
+    else { keptArgs[keptArgs.length] = args[argIndex]; };
     argIndex = argIndex + 1;
   };
   args = keptArgs;
+  staticScanSet(staticScan);
   let interfaceDump = args.length == 2 && args[0] == "--emit-stdlib-interface";
   splitStdlibMode = args.length == 5 && args[0] == "--emit-llvm-split";
   if args.length != 3 && !splitStdlibMode && !interfaceDump { return std.Error.raise("CompileError", "usage: qlangc --emit-llvm|--emit-module source.ql runtime.ql", null); };
@@ -3029,12 +3035,14 @@ let main = (args) -> {
     libraryProgram = parseStandardLibrary()?;
     typeSetStdNamespace(true);
     inferTypes(libraryProgram.statements);
+    knownScan(libraryProgram.statements, "library");
     typeSetStdNamespace(false);
     buildStdTypes(libraryProgram.statements);
   };
   if interfaceDump { writeStdlibInterface(program, libraryProgram); return null; };
   typeSetCallSafety(true);
   let typeErrs = inferTypes(userProgram.statements);
+  knownScan(userProgram.statements, "user");
   typeSetCallSafety(false);
   let typePaths = std.Object.keys(moduleCache); let typeIndex = 0;
   // Entry 也在 moduleCache 里,但上面已作为 userProgram 分析过;重复分析会重置
@@ -3295,6 +3303,8 @@ let main = (args) -> {
   out[out.length] = "; astvisits: walkers=" + std.String.toString(astVisits) + " module=" + std.String.toString(visitBy.module) + " slots=" + std.String.toString(visitBy.slots) + " names=" + std.String.toString(visitBy.names) + " leaf=" + std.String.toString(visitBy.leaf) + " bodylets=" + std.String.toString(visitBy.bodylets);
   out[out.length] = "; constfold:" + foldReport;
   out[out.length] = "; directreject: nohit=" + std.String.toString(directReject.nohit) + " notable=" + std.String.toString(directReject.notable) + " noinfo=" + std.String.toString(directReject.noinfo) + " assigned=" + std.String.toString(directReject.assigned) + " arity=" + std.String.toString(directReject.arity) + " args=" + std.String.toString(directReject.args);
+  let staticLine = knownReportLine();
+  if staticLine != "" { out[out.length] = "; staticcall: " + staticLine; };
   // ②a 补充:发射序折扣(同样要等主函数体发完 —— 函数体是在 main 发射过程中才发现并发出的)。
   out[out.length] = "; rawABI order: usercalls=" + std.String.toString(ordCallsTotal) + " emitted=" + std.String.toString(ordCallsEmitted) + " notyet=" + std.String.toString(ordCallsNotYet) + " retraw=" + std.String.toString(ordCallsRetRaw) + " direct=" + std.String.toString(directCalls) + " inline=" + std.String.toString(inlineUsed) + " rawcalls=" + std.String.toString(rawCalls) + " rawfuncs=" + std.String.toString(rawFuncs) + " rawretcalls=" + std.String.toString(rawDoubleCalls) + " rawretfuncs=" + std.String.toString(rawDoubleReturns);
   // R10-c: out[0..mainAt) = prelude plus the cold helper, then every function body,
