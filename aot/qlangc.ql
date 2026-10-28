@@ -3012,8 +3012,10 @@ let isArrayIndexFast = (node) -> {
     && !isError(node.index.cannotBeError) && node.index.cannotBeError == true;
 };
 let emitArrayIndexFast = (container, index) -> {
+  // 语言 tag 要用 ql_word 取(%ql_value 的内层 tag 对指针值是 0,不是语言 tag 5)——
+  // 之前这里取的是内层 tag,和 5 比较恒假,整条快路径成了死代码。
   let tag = temp(); let isArray = temp();
-  line("  " + tag + " = extractvalue %ql_value " + container + ", 0");
+  line("  " + tag + " = call i64 @ql_word(%ql_value " + container + ", i64 0)");
   line("  " + isArray + " = icmp eq i64 " + tag + ", 5");
   let payload = temp(); let obj = temp();
   line("  " + payload + " = extractvalue %ql_value " + container + ", 1");
@@ -3023,9 +3025,8 @@ let emitArrayIndexFast = (container, index) -> {
   line("  " + at + " = call i64 @llvm.fptosi.sat.i64.f64(double " + double + ")");
   line("  " + back + " = sitofp i64 " + at + " to double");
   line("  " + integral + " = fcmp oeq double " + back + ", " + double);
-  let lenp = temp(); let len = temp();
-  line("  " + lenp + " = getelementptr i8, ptr " + obj + ", i64 16");
-  line("  " + len + " = load i64, ptr " + lenp);
+  let len = temp();
+  line("  " + len + " = call i64 @ql_word(%ql_value " + container + ", i64 16)");
   let inRange = temp(); let canRead = temp(); let fits = temp();
   line("  " + inRange + " = icmp ult i64 " + at + ", " + len);
   line("  " + fits + " = and i1 " + isArray + ", " + integral);
