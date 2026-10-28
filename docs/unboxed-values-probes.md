@@ -1890,3 +1890,18 @@ stage2 --emit-llvm --stdlib-object target/stdlib/<key> prog.ql runtime.ql > prog
 
 **注意**:手动用 `-O1 -flto=thin` 时链接只有 9.6s、CPU 0.556s —— 对这个 bench 而言 `-O1` LTO
 比 `-O2` LTO **又快又稳**。下一轮把 LTO 的默认优化级别定为 O1(`--lto` 时),再用 bench 套件复测。
+
+## 76. LTO 默认优化级别定为 O1(2026-10-29)
+
+`--lto` 现在单独走自己的优化级别(`--lto-opt`,默认 **1**),不再复用 `--opt`:
+
+| 配置 | 链接 | b_chars 运行 CPU |
+|---|---|---|
+| `-O2 -flto=thin` | 15.1s | 0.764s |
+| **`-O1 -flto=thin`(新默认)** | **10.6s** | **0.653s** |
+
+整条 bench 套件在 `--split --lto` 下的前端时间:**0.14–0.44s/个**(单模块是 8–16s),
+运行 CPU 与单模块持平(b_chars 0.588–0.653 vs 0.596–0.634)。
+
+注意:bench 表里的 `clang(s)` 列是**指令计数**用的 `clang -O2 -S`(只扫用户模块),
+不是 LTO 链接时间;端到端要额外加 ~10.6s 的链接。

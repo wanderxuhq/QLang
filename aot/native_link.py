@@ -212,7 +212,7 @@ def stdlib_bitcode(stdlib_object):
 
 
 def link(ir, binary, opt=2, timeout=600, clang='clang', shared=False, stdlib_object=None,
-         lto=False):
+         lto=False, lto_opt=1):
     if stdlib_object is None:
         stdlib_object = os.environ.get('QLANG_STDLIB_OBJECT')
     if lto:
@@ -266,7 +266,9 @@ def link(ir, binary, opt=2, timeout=600, clang='clang', shared=False, stdlib_obj
         else:
             inputs = [str(ir), '-shared', '-fPIC'] if shared else [str(ir), str(ROOT / 'aot/runtime.c'), '-Wl,--export-dynamic', '-ldl']
         lto_flags = ['-flto=thin'] if lto else []
-        subprocess.run([str(clang), f'-O{opt}', *lto_flags, '-fuse-ld=lld', '-Wl,--threads=1',
+        # LTO 的优化级别单独给:实测 -O1 的跨模块内联对这个代码形状已经够,-O2 只会更慢。
+        level = lto_opt if lto else opt
+        subprocess.run([str(clang), f'-O{level}', *lto_flags, '-fuse-ld=lld', '-Wl,--threads=1',
                         *inputs, '-o', str(candidate)],
                        cwd=ROOT, check=True, timeout=timeout)
         count = validate(ir, candidate, extra_ir=stdlib_ir, lto=lto)
@@ -282,6 +284,8 @@ def main():
     parser.add_argument('--shared', action='store_true', help='link a QLang extension without a second runtime')
     parser.add_argument('--stdlib-object', type=Path,
                         help='link a precompiled runtime/stdlib object (see aot/stdlib_split.py)')
+    parser.add_argument('--lto-opt', type=int, default=1, choices=range(4),
+                        help='optimization level for the LTO link (default 1: measured faster and no slower here)')
     parser.add_argument('--lto', action='store_true',
                         help='link the stdlib as LLVM bitcode with ThinLTO (needs stdlib.ll next to the object)')
     parser.add_argument('--check-only', action='store_true', help='validate an existing ELF without linking')
@@ -292,7 +296,8 @@ def main():
         else:
             stdlib_object = options.stdlib_object or os.environ.get('QLANG_STDLIB_OBJECT')
             count = link(options.ir, options.output, options.opt, shared=options.shared,
-                         stdlib_object=stdlib_object, lto=options.lto)
+                         stdlib_object=stdlib_object, lto=options.lto,
+                         lto_opt=options.lto_opt)
     except (OSError, LinkError, subprocess.SubprocessError) as error:
         print(f'LinkError: {error}', file=sys.stderr)
         return 1
