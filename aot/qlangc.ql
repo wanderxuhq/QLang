@@ -854,6 +854,15 @@ let emitCoalesce = (node) -> {
 // 二元运算:M3 R1 双路径 —— 静态两侧均为 Number 字面量 → 内联 emitNumOp;否则运行期
 // tag 检查,双 NUMBER → 内联数值路径,否则按 op 派发 __op_add/__op_eq/__op_ne/__op_zone_error。
 // && / || 不走这里 —— 先在顶部截获走 emitShortCircuit(短路,避免无条件先求值右操作数)。
+// 「运行期是不是 Number/String」:标量值的 kind 就是 %ql_value 的内层 tag
+// (Number=1、String=2……),对象值才是 kind 0 + 对象头。所以按内层 tag 判等价比调
+// @ql_tag 便宜(后者对 kind==0 还要分支去读对象头),且对这两类等价。
+let emitKindIs = (v, kind) -> {
+  let k = temp(); let c = temp();
+  line("  " + k + " = extractvalue %ql_value " + v + ", 0");
+  line("  " + c + " = icmp eq i64 " + k + ", " + std.String.toString(kind));
+  c;
+};
 let emitBinaryOp = (node) -> {
   if node.operator == "&&" || node.operator == "||" {
     emitShortCircuit(node);
@@ -885,6 +894,7 @@ let emitBinaryOp = (node) -> {
           let lStr = !isError(node.left.staticType) && node.left.staticType == "String";
           let S = if lStr { L } else { R };
           let O = if lStr { R } else { L };
+          // String 是堆对象(kind 0 + 对象头 tag 2),不能用内层 kind 判;Number 才是标量 kind 1。
           let t = temp(); let isStr = temp();
           line("  " + t + " = call i64 @ql_tag(%ql_value " + O + ")");
           line("  " + isStr + " = icmp eq i64 " + t + ", 2");
@@ -907,10 +917,7 @@ let emitBinaryOp = (node) -> {
       let cond = "1";
       if knownL {
         if !knownR {
-          let t2 = temp(); let c2 = temp();
-          line("  " + t2 + " = call i64 @ql_tag(%ql_value " + R + ")");
-          line("  " + c2 + " = icmp eq i64 " + t2 + ", 1");
-          cond = c2;
+          cond = emitKindIs(R, 1);
         };
       } else if knownR {
         let t1 = temp(); let c1 = temp();
