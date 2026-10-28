@@ -1696,3 +1696,30 @@ tag==5 才解引用 `payload+8` 取数据指针)。
 `run_interpreter_tests` 里那份重复的 `_use_stdlib_object` 删掉,直接从 `run_selfhost_tests` 导入。
 验收:selfhost 与 interpreter 套件都 ALL PASS;`QLANG_STDLIB_OBJECT/SYMBOLS/INTERFACE` 指向
 `target/stdlib/<key>/`。至此**构建路径上不再有 Python**,Python 只剩测试驱动与两个回落分支。
+
+## 68. t38「provenance survives allocations」的进一步诊断(2026-10-29,未修)
+
+`run_runtime_diagnostic_tests` 的 `t38:38` 仍红。最小复现(不依赖 t38 的其它断言):
+
+```qlang
+let zero = 0;
+let direct = 1 / zero;          // Error,line 3
+let chained = direct + 1;       // 链式 Error
+println(isError(chained));      // false  ← 不是 Error?
+println(chained.type);          // 一个 Error(UndefinedField)
+println(chained.cause.line);    // 7(应是 3)
+let i = 0; while i < 30000 { let garbage = [i, {n: i}]; i = i + 1; };
+println(chained.cause.line);    // 11  ← 又变了
+```
+
+三个现象:
+1. `isError(chained)` 是 **false**,但 `chained.cause` 存在 —— 链式错误的对象**没有被认成 Error**
+   (`ql_tag`/tag 8 那条路)。
+2. `chained.cause.line` 一开始是 **7**(不是来源行 3),经过 3 万次分配后变成 **11** ——
+   cause 的定位字段会被**后续读取所在的行**改写,不是「分配导致丢 provenance」。
+3. `chained.type` 是 UndefinedField —— 它没有 Error 的字段布局。
+
+所以 handoff 里把它记成「cause provenance 真 bug(runtime.ql:97-120 的守卫)」不够准确:
+先要看**链式错误的构造点**(算术遇到 Error 时生成的那个值)到底建的是什么对象。
+下一步:`emitBinaryOp` 里 Error 操作数的链式错误路径 + `__err_chain`/`__err_new`,核对字段
+布局与 tag;修好之后 `isError(chained)` 与 cause 的定位应同时正确,`t38:38` 才可能转绿。
