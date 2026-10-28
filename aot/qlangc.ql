@@ -1620,11 +1620,22 @@ let emitLetStmt = (node) -> {
         curScope.directFns[node.name] = { inline: true, arity: inline.arity, params: inline.params, body: inline.body };
       } else if rawInfo != null && !isError(node.value.rawDirect) && node.value.rawDirect == true {
         curScope.directFns[node.name] = { raw: true, ir: node.value.emittedIr, arity: node.value.parameters.length, rawRet: !isError(node.value.returnsNumberSafe) && node.value.returnsNumberSafe == true };
-      } else if !isError(node.value.emittedIr) && node.value.directNoParamAnnotations == true {
-        // 装箱直调不需要 leaf 条件(那是 raw ABI 的判据):只要形参没有注解
-        // (分派器负责的检查因此不会丢)、实参不可能为 Error、元数精确即可。
+      } else if !isError(node.value.emittedIr) {
+        // 装箱直调不需要 leaf(那是 raw ABI 的判据)。形参注解不再一票否决:
+        // 每个带注解的形参记下注解名,调用点只有当实参静态类型恰好等于它
+        // (分派器那次检查必然通过)时才直调,否则回落 __call —— 语义不变。
+        let anns = [];
+        let pi = 0;
+        while pi < node.value.parameters.length {
+          let ann = node.value.parameters[pi].annotation;
+          let nm = "";
+          if ann != null && !isError(ann) && !isError(ann.type) && ann.type == "Identifier"
+             && !isError(typeBuiltins[ann.name]) { nm = ann.name; };
+          anns[anns.length] = nm;
+          pi = pi + 1;
+        };
         curScope.directFns[node.name] = { ir: node.value.emittedIr, arity: node.value.parameters.length,
-                                          fast: fastArityFor(node.name) };
+                                          fast: fastArityFor(node.name), anns: anns };
       };
     };
   };
@@ -2313,7 +2324,7 @@ let rawCallArgsOk = (args) -> {
   };
   true;
 };
-let directReject = { nohit: 0, notable: 0, noinfo: 0, assigned: 0, arity: 0, args: 0 };
+let directReject = { nohit: 0, notable: 0, noinfo: 0, assigned: 0, arity: 0, args: 0, ann: 0 };
 let directCallTarget = (node, cname) -> {
   if !allowDirectUserCalls || inRuntime || inColdHelper { return null; };
   let hit = lookupSlot(cname);
@@ -2325,6 +2336,23 @@ let directCallTarget = (node, cname) -> {
   if !isError(assignedUserNames[cname]) && assignedUserNames[cname] == true { directReject.assigned = directReject.assigned + 1; return null; };
   if node.arguments.length != info.arity { directReject.arity = directReject.arity + 1; return null; };
   if !callArgsCannotBeError(node.arguments) { directReject.args = directReject.args + 1; return null; };
+  // 形参注解:只有实参静态类型恰好是那个内建类型,分派器那次检查才必然通过。
+  if !isError(info.anns) {
+    let ai = 0;
+    while ai < info.anns.length {
+      let want = info.anns[ai];
+      if want != "" {
+        let argNode = node.arguments[ai];
+        // `&&`/`||` 会被盖成 Boolean 但实际返回操作数(AGENTS §7.1):静态类型
+        // 在这里不可信,带注解的形参一律回落 __call 去查。
+        let unsafeStamp = !isError(argNode.type) && argNode.type == "BinaryOp"
+          && (argNode.operator == "&&" || argNode.operator == "||");
+        let got = argNode.staticType;
+        if unsafeStamp || isError(got) || got != want { directReject.ann = directReject.ann + 1; return null; };
+      };
+      ai = ai + 1;
+    };
+  };
   // A raw target has no boxed entry at all; a call site that cannot prove
   // Number arguments would be unrepresentable, so it is a compile error rather
   // than a silent fallback (the candidate scan makes this unreachable).
@@ -3503,7 +3531,7 @@ let main = (args) -> {
   out[out.length] = "; index-fast: " + std.String.toString(arrayIndexFastSites);
   out[out.length] = "; astvisits: walkers=" + std.String.toString(astVisits) + " module=" + std.String.toString(visitBy.module) + " slots=" + std.String.toString(visitBy.slots) + " names=" + std.String.toString(visitBy.names) + " leaf=" + std.String.toString(visitBy.leaf) + " bodylets=" + std.String.toString(visitBy.bodylets);
   out[out.length] = "; constfold:" + foldReport;
-  out[out.length] = "; directreject: nohit=" + std.String.toString(directReject.nohit) + " notable=" + std.String.toString(directReject.notable) + " noinfo=" + std.String.toString(directReject.noinfo) + " assigned=" + std.String.toString(directReject.assigned) + " arity=" + std.String.toString(directReject.arity) + " args=" + std.String.toString(directReject.args);
+  out[out.length] = "; directreject: nohit=" + std.String.toString(directReject.nohit) + " notable=" + std.String.toString(directReject.notable) + " noinfo=" + std.String.toString(directReject.noinfo) + " assigned=" + std.String.toString(directReject.assigned) + " arity=" + std.String.toString(directReject.arity) + " args=" + std.String.toString(directReject.args) + " ann=" + std.String.toString(directReject.ann);
   out[out.length] = "; stdchain: hits=" + std.String.toString(stdChainHits) + " nokey=" + std.String.toString(stdChainReject.nokey) + " arity=" + std.String.toString(stdChainReject.arity) + " args=" + std.String.toString(stdChainReject.args) + " written=" + std.String.toString(stdChainReject.written);
   let staticLine = knownReportLine();
   if staticLine != "" { out[out.length] = "; staticcall: " + staticLine; };

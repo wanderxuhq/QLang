@@ -1454,6 +1454,7 @@ let typeRepPrograms = () -> typeProgram;
 let typeBindsUnknown = () -> typeUnknownBinds;
 let typeParamsUnknown = () -> typeUnknownParams;
 
+export typeBuiltins;
 export inferTypes;
 export buildStdTypes;
 export isStaticNumber;
