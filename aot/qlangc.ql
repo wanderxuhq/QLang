@@ -1470,14 +1470,65 @@ let emitInlineDirect = (info, values) -> {
 
 // Frames reserve slots ahead of time, but declarations become visible in
 // source order. An all-zero internal value is binding state, never QLang null.
-let emitFrame = (parent, count, local) -> {
+// 值表达式里是否出现函数字面量(可能捕获当前帧 ⇒ 需要零初始化才能保留未初始化语义)
+let exprHasFunction = (node) -> {
+  if node == null || isError(node) { return false; };
+  if AnyArray.check(node) {
+    let i = 0; while i < node.length { if exprHasFunction(node[i]) { return true; }; i = i + 1; };
+    return false;
+  };
+  if !AnyObject.check(node) { return false; };
+  let t = node.type;
+  if isError(t) { return false; };
+  if t == "Function" { return true; };
+  if t == "Import" { return false; };
+  let keys = std.Object.keys(node); let i = 0;
+  while i < keys.length {
+    let child = node[keys[i]];
+    if child != null && AnyObject.check(child) { if exprHasFunction(child) { return true; }; }
+    else if AnyArray.check(child) { let j = 0; while j < child.length { if exprHasFunction(child[j]) { return true; }; j = j + 1; }; };
+    i = i + 1;
+  };
+  false;
+};
+// 这一层作用域的栈帧需不需要清零:
+//  · 有没初始化的 `let`(读它要能认出 Uninitialized)⇒ 需要;
+//  · 有嵌套函数字面量(可能捕获本帧、在赋值前被调用)⇒ 需要;
+//  · 有 import(模块名是 optional 绑定,读之前靠 ql_empty 判空)⇒ 需要。
+// 否则槽位只会在写入之后被读,清零是纯开销 —— 小热函数每次调用都要 memset 几百字节。
+let frameNeedsZero = (stmts) -> {
+  if stmts == null || isError(stmts) { return true; };
+  let i = 0;
+  while i < stmts.length {
+    let st = stmts[i];
+    if st == null || isError(st) { return true; };
+    let t = st.type;
+    if isError(t) { return true; };
+    if t == "Import" || t == "Function" { return true; };
+    if t == "Let" {
+      if st.value == null || isError(st.value) { return true; };
+      if exprHasFunction(st.value) { return true; };
+    };
+    if t == "Assign" && exprHasFunction(st.value) { return true; };
+    if t == "If" {
+      let bi = 0;
+      while bi < st.branches.length { if frameNeedsZero(st.branches[bi].body) { return true; }; bi = bi + 1; };
+      if st.elseBody != null && frameNeedsZero(st.elseBody) { return true; };
+    };
+    if t == "While" && frameNeedsZero(st.body) { return true; };
+    if t == "Block" && frameNeedsZero(st.statements) { return true; };
+    i = i + 1;
+  };
+  false;
+};
+let emitFrame = (parent, count, local, zero) -> {
   let frame = null; let np = temp();
   if local {
     frame = stackSlot(16 + 64 * count);
     line("  call void @llvm.lifetime.start.p0(i64 " + std.String.toString(16 + 64 * count) + ", ptr " + frame + ")");
   }
   else { frame = temp(); line("  " + frame + " = call ptr @ql_alloc(i64 " + std.String.toString(16 + 64 * count) + ")"); };
-  line("  call void @llvm.memset.p0.i64(ptr " + frame + ", i8 0, i64 " + std.String.toString(16 + 64 * count) + ", i1 false)");
+  if zero { line("  call void @llvm.memset.p0.i64(ptr " + frame + ", i8 0, i64 " + std.String.toString(16 + 64 * count) + ", i1 false)"); };
   line("  store ptr " + parent + ", ptr " + frame);
   line("  " + np + " = getelementptr i8, ptr " + frame + ", i64 8");
   line("  store i64 " + std.String.toString(count) + ", ptr " + np);
@@ -1964,7 +2015,7 @@ let emitFunction = (node, name, rawDirect) -> {
   line(""); // Filled after emission with fixed entry-block stack slots.
   curLbl = "entry";
   let localFrame = !lifetimeMayCapture(node.body.statements);
-  let f = emitFrame("%env", n, localFrame);
+  let f = emitFrame("%env", n, localFrame, isModule || frameNeedsZero(node.body.statements));
   curEnv = f;
   let a = 0;
   while a < k {
@@ -2172,7 +2223,7 @@ let emitScopedBlock = (stmts) -> {
     result = emitBlockStmts(stmts);
   } else {
     let localFrame = !lifetimeMayCapture(stmts);
-    let frame = emitFrame(savedEnv, n, localFrame);
+    let frame = emitFrame(savedEnv, n, localFrame, frameNeedsZero(stmts));
     curEnv = frame;
     result = emitBlockStmts(stmts);
     if localFrame { line("  call void @llvm.lifetime.end.p0(i64 " + std.String.toString(16 + 64 * n) + ", ptr " + frame + ")"); };
@@ -3568,7 +3619,7 @@ let main = (args) -> {
   let modulePaths = std.Object.keys(moduleCache); let moduleIndex = 0;
   while moduleIndex < modulePaths.length { defineSlot("$loading:" + modulePaths[moduleIndex]); moduleIndex = moduleIndex + 1; };
   runtimeScope = curScope;
-  curEnv = emitFrame("null", std.Object.keys(curScope.slots).length, false);
+  curEnv = emitFrame("null", std.Object.keys(curScope.slots).length, false, true);
   inRuntime = true;
   moduleIndex = 0;
   while moduleIndex < modulePaths.length { emitSetModuleLoading(modulePaths[moduleIndex], false); moduleIndex = moduleIndex + 1; };
@@ -3604,7 +3655,7 @@ let main = (args) -> {
   reserveModuleBindings(userProgram.statements);
   reserveModuleGlobals();
   prepareStdCache(userProgram.statements);
-  curEnv = emitFrame(parent, std.Object.keys(curScope.slots).length, false);
+  curEnv = emitFrame(parent, std.Object.keys(curScope.slots).length, false, true);
   emitModuleStd();
   emitStdCacheInit();
   moduleExportsReg = emitObjectExpr({ fields: [] });
