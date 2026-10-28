@@ -806,7 +806,7 @@ overhead.
 | `Never` | always `false` (bottom type) |
 | `Error` | value is an error value (`isError`); its member `raise` builds error values (see [Error values](#error-values)) |
 | `std.Type` | "is `v` a type value?" — one object with two identities: type value and module (below) |
-| `Array` / `Object` | **type constructors** (functions), not type values themselves; `Array(Number)` builds an array type (below) |
+| `Array` | a **placeholder name** only (not a type, not a constructor); array types come from `AnyArray`, `SizedArray(n)`, `TypedArray(T)`, `TypedSizedArray(n, T)` or `Tuple([...])` |
 
 ### std.Type (module and type value)
 
@@ -902,7 +902,7 @@ z = "a"                       //   → TypeCheck error value
 
 - The annotation is a **full expression**, evaluated where it appears:
   `Number`, `Error`, `std.Type.make(...)`, `Vect(3)`, `Union(A, B)`,
-  `Array(Number)`, `Array(3)`, `Object({name: String})` are all valid.
+  `TypedArray(Number)`, `SizedArray(3)`, `TypedSizedArray(3, Number)`, `Object({name: String})` are all valid.
 - Checking fires only at the three trigger points; a failed check produces a
   `TypeCheck` error value (below), never a crash.
 - A declaration without an initializer is allowed: `let x;` (no annotation) or

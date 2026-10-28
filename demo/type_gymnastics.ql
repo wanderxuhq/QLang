@@ -95,7 +95,7 @@ let Partial = (desc) -> {
     ok;
   });
 };
-let NamedArray = (desc) -> Array({ length: desc.length, element: desc.element });
+let NamedArray = (desc) -> TypedSizedArray(desc.length, desc.element);
 
 // --- key-dependent type (Object((obj) -> bool), spec §3) ---
 let has = (o, k) -> !isError(o[k]);
@@ -161,7 +161,7 @@ let Vect = (n, T) -> std.Type.make((v) -> {
   };
 });
 let Matrix = (r, c, T) -> Vect(r, Vect(c, T));
-let TupleOf = (ts) -> Array(ts);
+let TupleOf = (ts) -> Tuple(ts);
 let Shape = (v) -> {
   let tv = std.Type.of(v);
   if tv == Number || tv == String || tv == Boolean {
@@ -171,7 +171,7 @@ let Shape = (v) -> {
       Null;
     } else {
       if tv == AnyArray {
-        if v.length == 0 { AnyArray; } else { Array({ length: v.length, element: Shape(v[0]) }); };
+        if v.length == 0 { AnyArray; } else { TypedSizedArray(v.length, Shape(v[0])); };
       } else {
         if tv == AnyObject {
           let out = {};
@@ -217,7 +217,7 @@ let ServerConfig = Record({
   host: String,
   vector: Vect(3, Number),
   matrix: Matrix(2, 2, Number),
-  routes: Array(Record({ path: String, method: String })),
+  routes: TypedArray(Record({ path: String, method: String })),
   middleware: Optional(String)
 });
 
@@ -299,7 +299,7 @@ assert("cfgShape.routes rejects bad method", !cfgShape["routes"].check([{ path: 
 let route0 = goodCfg["routes"][0];            // {path:"/api", method:"GET"}
 let routeElemDesc = Shape(route0);            // {path: String, method: String}
 let RouteType = Record(routeElemDesc);
-let RouteArray = Array(RouteType);
+let RouteArray = TypedArray(RouteType);
 assert("route array good", RouteArray.check([{ path: "/a", method: "GET" }]));
 assert("route array empty ok", RouteArray.check([]));
 assert("route array bad method", !RouteArray.check([{ path: "/a", method: 42 }]));
@@ -339,7 +339,7 @@ chapterStart(5, "Combination storm (deep water)");
 
 // --- deep water 1: recursive type constructors ---
 let DeepArray = (depth, T) -> {
-  if depth == 0 { T; } else { Array(DeepArray(depth - 1, T)); };
+  if depth == 0 { T; } else { TypedArray(DeepArray(depth - 1, T)); };
 };
 let buildDeep = (depth, v) -> {
   if depth == 0 { v; } else { [buildDeep(depth - 1, v)]; };
@@ -518,7 +518,7 @@ assert("hot maptypes [1,null]", OptTuple.check([1, null]));
 assert("hot maptypes [1,2]", !OptTuple.check([1, 2]));
 
 let Compose = (F, G) -> (T) -> F(G(T));
-let OptArrayC = Compose(Optional, Array);
+let OptArrayC = Compose(Optional, TypedArray);
 let OANum = OptArrayC(Number);
 assert("hot compose null", OANum.check(null));
 assert("hot compose [1,2]", OANum.check([1, 2]));
@@ -531,7 +531,7 @@ assert("hot const is Number", Const(Number)(String) == Number);
 assert("hot id", Id(Number).check(1));
 
 // ---------- 6.4 the introspection loop, closed ----------
-// value -> Shape descriptor -> compile (Record/Object/Array) -> type -> check.
+// value -> Shape descriptor -> compile (Record/Object/TypedSizedArray) -> type -> check.
 // Array elements and object fields hold plain descriptors; the constructors
 // compile them (Ch.3 showed the same cfgShape.routes folding in from #107).
 let sample = { id: 1, name: "a", tags: ["x", "y"], addr: { city: "s", zip: 123 } };
@@ -612,9 +612,9 @@ assert("mu list bad head", !MuListNum.check({ head: 1, tail: { head: "x", tail: 
 assert("mu tree good", MuTreeNum.check({ value: 1, left: { value: 2, left: null, right: null }, right: null }));
 assert("mu tree bad", !MuTreeNum.check({ value: 1, left: { value: "x", left: null, right: null }, right: null }));
 
-// Expr = Mu(R -> Number | {op: String, args: Array(R)}): the fixpoint goes
+// Expr = Mu(R -> Number | {op: String, args: TypedArray(R)}): the fixpoint goes
 // THROUGH an array type, so the recursion nests inside {op, args}.
-let Expr = Mu((R) -> Union(Number, Object({ op: String, args: Array(R) })));
+let Expr = Mu((R) -> Union(Number, Object({ op: String, args: TypedArray(R) })));
 let e2 = { op: "+", args: [{ op: "*", args: [2, 3] }, 4] };
 assert("mu expr number", Expr.check(42));
 assert("mu expr nested", Expr.check(e2));
@@ -647,10 +647,10 @@ assert("church One(inc)(0) = 1", One(inc)(0) == 1);
 assert("church Zero(inc)(0) = 0", Zero(inc)(0) == 0);
 
 // a Church numeral is a higher-order type transformer: n(F)(T) applies F to T
-// n times, so Two(Array)(Number) is Array(Array(Number)).
-let D2 = Two(Array)(Number);
+// n times, so Two(TypedArray)(Number) is TypedArray(TypedArray(Number)).
+let D2 = Two(TypedArray)(Number);
 let Opt2 = Two(Optional)(Number);
-let OneArr = One(Array)(Number);
+let OneArr = One(TypedArray)(Number);
 assert("church D2 good", D2.check([[1, 2], [3, 4]]));
 assert("church D2 empty ok", D2.check([]));
 assert("church D2 bad elem", !D2.check([[1, "x"]]));
@@ -663,7 +663,7 @@ assert("church OneArr rejects scalar", !OneArr.check(1));
 // ---------- 7.3 Json: recursive, key-agnostic, object arm via predicate ----------
 // Any value is JSON except error values; the object arm checks every field
 // recursively with the fixpoint itself.
-let Json = Mu((R) -> Union(Union(Union(Null, Number), Union(String, Boolean)), Union(Array(R), Object((o) -> {
+let Json = Mu((R) -> Union(Union(Union(Null, Number), Union(String, Boolean)), Union(TypedArray(R), Object((o) -> {
   let ks = std.Object.keys(o);
   let ok = true;
   let i = 0;
@@ -724,10 +724,10 @@ assert("evolve T2 ok", T2.check({ max: 5, retries: 2 }));
 assert("evolve T2 rejects old max", !T2.check({ max: 3, retries: 2 }));
 
 // ---------- 7.8 kind introspection: constructors are functions, applications are types ----------
-assert("kind Array is Function", std.Type.of(Array) == Function);
+assert("kind Array is a placeholder object", std.Type.of(Array) == AnyObject);
 assert("kind Object is Function", std.Type.of(Object) == Function);
 assert("kind Union is Function", std.Type.of(Union) == Function);
-assert("kind applied Array is Type", std.Type.of(Array(Number)) == std.Type);
+assert("kind applied TypedArray is Type", std.Type.of(TypedArray(Number)) == std.Type);
 assert("kind Number is Type", std.Type.of(Number) == std.Type);
 
 chapterEnd(7);
@@ -818,11 +818,11 @@ assert("arith Sixteen = 16", showNum(Sixteen) == 16);
 assert("arith 3*3 = 9", showNum(Mult(Three)(Three)) == 9);
 assert("arith 2^3 = 8", showNum(Pow(Two)(Three)) == 8);
 
-// a numeral applied to a type constructor stacks it n times: Array^4, Array^8
-assert("Array^4 depth", Four(Array)(Number).check(buildDeep(4, 1)));
-assert("Array^4 too shallow", !Four(Array)(Number).check(buildDeep(3, 1)));
-assert("Array^8 depth", Eight(Array)(Number).check(buildDeep(8, 1)));
-assert("Array^8 too shallow", !Eight(Array)(Number).check(buildDeep(7, 1)));
+// a numeral applied to a type constructor stacks it n times: TypedArray^4, TypedArray^8
+assert("TypedArray^4 depth", Four(TypedArray)(Number).check(buildDeep(4, 1)));
+assert("TypedArray^4 too shallow", !Four(TypedArray)(Number).check(buildDeep(3, 1)));
+assert("TypedArray^8 depth", Eight(TypedArray)(Number).check(buildDeep(8, 1)));
+assert("TypedArray^8 too shallow", !Eight(TypedArray)(Number).check(buildDeep(7, 1)));
 
 // a numeral is itself a type transformer: Type^depth applied to Number
 let TypePow2 = Two(Id)(Number);
@@ -895,11 +895,11 @@ assert("checkerOf's result is same truthiness", checkerOf(Vect(2, Number))([1, 2
 let kind = (T) -> std.Type.of(T);
 assert("kind(Number) is Type", kind(Number) == std.Type);
 assert("kind(Number) not Function", kind(Number) != Function);
-assert("kind(Array) is Function", kind(Array) == Function);
+assert("kind(Array) is a placeholder object", kind(Array) == AnyObject);
 
 // ---------- 9.2 the type system describes its own harness ----------
 let Pass = std.Type.make((v) -> v == true);
-let Config = Object({ quiet: Boolean, cap: Number, levels: Number, sample: Vect(2, Number), tags: Array(String) });
+let Config = Object({ quiet: Boolean, cap: Number, levels: Number, sample: Vect(2, Number), tags: TypedArray(String) });
 let cfgGood = { quiet: true, cap: 16, levels: 4, sample: [1, 1], tags: ["a", "b"] };
 let cfgBadCap = { quiet: true, cap: "high", levels: 4, sample: [1, 1], tags: [] };
 assert("config type good", Config.check(cfgGood));
@@ -1037,7 +1037,7 @@ assert("map Optional rejects 2 numbers", !MapTup.check([1, 2]));
 let flip = (f) -> (a) -> (b) -> f(b)(a);
 let ComposeFlipped = flip(Compose);              // (F) -> (G) -> (T) -> G(F(T))
 let OptThenArr = ComposeFlipped(Optional);       // (G) -> (T) -> G(Optional(T))
-let ArrOfOpt = OptThenArr(Array);                // (T) -> Array(Optional(T))
+let ArrOfOpt = OptThenArr(TypedArray);           // (T) -> TypedArray(Optional(T))
 assert("flipped compose array of optional", ArrOfOpt(Number).check([1, null, 2]));
 assert("flipped compose rejects str", !ArrOfOpt(Number).check([1, "x"]));
 
@@ -1060,7 +1060,7 @@ assert("mapFields rejects bad", !OptFields.check({ a: 1, b: 2 }));
 
 // ---------- 10.3 a type-level stack machine: push/pop/depth by constructor stacking ----------
 let StackT = (depth, T) -> {
-  if depth == 0 { T; } else { Array(StackT(depth - 1, T)); };
+  if depth == 0 { T; } else { TypedArray(StackT(depth - 1, T)); };
 };
 let Depth1 = StackT(1, Number);
 let Depth2 = StackT(2, Number);
@@ -1237,10 +1237,10 @@ let subs = [1, "x", false, null, [1], { a: 1 }];
 assert("meet is a lower bound", isSubOn(MAB, A1, subs) && isSubOn(MAB, B1, subs));
 assert("join is an upper bound", isSubOn(A1, JAB, subs) && isSubOn(B1, JAB, subs));
 
-// monotonicity: if A <: B then Array(A) <: Array(B) (covariance)
+// monotonicity: if A <: B then TypedArray(A) <: TypedArray(B) (covariance)
 let arrs = [[1, 2], [1], [], [3, 4], ["x"]];
-assert("Array covariant: Array(Number) <: Array(Any)", isSubOn(Array(Number), Array(Any), arrs));
-assert("Array not contravariant: not Array(Any) <: Array(Number)", !isSubOn(Array(Any), Array(Number), arrs));
+assert("TypedArray covariant: TypedArray(Number) <: TypedArray(Any)", isSubOn(TypedArray(Number), TypedArray(Any), arrs));
+assert("TypedArray not contravariant: not TypedArray(Any) <: TypedArray(Number)", !isSubOn(TypedArray(Any), TypedArray(Number), arrs));
 
 // the meet of Number and String is the empty type on the probe set
 let None = meet(Number, String);
@@ -1289,7 +1289,7 @@ let inferType = (v) -> {
         uni = Union(uni, inferType(v[i]));
         i = i + 1;
       };
-      Array({ length: v.length, element: uni });
+      TypedSizedArray(v.length, uni);
     };
   }
   else {

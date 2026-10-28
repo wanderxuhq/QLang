@@ -1345,3 +1345,30 @@ stage2/stage3 固定点成立。
 
 **坑/注意**:`knownScan` 对空 statements 直接返回(对象化模式下库程序是空壳,否则会打印
 `sites=0` 的假条目);计数按 label 累加,跨程序保留,绑定表每个程序开头清空。
+
+## 53. 数组类型族与 boot 的多参数调用(2026-10-28)
+
+**类型面**:`Array` 不再是构造器,只留一个空占位名(可当命名空间);数组类型按"元素 × 长度"
+排列成四个独立名字,外加元组:
+
+| | 长度任意 | 长度恰好 n |
+|---|---|---|
+| 元素任意 | `AnyArray` | `SizedArray(n)` |
+| 元素都是 T | `TypedArray(T)` | `TypedSizedArray(n, T)` |
+
+`Tuple([T1, T2, ...])`:每个位置一个类型。旧的 `Array(3)`/`Array(T)`/`Array([...])`/
+`Array({length, element})` 全部删除(最后一种和 `TypedSizedArray` 重合)。元素参数接受类型值
+或普通描述符对象(与 `Object({...})` 一致,`Shape` 因此不用改)。
+
+**boot 的多参数调用**:原实现把「宿主 QLang 函数」(stdlib.ql 里的类型库/构造器)当 1 参桥接,
+`args.length != 1` 直接 ArityMismatch —— 于是 `TypedSizedArray(3, Number)` 在 boot 里根本调不了
+(用新加的 2 参全局 `ZZTest` 复现)。改成只拒绝 0 参,其余交给宿主派发器(`std.__callNative`)处理
+arity/部分应用;这与 "hosting runtime 的派发器拥有 arity 与 Error 策略" 的既有约定一致。
+
+**验收**:`demo/type_gymnastics.ql` 在两个引擎都是 **419/419**(迁移约 20 处类型拼写);
+`stage2/stage3` IR 固定点成立;selfhost 套件 ALL PASS。`TypedArray(Number)` /
+`SizedArray(3)` / `TypedSizedArray(3, Number)` / `Tuple([Number, String])` 的正反例在两引擎一致。
+
+**顺带发现(先于本切片,未修)**:`run_interpreter_tests.py` 在 HEAD 上因链接重复符号失败
+(`__panic_exit`/`__cold_located_error`/`.strboxN` 同时出现在用户模块与 `stdlib.o`)——
+对象化(split)模式下冷助手与字符串没有被抑制在库侧。与本次类型改动无关,单列一条待办。

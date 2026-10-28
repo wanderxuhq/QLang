@@ -204,106 +204,68 @@ let arrayCheck = (mode) -> (v) -> {
   else { true; };
 };
 
-// Compile a schema member into a type value: a type value (as-is), an array-metadata
-// descriptor ({length, element}, recursively nested), or a plain object-schema descriptor
-// dict (recursively). Closes the Shape loop: object-array elements and nested object fields
-// that Shape produces as plain dicts become checkable types instead of error values.
-// Non-type, non-descriptor values raise a TypeMismatch error value.
+// Compile a schema member into a type value: a type value (as-is) or a plain object-schema
+// descriptor dict (recursively). Nested descriptors become checkable types instead of error
+// values. The old {length, element} array-metadata form is gone (it is TypedSizedArray).
 let compileDesc = (v) -> {
   if isTypeValue(v) { unwrapTypeValue(v); }
   else if v != null && !isError(v.type) && v.type == "Object" && !isTypeValue(v) {
-    let f = v.value;
-    // array metadata iff BOTH 'length' (a Number field) and 'element' are present. A missing field
-    // reads as an error value, and in host-layer semantics `err != null` is a truthy ERROR (so a
-    // plain schema dict would wrongly enter this branch) — test existence with isError FIRST and
-    // only then probe len.type (also guarded: a field named 'length' holding the Number TYPE value
-    // probes as an error, correctly falling through to the Object-schema branch).
-    let len = f["length"];
-    let hasLen = !isError(len);
-    let hasElem = !isError(f["element"]);
-    if hasLen && hasElem && !isError(len.type) && len.type == "Number" {
-      // Pass the descriptor WRAPPER (v, with its {type:"Object", value:...} envelope) to Array — not a
-      // re-built {length, element} dict. Array's dispatch requires x.type == "Object" to enter the metadata
-      // branch and reads the fields via x.value[...]; a bare dict's .type probes as an error value and would
-      // fall through to the else (raise), exactly the boot-wrapping the user-level Array(meta) path gets for free.
-      unwrapTypeValue(Array(v));
-    }
-    else {
-      unwrapTypeValue(Object(v));
-    };
+    unwrapTypeValue(Object(v));
   }
   else {
-    std.Error.raise("TypeMismatch", "Array: member is not a type or descriptor", null);
+    std.Error.raise("TypeMismatch", "schema member is not a type or descriptor", null);
   };
 };
 
-let Array = (x) -> {
-  // Note: .type probes on bare values (e.g. type constants) are error values, and error == "X" is also an error value
-  // (truthy) — !isError(x.type) must come first, then compare the tag, otherwise bare constants wrongly enter the fixed-length branch.
-  if x != null && !isError(x.type) && x.type == "Number" {
-    if x.value >= 0 && x.value % 1 == 0 {
-      Type.make(arrayCheck({ length: x.value, element: null, tuple: null }));
-    }
-    else {
-      // Aligned with the host: negative/non-integer lengths raise a dedicated message (host "Array: length must be a
-      // non-negative integer") rather than falling into the generic else.
-      std.Error.raise("TypeMismatch", "Array: length must be a non-negative integer", null);
-    };
-  }
-  else if isTypeValue(x) {
-    // Type member: element type. x may be a call-product wrapper ({type:"Object"|"Type", value:
-    // type value}, e.g. return values of std.Type.make/std.Type.of/nested constructor calls) — unwrap first, then
-    // take check (a wrapper's check probe is an error value).
-    Type.make(arrayCheck({ length: null, element: unwrapTypeValue(x).check, tuple: null }));
-  }
-  else if x != null && !isError(x.type) && x.type == "Array" {
-    // [Type] member: per-position types (at construction, verify each element is a type; elements may likewise be call
-    // product wrappers, so unwrap before judging/taking check)
-    let checks = [];
-    let i = 0;
-    while i < x.value.length {
-      let t = unwrapTypeValue(x.value[i]);
-      if !isTypeValue(t) {
-        return std.Error.raise("TypeMismatch", "Array: tuple elements must all be type values", null);
-      };
-      checks[checks.length] = t.check;
-      i = i + 1;
-    };
-    Type.make(arrayCheck({ length: null, element: null, tuple: checks }));
-  }
-  else if x != null && !isError(x.type) && x.type == "Object" && !isTypeValue(x) {
-    // {length, element} metadata member (element may be a call-product wrapper)
-    let length = x.value["length"];
-    let element = x.value["element"];
-    if length == null || length.type != "Number" || length.value < 0 || length.value % 1 != 0 {
-      std.Error.raise("TypeMismatch", "Array: metadata must have a non-negative integer 'length'", null);
-    }
-    else {
-      let et = unwrapTypeValue(element);
-      if et == null || !isTypeValue(et) {
-        // plain descriptor dict element (object schema or nested {length, element}) — compile it
-        if et != null && !isError(et.type) && et.type == "Object" && !isTypeValue(et) {
-          let et2 = compileDesc(et);
-          if isTypeValue(et2) {
-            Type.make(arrayCheck({ length: length.value, element: et2.check, tuple: null }));
-          }
-          else {
-            std.Error.raise("TypeMismatch", "Array: metadata must have a type 'element'", null);
-          };
-        }
-        else {
-          std.Error.raise("TypeMismatch", "Array: metadata must have a type 'element'", null);
-        };
-      }
-      else {
-        Type.make(arrayCheck({ length: length.value, element: et.check, tuple: null }));
-      };
-    };
-  }
-  else {
-    std.Error.raise("TypeMismatch", "Array: argument must be a length, a type, a list of types, or {length, element}", null);
+// 数组类型族(与 AnyArray 并列,一个类型一个名字):
+//   AnyArray / SizedArray(n) / TypedArray(T) / TypedSizedArray(n, T) / Tuple([T1, T2, ...])
+// `Array` 只是占位名(不是类型、不是构造器)。旧的 {length, element} 元数据形态已删除:
+// 它和 TypedSizedArray(n, T) 完全重合。__boot* 前缀:裸名会被编译期解析成 runtime.ql 的原生版本。
+let __bootSizedArray = (n) -> {
+  if n == null || isError(n.type) || n.type != "Number" {
+    return std.Error.raise("TypeMismatch", "SizedArray: length must be a Number", null);
   };
+  if n.value < 0 || n.value % 1 != 0 {
+    return std.Error.raise("TypeMismatch", "SizedArray: length must be a non-negative integer", null);
+  };
+  Type.make(arrayCheck({ length: n.value, element: null, tuple: null }));
 };
+let __arrElementCheck = (T, who) -> {
+  // 元素可以是类型值,也可以是普通描述符对象(按 Object 的 schema 编译,和 Object({...}) 一致)。
+  // compileDesc 同时负责解包调用产物({type:"Object"|"Type", value: 类型值})。
+  let t = compileDesc(T);
+  if t == null || isError(t) {
+    return std.Error.raise("TypeMismatch", who + ": argument must be a type value or an object schema", null);
+  };
+  t.check;
+};
+let __bootTypedArray = (T) -> Type.make(arrayCheck({ length: null, element: __arrElementCheck(T, "TypedArray"), tuple: null }));
+let __bootTypedSizedArray = (n, T) -> {
+  if n == null || isError(n.type) || n.type != "Number" {
+    return std.Error.raise("TypeMismatch", "TypedSizedArray: length must be a Number", null);
+  };
+  if n.value < 0 || n.value % 1 != 0 {
+    return std.Error.raise("TypeMismatch", "TypedSizedArray: length must be a non-negative integer", null);
+  };
+  Type.make(arrayCheck({ length: n.value, element: __arrElementCheck(T, "TypedSizedArray"), tuple: null }));
+};
+let __bootTuple = (types) -> {
+  if types == null || isError(types.type) || types.type != "Array" {
+    return std.Error.raise("TypeMismatch", "Tuple: argument must be an Array of type values", null);
+  };
+  let checks = [];
+  let i = 0;
+  while i < types.value.length {
+    let t = unwrapTypeValue(types.value[i]);
+    if !isTypeValue(t) {
+      return std.Error.raise("TypeMismatch", "Tuple: elements must all be type values", null);
+    };
+    checks[checks.length] = t.check;
+    i = i + 1;
+  };
+  Type.make(arrayCheck({ length: null, element: null, tuple: checks }));
+};
+let __bootArray = {};
 
 // Object constructor: union argument (Type | shape object)
 let Object = (x) -> {
@@ -467,4 +429,4 @@ while nativeTypeIndex < 11 {
   nativeTypes[nativeTypes.length] = {core: pair.core.check, host: pair.host.check};
   nativeTypeIndex = nativeTypeIndex + 1;
 };
-export { nativeTypes, std, isTypeValue, Number, String, Boolean, Null, AnyArray, AnyObject, Function, Any, Never, Error, Array, Object, Type, typeTag };
+export { nativeTypes, std, isTypeValue, Number, String, Boolean, Null, AnyArray, AnyObject, Function, Any, Never, Error, Array, __bootArray, __bootSizedArray, __bootTypedArray, __bootTypedSizedArray, __bootTuple, Object, Type, typeTag };

@@ -153,7 +153,11 @@ let annotationRejectConstructor = (annNode) -> {
   if isError(annNode.type) || annNode.type != "Identifier" { return null; };
   if annNode.name != "Array" && annNode.name != "Object" { return null; };
   if typeLookup(annNode.name) != annNode.name { return null; };
-  typeReport(annNode, annNode.name + " is a constructor, not a type: use Any" + annNode.name + " for any " + annNode.name + ", or a constructed form like " + annNode.name + "(Number)");
+  if annNode.name == "Array" {
+    typeReport(annNode, "Array is a placeholder, not a type: use AnyArray, SizedArray(n), TypedArray(T), TypedSizedArray(n, T) or Tuple([...])");
+  } else {
+    typeReport(annNode, "Object is a constructor, not a type: use AnyObject for any object, or a constructed form like Object({name: String})");
+  };
   null;
 };
 

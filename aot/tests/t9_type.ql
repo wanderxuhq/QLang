@@ -7,7 +7,7 @@ println(std.Type.of(42) == Number);
 println(std.Type.of("s") == String);
 println(std.Type.of(Number) == std.Type);
 println(std.Type.of(std.Type) == std.Type);
-let A3 = Array({ length: 3, element: Number });
+let A3 = TypedSizedArray(3, Number);
 println(A3.check([1, 2, 3]));
 println(!A3.check([1, 2]));
 println(!A3.check([1, "s"]));

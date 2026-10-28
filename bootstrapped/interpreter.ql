@@ -122,6 +122,13 @@ let Interpreter = () -> {
   globalEnv._define("Any", Any);
   globalEnv._define("Never", Never);
   globalEnv._define("Array", Array);
+  // `Array` 只是占位名;数组类型是下面这一族。必须用 __boot* 实现:裸名会被编译期
+  // 解析成 runtime.ql 的原生版本,那一版按原生记录布局读值。
+  globalEnv._define("Array", __bootArray);
+  globalEnv._define("SizedArray", __bootSizedArray);
+  globalEnv._define("TypedArray", __bootTypedArray);
+  globalEnv._define("TypedSizedArray", __bootTypedSizedArray);
+  globalEnv._define("Tuple", __bootTuple);
   globalEnv._define("Object", Object);
 
   // User-function call depth guard: each boot level costs several host frames,
@@ -1222,11 +1229,13 @@ let Interpreter = () -> {
             j = j + 1;
           }
         }
-        // The host QLang functions exposed by the boot stdlib are unary
-        // native bridges (type predicates/constructors and helper methods),
-        // not user functions eligible for implicit partial application.
-        if !isNative && Function.check(func) && args.length != 1 {
-          return { type: "Error", value: std.Error.raise("ArityMismatch", "Arity mismatch: expected 1 arguments, got " + std.Number.toString(args.length), null), propagate: false };
+        // Host QLang functions used to be forced through a unary bridge, which made
+        // multi-argument constructors (e.g. TypedSizedArray(n, T)) impossible to call
+        // from interpreted code. The hosting dispatcher already owns arity, Error
+        // policy and partial metadata, so only the zero-argument case keeps the old
+        // rejection (a 0-arg call would otherwise become a partial application).
+        if !isNative && Function.check(func) && args.length == 0 {
+          return { type: "Error", value: std.Error.raise("ArityMismatch", "Arity mismatch: expected 1 arguments, got 0", null), propagate: false };
         };
         // Interpreted functions are Object-shaped records in the host. They
         // must not pass Object API validation merely because of that encoding.

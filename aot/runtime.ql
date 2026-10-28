@@ -1133,117 +1133,87 @@ let __obj_check_pred = (pred, o) -> {
 };
 
 // 编译 schema 成员为类型值(host compile_schema_type 镜像):类型值 → 自身;
-// {length,element} 对象 → Array 类型;普通描述符对象 → Object 类型;否则 TypeMismatch(fallback)。
+// 普通描述符对象 → Object 类型;否则 TypeMismatch(fallback)。
+// 旧的 {length, element} 元数据形态已删除:它和 TypedSizedArray(n, T) 完全重合。
 let __compile_schema = (v, fallback) -> {
   let tag = readU64(v, 0);
-  let L = null;
-  let E = null;
   if __is_type_value(v) {
     v;
   } else {
     if tag == 6 {
-      L = __get_field(v, "length");
-      E = __get_field(v, "element");
-      if readU64(L, 0) == 8 || readU64(E, 0) == 8 {
-        __obj_ctor(v);
-      } else {
-        __arr_ctor(v);
-      };
+      __obj_ctor(v);
     } else {
       __err("TypeMismatch", fallback);
     };
   };
 };
 
-// Array 构造器(host build_array_type 镜像,4 联合):Number 定长 / Type 元素 / [Type] 逐位 /
-// {length, element} 元数据(长度拷贝 element.check 的 tuple)。
-let __arr_ctor = (x) -> {
-  let tag = readU64(x, 0);
-  let cf = null;
-  let checks = null;
+// 数组类型族(与 AnyArray 并列,一个类型一个名字):
+//   AnyArray              任意长度、任意元素
+//   SizedArray(n)         恰好 n 个,元素不查
+//   TypedArray(T)         任意长度,元素都是 T
+//   TypedSizedArray(n, T) 恰好 n 个,元素都是 T
+//   Tuple([T1, T2, ...])  恰好这些位置类型
+// `Array` 只是占位名(不是类型、不是构造器)。
+let __arr_len_of = (n, who) -> {
+  if readU64(n, 0) != 1 { return __err("TypeMismatch", who + ": length must be a Number"); };
+  if n % 1 != 0 || n < 0 { return __err("TypeMismatch", who + ": length must be a non-negative integer"); };
+  n;
+};
+let __arr_elem_check_of = (T, who) -> {
+  // 元素可以是类型值,也可以是普通描述符对象(按 Object 的 schema 编译,和 Object({...}) 一致)。
+  let t = __compile_schema(T, who + ": argument must be a type value or an object schema");
+  if readU64(t, 0) == 8 { return t; };
+  __get_field(t, "check");
+};
+let SizedArray = (n) -> {
+  let len = __arr_len_of(n, "SizedArray");
+  if readU64(len, 0) == 8 { return len; };
+  __mk_atype((a) -> { readU64(a, 0) == 5 && readU64(a, 16) == len; });
+};
+let TypedArray = (T) -> {
+  let cf = __arr_elem_check_of(T, "TypedArray");
+  if readU64(cf, 0) == 8 { return cf; };
+  __mk_atype((a) -> { __arr_elem_check(cf, a); });
+};
+let TypedSizedArray = (n, T) -> {
+  let len = __arr_len_of(n, "TypedSizedArray");
+  if readU64(len, 0) == 8 { return len; };
+  let cf = __arr_elem_check_of(T, "TypedSizedArray");
+  if readU64(cf, 0) == 8 { return cf; };
+  __mk_atype((a) -> {
+    if readU64(a, 0) != 5 || readU64(a, 16) != len { return false; };
+    __arr_elem_check(cf, a);
+  });
+};
+// 元组:每个位置一个类型。校验函数指针数组须为 tag-5 Array 盒(@8=els,@16=len),供 __tuple_check 读取。
+let Tuple = (types) -> {
   let els = null;
   let clen = 0;
   let i = 0;
   let ce = null;
-  let bad = 0;
+  let checks = null;
   let nb = null;
-  let lv = null;
-  if tag == 1 {
-    if x % 1 != 0 || x < 0 {
-      __err("TypeMismatch", "Array: length must be a non-negative integer");
-    } else {
-      __mk_atype((a) -> { readU64(a, 0) == 5 && readU64(a, 16) == x; });
-    };
-  } else {
-    if __is_type_value(x) {
-      cf = __get_field(x, "check");
-      __mk_atype((a) -> { __arr_elem_check(cf, a); });
-    } else {
-      if tag == 5 {
-        els = ql_mem_get_ptr(x, 8);
-        clen = readU64(x, 16);
-        bad = 0;
-        i = 0;
-        while i < clen {
-          ce = ql_value_get(els, i * 16);
-          if __is_type_value(ce) {
-            i = i + 1;
-          } else {
-            bad = 1;
-            i = clen;
-          };
-        };
-        if bad == 1 {
-          __err("TypeMismatch", "Array: tuple elements must all be type values");
-        } else {
-          // 校验函数指针数组须为 tag-5 Array 盒(@8=els,@16=len),供 __tuple_check 读取。
-          checks = allocBox(5, 32);
-          nb = ql_alloc(16 * clen);
-          ql_mem_store_ptr(checks, 8, nb);
-          writeU64(checks, 16, clen);
-          i = 0;
-          while i < clen {
-            ce = ql_value_get(els, i * 16);
-            ql_value_store(nb, i * 16, __get_field(ce, "check"));
-            i = i + 1;
-          };
-          __mk_atype((a) -> { __tuple_check(checks, a); });
-        };
-      } else {
-        if tag == 6 {
-          lv = __get_field(x, "length");
-          cf = __get_field(x, "element");
-          if readU64(lv, 0) == 8 || readU64(cf, 0) == 8 {
-            __err("TypeMismatch", "Array: metadata must have a type 'element'");
-          } else {
-            if readU64(lv, 0) != 1 || lv % 1 != 0 || lv < 0 {
-              __err("TypeMismatch", "Array: metadata must have a non-negative integer 'length'");
-            } else {
-              ce = __compile_schema(cf, "metadata must have a type 'element'");
-              if readU64(ce, 0) == 8 {
-                ce;
-              } else {
-                cf = __get_field(ce, "check");
-                // 同上:校验指针须为 tag-5 Array 盒(@8=els,@16=len)。
-                checks = allocBox(5, 32);
-                els = ql_alloc(16 * lv);
-                ql_mem_store_ptr(checks, 8, els);
-                writeU64(checks, 16, lv);
-                i = 0;
-                while i < lv {
-                  ql_value_store(els, i * 16, cf);
-                  i = i + 1;
-                };
-                __mk_atype((a) -> { __tuple_check(checks, a); });
-              };
-            };
-          };
-        } else {
-          __err("TypeMismatch", "Array: argument must be a length, a type, a list of types, or {length, element}");
-        };
-      };
-    };
+  if readU64(types, 0) != 5 { return __err("TypeMismatch", "Tuple: argument must be an Array of type values"); };
+  els = ql_mem_get_ptr(types, 8);
+  clen = readU64(types, 16);
+  i = 0;
+  while i < clen {
+    ce = ql_value_get(els, i * 16);
+    if !__is_type_value(ce) { return __err("TypeMismatch", "Tuple: elements must all be type values"); };
+    i = i + 1;
   };
+  checks = allocBox(5, 32);
+  nb = ql_alloc(16 * clen);
+  ql_mem_store_ptr(checks, 8, nb);
+  writeU64(checks, 16, clen);
+  i = 0;
+  while i < clen {
+    ce = ql_value_get(els, i * 16);
+    ql_value_store(nb, i * 16, __get_field(ce, "check"));
+    i = i + 1;
+  };
+  __mk_atype((a) -> { __tuple_check(checks, a); });
 };
 
 // Object 构造器(host build_object_type 镜像,3 联合):Type 键类型 / shape 描述符 / 谓词函数。
@@ -2310,7 +2280,7 @@ let __process_args = (count, pointers) -> {
 };
 let args = [];
 let isError = __isError;
-let Array = __arr_ctor;
+let Array = {};
 let Object = __obj_ctor;
 
 // Call policy belongs to the function value, so aliases and computed callees

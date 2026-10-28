@@ -98,9 +98,9 @@ let secondError = std.Error.raise("Second", "later", null);
 println(f(error, secondError).cause.type);
 println(partial(error).type);
 println(partial(error).cause.type);
-println(Array(Number).check(error).type);
+println(TypedArray(Number).check(error).type);
 println(Object({a: Number}).check(error).type);
-println(isError(Array(Number).check()));
+println(isError(TypedArray(Number).check()));
 println(isError(Object({a: Number}).check()));
 println(Function.check(add));
 

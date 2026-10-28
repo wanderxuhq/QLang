@@ -53,7 +53,7 @@ println(broken.type);
 let AlwaysFalse = std.Type.make((v) -> []);
 let falseValue: AlwaysFalse = 1;
 println(falseValue.type);
-let values: Array(Number) = [1, 2];
+let values: TypedArray(Number) = [1, 2];
 println(values[1]);
 values = [1, "bad"];
 println(values.type);

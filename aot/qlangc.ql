@@ -69,7 +69,7 @@ let extensionABI = "";
 // Builtins start in each module root scope with canonical values. Nested
 // declarations shadow them; assignments resolve the nearest lexical binding.
 // Library closures keep their defining runtime scope, isolated from callers.
-let moduleGlobalNames = ["Number", "String", "Boolean", "Null", "AnyArray", "AnyObject", "Function", "Any", "Never", "Array", "Object", "Error", "print", "println", "isError", "args", "assert"];
+let moduleGlobalNames = ["Number", "String", "Boolean", "Null", "AnyArray", "AnyObject", "Function", "Any", "Never", "Array", "SizedArray", "TypedArray", "TypedSizedArray", "Tuple", "Object", "Error", "print", "println", "isError", "args", "assert"];
 let publicRuntimeNames = {std: true};
 let globalNameIndex = 0;
 while globalNameIndex < moduleGlobalNames.length {

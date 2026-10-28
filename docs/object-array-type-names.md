@@ -1,3 +1,9 @@
+> **拼写变更(2026-10-28)**:`Array` 不再是类型构造器,只留一个空占位名;数组类型改成一族
+> 独立名字:`AnyArray`、`SizedArray(n)`、`TypedArray(T)`、`TypedSizedArray(n, T)`、
+> `Tuple([T1, T2, ...])`。旧的 `Array(3)` → `SizedArray(3)`,`Array(Number)` → `TypedArray(Number)`,
+> `Array([T1, T2])` → `Tuple([T1, T2])`,`Array({length, element})` 与 `TypedSizedArray` 重合、已删除。
+> 下文保留当时的写法作为历史记录。
+
 # Object/array type names — what the analysis may conclude
 
 Status: design note, settled with the author. Supersedes the earlier "lattice" framing.
