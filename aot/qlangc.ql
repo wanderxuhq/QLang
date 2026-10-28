@@ -2846,8 +2846,14 @@ let emitStdlibInit = (runtimeStmts, libraryStmts) -> {
   emitBindingStore(argsSlot, processArgs, "null", "null");
   inRuntime = false;
   // Library bodies use the ordinary AST/code path: no runtime privilege.
+  // 库内直调:库自己的候选表在这里重建(稍后用户程序的候选表会把它整表覆盖,
+  // 两段的 bindId 编号互不干扰)。发射器要求被调函数的定义先于调用点,统计显示
+  // 库内 285 个绑定调用点全部满足。
+  buildInlineCandidates(libraryStmts);
+  allowDirectUserCalls = true;
   let li = 0;
   while li < libraryStmts.length { emitTopLevelStmt(libraryStmts[li]); li = li + 1; };
+  allowDirectUserCalls = false;
   let libraryBase = emitCallRegs("__fresh_std", []);
   let library = emitCallRegs("__build_standard_library", [libraryBase]);
   emitCallRegs("__install_library", [library]);

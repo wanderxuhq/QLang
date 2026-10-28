@@ -21,6 +21,9 @@ let knownBinds = {};
 let knownFieldWrites = {};
 let knownStats = {};
 let knownLabel = "";
+// 发射器要求「被调函数的定义先于调用点」(directFns 是按源码顺序建立的),这里用同一个
+// 遍历序号给 Let 和 Call 编号,第二遍就能把 285 收敛成真正可发的数。
+let knownSeq = 0;
 
 let knownBindInfo = (bid) -> {
   let info = knownBinds[bid];
@@ -58,6 +61,8 @@ let knownWalkExpr = (node, pos) -> {
     return null;
   };
   if t == "Call" {
+    knownSeq = knownSeq + 1;
+    node.knownCallOrder = knownSeq;
     knownWalkExpr(node.callee, "callee");
     let ai = 0; while ai < node.arguments.length { knownWalkExpr(node.arguments[ai], "value"); ai = ai + 1; };
     return null;
@@ -122,6 +127,8 @@ let knownWalk = (node) -> {
           };
         };
       };
+      knownSeq = knownSeq + 1;
+      info.order = knownSeq;
       if v != null { knownWalkExpr(v, "value"); };
       return null;
     };
@@ -204,6 +211,7 @@ let knownClassify = (node) -> {
     if info.kind != "fn" { knownReject("notfn"); return null; };
     if node.arguments.length != info.arity { knownReject("partial"); return null; };
     stat.bind = stat.bind + 1;
+    if !isError(info.order) && info.order < node.knownCallOrder { stat.early = stat.early + 1; } else { stat.late = stat.late + 1; };
     return null;
   };
   if callee.type == "MemberAccess" {
@@ -258,10 +266,11 @@ let knownScan = (stmts, label) -> {
   if stmts == null || isError(stmts) || stmts.length == 0 { return null; };
   knownBinds = {};
   knownFieldWrites = {};
+  knownSeq = 0;
   knownLabel = label;
   let stat = knownStats[label];
   if isError(stat) {
-    stat = { sites: 0, bind: 0, field: 0, escaped: 0, written: 0, notfn: 0, notobj: 0, partial: 0, fieldwritten: 0, fieldnotfn: 0, chain: 0, shape: 0 };
+    stat = { sites: 0, bind: 0, field: 0, early: 0, late: 0, escaped: 0, written: 0, notfn: 0, notobj: 0, partial: 0, fieldwritten: 0, fieldnotfn: 0, chain: 0, shape: 0 };
     knownStats[label] = stat;
   };
   knownWalk(stmts);
@@ -274,6 +283,8 @@ let knownOneReport = (label) -> {
   if isError(stat) { return ""; };
   label + " sites=" + std.String.toString(stat.sites)
     + " bind=" + std.String.toString(stat.bind)
+    + " early=" + std.String.toString(stat.early)
+    + " late=" + std.String.toString(stat.late)
     + " field=" + std.String.toString(stat.field)
     + " reject: escaped=" + std.String.toString(stat.escaped)
     + " written=" + std.String.toString(stat.written)
