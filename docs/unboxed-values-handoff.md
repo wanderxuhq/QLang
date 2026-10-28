@@ -387,3 +387,11 @@ Rust 的栈耗尽是否官方保证 abort;⑥ 的计数口径;`src/` 宿主对 �
 | provenance 记录 | `aot/runtime.ql:96-129`(`__err_cause`/`__err_at`/`__err_record`) |
 | 类型值/派生类型 | `aot/runtime.ql:1352-1362`;`README.md:809/827/867-872`;`tests/type_system.rs` |
 | 证据与实测 | `docs/unboxed-values-probes.md`(§1 通道、§2 `??`/`+`、§3 arity、§5 机制、§11 基线、§12 bug、§13 子片 A) |
+
+### M. **库调用图的 known-safe 证明**(静态派发的下一步,2026-10-28)
+
+详见 `compiler-next-steps.md` 同名小节 + probes §54/§55。要点:库内 285 个绑定调用点全部
+「定义先于调用」,装箱直调已落地 28 个(库对象 −1,097 指令);剩下卡在 `callArgsCannotBeError`
+(`args=478`,其中 376 个实参是绑定标识符)。原因:库绑定过不了安全证明(写入里有调用结果),
+对库程序打开 `typeSetCallSafety` 无任何变化。要做的是把 P2 的返回值证明扩展到整张库调用图
+(`aot/types.ql` 的 `typeCallSafe`/`typeBindingSafe`/`typeComputeSafeBindings`)。

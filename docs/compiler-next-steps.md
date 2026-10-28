@@ -1201,3 +1201,35 @@ Branch: `unboxed-values`, verified cut 1 at `8f98254` (contract only, IR byte-id
 work stays there and stops before merging to `dancing-with-dragon`. Superseded trial
 patches: `cut2-raw-values`, `cut2-raw-arith-and-cmp`, `cut2-D-rawboolean`,
 `arm2-only-whitelist`.
+
+## Static dispatch, next: extend the known-safe proof to the library call graph (2026-10-28)
+
+Status measured in `docs/unboxed-values-probes.md` §54–§55:
+
+- The library has **285** call sites whose callee is an immutable function binding, and all of
+  them are "defined before the call" (the library is written bottom-up). Devirtualising them
+  gave 28 direct calls and **−1,097 AArch64 instructions** on the stdlib object
+  (131,889 → 130,792, −0.83%).
+- The rest is blocked by `callArgsCannotBeError`: `directreject` reports `args=478`, and the
+  first unsafe argument is a **binding identifier** 376 times, a **call result** 46 times
+  (IndexAccess 18, Array 16, MemberAccess 14, BinaryOp 8).
+
+Why it stays blocked: library bindings do not pass the safety proof — their writes include call
+results, and whether a call may return Error depends on the callee, so the chain never gets a
+seed. Running `typeSetCallSafety(true)` for the library program changed nothing (no node got
+`cannotBeError`).
+
+What to build: lift the known-safe *return* proof (added for leaf/user code in P2) to the whole
+library call graph.
+
+- Start at `aot/types.ql`: `typeCallSafe` / `typeBindingSafe` / `typeComputeSafeBindings` are
+  driven per program but produce nothing for the library today; the reference facts and the safe
+  fixpoint must actually be established for it.
+- The rule stays the same: a function whose parameters are annotated `Number`, that is never
+  assigned, and whose exits are built only from its parameters and literals cannot return an
+  Error; calls to it then get `cannotBeError`, which also unblocks the 46 call-result arguments.
+- Payoff: part of the 478 `args` rejections, directly visible in the stdlib object's instruction
+  count (baseline 131,889), and possibly user code that calls those library functions.
+
+Acceptance: `directreject.args` falls, the stdlib object's `clang -O2` instruction count falls,
+stage2/stage3 IR fixed point holds, both engines agree.
