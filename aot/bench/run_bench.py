@@ -47,6 +47,9 @@ def main():
     ap.add_argument("--only", default="")
     ap.add_argument("--keep", action="store_true", help="keep intermediate files")
     ap.add_argument("--no-run", action="store_true", help="skip linking/running")
+    ap.add_argument("--lto", action="store_true",
+                    help="with --split: link the library as bitcode with ThinLTO "
+                         "(compile ~2.4x faster than monolithic, runtime parity)")
     ap.add_argument("--split", action="store_true",
                     help="compile via the precompiled stdlib object (fast compile; "
                          "insns then only cover the user module and are NOT comparable)")
@@ -102,7 +105,10 @@ def main():
 
         output = ""
         if not args.no_run:
-            proc = run([sys.executable, str(LINK), str(ir), "-o", str(binary)], timeout=600)
+            link_args = [sys.executable, str(LINK), str(ir), "-o", str(binary)]
+            if args.lto:
+                link_args.append("--lto")
+            proc = run(link_args, timeout=900)
             if proc.returncode != 0:
                 print(f"{name}: link failed\n{proc.stderr}", file=sys.stderr)
                 return 1

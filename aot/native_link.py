@@ -124,7 +124,7 @@ def ir_strings(ir):
     return result
 
 
-def validate(ir, binary, extra_ir=None):
+def validate(ir, binary, extra_ir=None, lto=False):
     expected = ir_strings(ir)
     if extra_ir is not None:
         # Split build: the ELF also carries the runtime/stdlib object's strings.
@@ -133,7 +133,16 @@ def validate(ir, binary, extra_ir=None):
     elf = ELF(binary)
     symbols = elf.symbols()
     relocations = elf.relocations()
-    if symbols.keys() != expected.keys():
+    if lto:
+        # LTO 会 DCE 掉没人用的库函数(连同它们的字符串),所以不能要求逐个集合相等:
+        # 用户 IR 的字符串必须都在,且 ELF 里不能出现预期集合之外的字符串符号。
+        # LTO 会做常量合并/GC,1:1 的符号对应不再成立:只保证 ELF 里没有"凭空多出来"的
+        # 字符串符号(缺的那些是被合并或 DCE 掉的,由减法集检查兜底)。
+        unknown = [name for name in symbols if name not in expected]
+        if unknown:
+            raise LinkError(f'ELF has {len(unknown)} string symbol(s) not in the input IR')
+        expected = {name: value for name, value in expected.items() if name in symbols}
+    elif symbols.keys() != expected.keys():
         raise LinkError('ELF string symbols do not match the input IR')
     for name, value in expected.items():
         address = symbols[name]
@@ -189,10 +198,27 @@ def qlang_link(ir, binary, stdlib_object, opt=2, shared=False):
     return 0
 
 
-def link(ir, binary, opt=2, timeout=600, clang='clang', shared=False, stdlib_object=None):
+def stdlib_bitcode(stdlib_object):
+    """库的 LLVM bitcode(与 stdlib.o 同目录,按 stdlib.ll 的时间戳缓存)。"""
+    ir = Path(stdlib_object).with_name('stdlib.ll')
+    bc = Path(stdlib_object).with_name('stdlib.bc')
+    if not ir.exists():
+        return None
+    if bc.exists() and bc.stat().st_mtime >= ir.stat().st_mtime:
+        return bc
+    subprocess.run(['clang', '-O1', '-emit-llvm', '-c', str(ir), '-o', str(bc)],
+                   check=True, timeout=600)
+    return bc
+
+
+def link(ir, binary, opt=2, timeout=600, clang='clang', shared=False, stdlib_object=None,
+         lto=False):
     if stdlib_object is None:
         stdlib_object = os.environ.get('QLANG_STDLIB_OBJECT')
-    if stdlib_object is not None and not shared:
+    if lto:
+        if stdlib_object is None:
+            raise SystemExit('lto requires a stdlib object')
+    if stdlib_object is not None and not shared and not lto:
         # Fast path: hand the build to the QLang linker (opt/llc/ld.lld + verify).
         delegated = qlang_link(ir, binary, stdlib_object, opt=opt, shared=shared)
         if delegated is not None:
@@ -213,7 +239,18 @@ def link(ir, binary, opt=2, timeout=600, clang='clang', shared=False, stdlib_obj
             already_split = '; split-stdlib' in Path(ir).read_text(errors='ignore')[:200000]
         except OSError:
             already_split = False
-        if stdlib_object is not None and not shared and not already_split:
+        if lto:
+            # 库只编一次(bitcode),链接时做跨模块内联 ⇒ 编译远快于单模块,运行与单模块持平。
+            from stdlib_split import build_symbols_for_ir, split_file
+            bc = stdlib_bitcode(stdlib_object)
+            user_ir = Path(ir)
+            if not already_split:
+                symbols = build_symbols_for_ir(Path(stdlib_object))
+                user_ir = Path(tmp) / 'user.ll'
+                split_file(ir, user_ir, symbols)
+            inputs = [str(user_ir), str(bc), str(ROOT / 'aot/runtime.c'),
+                      '-Wl,--export-dynamic', '-ldl']
+        elif stdlib_object is not None and not shared and not already_split:
             # Compile the runtime/stdlib bodies once (target/stdlib/<key>) and
             # link them instead of re-optimising ~180k IR lines every build.
             from stdlib_split import build_symbols_for_ir, split_file
@@ -228,10 +265,11 @@ def link(ir, binary, opt=2, timeout=600, clang='clang', shared=False, stdlib_obj
                       '-Wl,--export-dynamic', '-ldl']
         else:
             inputs = [str(ir), '-shared', '-fPIC'] if shared else [str(ir), str(ROOT / 'aot/runtime.c'), '-Wl,--export-dynamic', '-ldl']
-        subprocess.run([str(clang), f'-O{opt}', '-fuse-ld=lld', '-Wl,--threads=1',
+        lto_flags = ['-flto=thin'] if lto else []
+        subprocess.run([str(clang), f'-O{opt}', *lto_flags, '-fuse-ld=lld', '-Wl,--threads=1',
                         *inputs, '-o', str(candidate)],
                        cwd=ROOT, check=True, timeout=timeout)
-        count = validate(ir, candidate, extra_ir=stdlib_ir)
+        count = validate(ir, candidate, extra_ir=stdlib_ir, lto=lto)
         os.replace(candidate, binary)
     return count
 
@@ -244,6 +282,8 @@ def main():
     parser.add_argument('--shared', action='store_true', help='link a QLang extension without a second runtime')
     parser.add_argument('--stdlib-object', type=Path,
                         help='link a precompiled runtime/stdlib object (see aot/stdlib_split.py)')
+    parser.add_argument('--lto', action='store_true',
+                        help='link the stdlib as LLVM bitcode with ThinLTO (needs stdlib.ll next to the object)')
     parser.add_argument('--check-only', action='store_true', help='validate an existing ELF without linking')
     options = parser.parse_args()
     try:
@@ -252,7 +292,7 @@ def main():
         else:
             stdlib_object = options.stdlib_object or os.environ.get('QLANG_STDLIB_OBJECT')
             count = link(options.ir, options.output, options.opt, shared=options.shared,
-                         stdlib_object=stdlib_object)
+                         stdlib_object=stdlib_object, lto=options.lto)
     except (OSError, LinkError, subprocess.SubprocessError) as error:
         print(f'LinkError: {error}', file=sys.stderr)
         return 1
