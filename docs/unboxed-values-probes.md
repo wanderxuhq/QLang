@@ -1413,3 +1413,19 @@ arity/部分应用;这与 "hosting runtime 的派发器拥有 arity 与 Error �
 目标无注解而不存在;元数与 Error 实参由静态条件保证。
 
 验收:stage2/stage3 固定点成立;demo/type_gymnastics 419/419;selfhost 套件 ALL PASS。
+
+## 56. interpreter 套件的「重复定义」是接线 bug,不是代码生成问题(2026-10-28)
+
+§53 记录的红:链接 `interpreter.ll` 时报 `duplicate symbol: __panic_exit / __cold_located_error /
+.strbox7`。根因不在发射器:**`run_interpreter_tests._use_stdlib_object` 只导出了
+`QLANG_STDLIB_OBJECT`,没导出 `QLANG_STDLIB_SYMBOLS` / `QLANG_STDLIB_INTERFACE`**,
+于是 `emit()` 退回 `--emit-llvm`(单模块、含整个 runtime+库),再和 `stdlib.o` 一起链接 ——
+两边的符号当然重复。`run_selfhost_tests` 的同名函数导出三个变量,所以夹具一直是绿的。
+
+修法:补齐三个环境变量(和 selfhost 驱动一致),发射器走 `--emit-llvm-split`。
+
+**验收**:`run_interpreter_tests.py --compiler <新编译器> --jobs 2` → **ALL CHECKS PASS**
+(含 419 条类型断言的 type_gymnastics、argument 套件、解释器夹具)。
+
+教训:对象化(split)模式有两个前提 —— 链接给对象,**编译也要给接口**;只给一半,症状会伪装成
+「代码生成发出了重复符号」。

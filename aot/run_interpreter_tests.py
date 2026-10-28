@@ -37,10 +37,20 @@ def _use_stdlib_object(compiler):
     try:
         from stdlib_split import build_stdlib
         object_path, _symbols = build_stdlib(compiler)
+        # The object supplies the library at link time, so the compiler must emit the
+        # user part only (`--emit-llvm-split`); exporting just QLANG_STDLIB_OBJECT
+        # leaves the emitter monolithic and every runtime/stdlib symbol is defined
+        # twice (duplicate `__panic_exit` / `.strbox7` at link time).
         os.environ['QLANG_STDLIB_OBJECT'] = str(object_path)
+        os.environ['QLANG_STDLIB_SYMBOLS'] = str(object_path.with_name('symbols.tsv'))
+        interface = object_path.with_name('interface.txt')
+        if interface.exists():
+            os.environ['QLANG_STDLIB_INTERFACE'] = str(interface)
     except Exception as error:  # pragma: no cover - fall back to the monolithic link
         print(f'note: precompiled stdlib unavailable ({error}); linking monolithically', flush=True)
         os.environ.pop('QLANG_STDLIB_OBJECT', None)
+        os.environ.pop('QLANG_STDLIB_SYMBOLS', None)
+        os.environ.pop('QLANG_STDLIB_INTERFACE', None)
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
