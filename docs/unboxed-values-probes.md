@@ -1290,3 +1290,29 @@ nm -D plugin-O2.so | grep qlang_extension
 
 **symbols.json**:Python 侧的 `split_file` 回落路径需要它;QLang 构建器现在也生成
 (567 函数 / 1,625 全局,键是**不带 @** 的名字 —— 和 Python 的 `GLOBAL` 正则一致)。
+
+
+## 51. 校验提速:解析搬进 runtime(方案 B,2026-10-28)
+
+**问题**:`verify.ql` 逐字段调用 `std.Bytes.u64/byteAt`,每次约 **2.9 微秒**(成员访问 → 通用分发
+→ tag/边界检查 → 逐字节叶子调用 → 装箱)。13,000 次字段读取 ≈ 0.4 秒,整次校验 0.62 秒;
+Python 的 `struct.unpack` 同一件事只要 0.5 毫秒。
+
+**做法**:把 ELF 解析与逐条比对写成 **runtime.ql 里的函数** `__verify_elf_strings`,
+通过 `std.Bytes.verifyStrings(elf, strings, ir)` 只做**一次**跨边界调用。runtime 内部的调用是
+直接调用,不再走成员分派。`verify.ql` 从 266 行缩到 15 行(只剩参数解析和打印)。
+
+| 度量 | 之前(逐字段 QLang) | 现在(runtime 内一次跑完) |
+|---|---:|---:|
+| 校验(841 条,含用户 IR) | 0.62s | **0.088s(7×)** |
+| 链接里校验的增量 | +0.60s | **+0.07s** |
+
+**同等重要的修正**:对象旁的 `strings.tsv` 只覆盖**库侧**字符串;第一版只读它,等于不检查用户
+模块的字符串(旧的 `verify.ql` 会读 IR)。现在 `verify` 额外接收 IR 路径,把 `@.str`/`@.strbox`
+也解析进来一起核对 —— 841 条 = 828(库)+ 13(用户)。
+
+**验收**:好产物 `841 static strings ok` 退出 0;把用户字符串 `.strbox1000001` 的长度字段改成 999
+→ 退出 1,`size does not match`。
+
+**坑**:ELF 前 8 字节是 `7f 45 4c 46 02 01 01 00`(含 class/data/version),`readU64` 读 8 字节得到
+28,258,425,767,667 —— 判 magic 要取低 32 位(`% 4294967296`),或者干脆只比前 4 字节。

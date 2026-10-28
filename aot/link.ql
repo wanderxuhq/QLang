@@ -90,8 +90,7 @@ if linked.status != 0 {
 
 // 校验:链接产物里的静态字符串必须和 IR 一致。校验不过就不发布(保留旧产物)。
 if !skipVerify && !sharedMode {
-  let checkArgs = [verifyTool, staged, irPath];
-  if stdlibIr != "" { checkArgs[checkArgs.length] = stdlibIr; };
+  let checkArgs = [verifyTool, staged, if stdlibIr == "" { "-"; } else { stdlibIr; }, irPath];
   let checked = std.process.run(checkArgs);
   if checked.status != 0 {
     clean([bitcode, object, staged]);

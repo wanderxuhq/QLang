@@ -1937,7 +1937,265 @@ let __bytes_slice = (b, offset, count) -> {
   while i < count { ql_mem_store(out, i, ql_mem_get(src, offset + i)); i = i + 1; };
   __str_new(out, count);
 };
-let stdBytes = { read: __bytes_read, length: __bytes_length, byteAt: __bytes_at, u32: __bytes_u32, u64: __bytes_u64, hex: __bytes_hex, slice: __bytes_slice };
+// ---- ELF 静态字符串校验(runtime 内部:全部是直接调用,比从用户侧逐字段调用快一个量级)
+// 检查:每个 .strbox 符号存在、header = {tag=2, len}、buffer 由 R_AARCH64_RELATIVE 的 addend
+// 给出、buffer 字节等于期望的十六进制串。返回 {ok, count, message}。
+let __hex_digits = "0123456789abcdef";
+let __hex_digit = (v) -> if v < 10 { 48 + v; } else { 87 + v; };
+let __elf_hex = (base, offset, count) -> {
+  let out = ql_alloc(count * 2 + 1);
+  let i = 0;
+  while i < count {
+    let v = ql_mem_get(base, offset + i);
+    let low = v % 16; let high = (v - low) / 16;
+    ql_mem_store(out, i * 2, __hex_digit(high));
+    ql_mem_store(out, i * 2 + 1, __hex_digit(low));
+    i = i + 1;
+  };
+  __str_new(out, count * 2);
+};
+let __elf_at = (base, offset, count) -> {
+  let out = ql_alloc(count + 1);
+  let i = 0;
+  while i < count { ql_mem_store(out, i, ql_mem_get(base, offset + i)); i = i + 1; };
+  __str_new(out, count);
+};
+let __verify_elf_strings = (elfPath, stringsPath, irPath) -> {
+  let elf = __bytes_read(elfPath);
+  if isError(elf) { return { ok: false, count: 0, message: "cannot read " + elfPath }; };
+  let text = "";
+  if stringsPath != "" {
+    let read = __fs_read_text(stringsPath);
+    if isError(read) { return { ok: false, count: 0, message: "cannot read " + stringsPath }; };
+    text = read;
+  };
+  let base = ql_mem_get_ptr(elf, 8);
+  let size = readU64(elf, 16);
+  if size < 64 { return { ok: false, count: 0, message: "file too small" }; };
+  if readU64(base, 0) % 4294967296 != 1179403647 { return { ok: false, count: 0, message: "not an ELF64 LE file" }; };
+  let shoff = readU64(base, 40);
+  let shentsize = readU64(base, 58) % 65536;
+  let shnum = readU64(base, 60) % 65536;
+  let phoff = readU64(base, 32);
+  let phentsize = readU64(base, 54) % 65536;
+  let phnum = readU64(base, 56) % 65536;
+
+  // 段(地址 → 文件偏移)
+  let segOff = []; let segAddr = []; let segSize = [];
+  let pi = 0;
+  while pi < phnum {
+    let at = phoff + pi * phentsize;
+    if readU64(base, at) % 4294967296 == 1 {
+      segOff[segOff.length] = readU64(base, at + 8);
+      segAddr[segAddr.length] = readU64(base, at + 16);
+      segSize[segSize.length] = readU64(base, at + 32);
+    };
+    pi = pi + 1;
+  };
+  let fileOffset = (address) -> {
+    let i = 0;
+    while i < segAddr.length {
+      if address >= segAddr[i] && address - segAddr[i] < segSize[i] { return segOff[i] + address - segAddr[i]; };
+      i = i + 1;
+    };
+    -1;
+  };
+
+  // 节 + 符号表 + 重定位
+  let symOffset = -1; let symSize = 0; let symLink = 0;
+  let relSections = []; let si = 0;
+  while si < shnum {
+    let at = shoff + si * shentsize;
+    let kind = readU64(base, at + 4) % 4294967296;
+    if kind == 2 { symOffset = readU64(base, at + 24); symSize = readU64(base, at + 32); symLink = readU64(base, at + 40) % 4294967296; }
+    else if kind == 4 { relSections[relSections.length] = { offset: readU64(base, at + 24), size: readU64(base, at + 32) }; };
+    si = si + 1;
+  };
+  if symOffset < 0 { return { ok: false, count: 0, message: "no symbol table (validate before stripping)" }; };
+  let namesOffset = 0; let namesSize = 0;
+  let ns = shoff + symLink * shentsize;
+  namesOffset = readU64(base, ns + 24); namesSize = readU64(base, ns + 32);
+
+  // 重定位:offset → addend(R_AARCH64_RELATIVE = 1027)
+  let reloc = {};
+  let ri = 0;
+  while ri < relSections.length {
+    let section = relSections[ri];
+    let count = section.size / 24; let k = 0;
+    while k < count {
+      let at = section.offset + k * 24;
+      if readU64(base, at + 8) == 1027 { reloc[__itoa(readU64(base, at))] = readU64(base, at + 16); };
+      k = k + 1;
+    };
+    ri = ri + 1;
+  };
+
+  // 符号:id → {address, size}
+  let symbols = {};
+  let count = symSize / 24; let sk = 0;
+  while sk < count {
+    let at = symOffset + sk * 24;
+    let nameAt = namesOffset + (readU64(base, at) % 4294967296);
+    // 名字必须形如 ".strbox<digits>"
+    let prefixOk = ql_mem_get(base, nameAt) == 46 && ql_mem_get(base, nameAt + 1) == 115 && ql_mem_get(base, nameAt + 2) == 116
+      && ql_mem_get(base, nameAt + 3) == 114 && ql_mem_get(base, nameAt + 4) == 98 && ql_mem_get(base, nameAt + 5) == 111
+      && ql_mem_get(base, nameAt + 6) == 120;
+    if prefixOk {
+      let id = 0; let p = nameAt + 7; let done = false;
+      while !done {
+        let c = ql_mem_get(base, p);
+        if c == 0 { done = true; }
+        else if c < 48 || c > 57 { done = true; }
+        else { id = id * 10 + (c - 48); p = p + 1; };
+      };
+      symbols[__itoa(id)] = { address: readU64(base, at + 8), size: readU64(base, at + 16) };
+    };
+    sk = sk + 1;
+  };
+
+  // 期望值:strings.tsv 每行 ".strboxN<TAB>hex"(手工扫行,不依赖不存在的字符串工具)
+  // 用户模块的字符串:IR 里的 `@.strN` 与 `@.strboxN` 也要核对(对象旁的 tsv 只覆盖库侧)。
+  let irBuffers = {}; let irBoxes = [];
+  if irPath != "" {
+    let ir = __bytes_read(irPath);
+    if isError(ir) { return { ok: false, count: 0, message: "cannot read " + irPath }; };
+    let irBase = ql_mem_get_ptr(ir, 8);
+    let irLen = readU64(ir, 16);
+    let at = 0;
+    while at < irLen {
+      if ql_mem_get(irBase, at) == 64 && (at == 0 || ql_mem_get(irBase, at - 1) == 10) {
+        // "@.strbox<id> ... { i64 2, ptr @.str<buf>, i64 <len> ..."
+        if at + 8 < irLen && ql_mem_get(irBase, at + 1) == 46 && ql_mem_get(irBase, at + 2) == 115
+           && ql_mem_get(irBase, at + 3) == 116 && ql_mem_get(irBase, at + 4) == 114
+           && ql_mem_get(irBase, at + 5) == 98 && ql_mem_get(irBase, at + 6) == 111 && ql_mem_get(irBase, at + 7) == 120 {
+          let id = 0; let p = at + 8; let done = false;
+          while !done && p < irLen {
+            let c = ql_mem_get(irBase, p);
+            if c < 48 || c > 57 { done = true; } else { id = id * 10 + (c - 48); p = p + 1; };
+          };
+          // 找 "@.str" 之后的缓冲区编号与 ", i64 <len>"
+          let q = p; let foundBuf = -1;
+          while q + 5 < irLen {
+            if ql_mem_get(irBase, q) == 64 && ql_mem_get(irBase, q + 1) == 46 && ql_mem_get(irBase, q + 2) == 115
+               && ql_mem_get(irBase, q + 3) == 116 && ql_mem_get(irBase, q + 4) == 114 {
+              let bid = 0; let r = q + 5; let stop = false;
+              while !stop && r < irLen {
+                let c = ql_mem_get(irBase, r);
+                if c < 48 || c > 57 { stop = true; } else { bid = bid * 10 + (c - 48); r = r + 1; };
+              };
+              foundBuf = bid; q = irLen;
+            } else { q = q + 1; };
+          };
+          let lenAt = -1; let r2 = p;
+          while r2 + 6 < irLen {
+            if ql_mem_get(irBase, r2) == 44 && ql_mem_get(irBase, r2 + 1) == 32 && ql_mem_get(irBase, r2 + 2) == 105
+               && ql_mem_get(irBase, r2 + 3) == 54 && ql_mem_get(irBase, r2 + 4) == 52 && ql_mem_get(irBase, r2 + 5) == 32 {
+              lenAt = r2 + 6; r2 = irLen;
+            } else { r2 = r2 + 1; };
+          };
+          if foundBuf >= 0 && lenAt >= 0 {
+            let blen = 0; let r3 = lenAt; let stop2 = false;
+            while !stop2 && r3 < irLen {
+              let c = ql_mem_get(irBase, r3);
+              if c < 48 || c > 57 { stop2 = true; } else { blen = blen * 10 + (c - 48); r3 = r3 + 1; };
+            };
+            irBoxes[irBoxes.length] = { id: id, buffer: foundBuf, length: blen };
+          };
+        } else if at + 5 < irLen && ql_mem_get(irBase, at + 1) == 46 && ql_mem_get(irBase, at + 2) == 115
+                  && ql_mem_get(irBase, at + 3) == 116 && ql_mem_get(irBase, at + 4) == 114 {
+          // "@.str<id> = ... c"\XX..."
+          let id = 0; let p = at + 5; let done = false;
+          while !done && p < irLen {
+            let c = ql_mem_get(irBase, p);
+            if c < 48 || c > 57 { done = true; } else { id = id * 10 + (c - 48); p = p + 1; };
+          };
+          let quote = -1; let q = p;
+          while q + 1 < irLen {
+            if ql_mem_get(irBase, q) == 99 && ql_mem_get(irBase, q + 1) == 34 { quote = q + 2; q = irLen; } else { q = q + 1; };
+          };
+          if quote >= 0 {
+            let e = quote;
+            while e < irLen && ql_mem_get(irBase, e) != 34 { e = e + 1; };
+            let hex = ql_alloc((e - quote) * 2 + 2);
+            let o = 0; let k = quote;
+            while k < e {
+              let c = ql_mem_get(irBase, k);
+              if c != 92 { ql_mem_store(hex, o, c); o = o + 1; };
+              k = k + 1;
+            };
+            // IR 里的转义保留大小写,__elf_hex 输出小写 —— 统一转小写再比。
+            let lower = ql_alloc(o + 1);
+            let li2 = 0;
+            while li2 < o {
+              let c = ql_mem_get(hex, li2);
+              if c >= 65 && c <= 70 { c = c + 32; };
+              ql_mem_store(lower, li2, c);
+              li2 = li2 + 1;
+            };
+            irBuffers[__itoa(id)] = __str_new(lower, o);
+          };
+        };
+      };
+      at = at + 1;
+    };
+  };
+  let checked = 0;
+  let textBase = ql_mem_get_ptr(text, 8);
+  let textLen = readU64(text, 16);
+  let pos = 0;
+  while pos < textLen {
+    let lineStart = pos;
+    while pos < textLen && ql_mem_get(textBase, pos) != 10 { pos = pos + 1; };
+    let lineLen = pos - lineStart;
+    if lineLen > 0 {
+      let tab = -1; let ti = lineStart;
+      while ti < lineStart + lineLen && tab < 0 { if ql_mem_get(textBase, ti) == 9 { tab = ti; }; ti = ti + 1; };
+      if tab >= 0 {
+        let name = __bytes_slice(text, lineStart, tab - lineStart);
+        let hex = __bytes_slice(text, tab + 1, lineStart + lineLen - tab - 1);
+        let idText = __bytes_slice(name, 7, __s_len(name) - 7);
+        let symbol = symbols[idText];
+        if isError(symbol) || symbol == null { return { ok: false, count: checked, message: name + ": missing ELF symbol" }; };
+        let headerAt = fileOffset(symbol.address);
+        if headerAt < 0 { return { ok: false, count: checked, message: name + ": symbol address not in a loadable segment" }; };
+        if readU64(base, headerAt) != 2 { return { ok: false, count: checked, message: name + ": tag is not 2" }; };
+        if readU64(base, headerAt + 16) * 2 != __s_len(hex) { return { ok: false, count: checked, message: name + ": size does not match" }; };
+        let bufferAddress = reloc[__itoa(symbol.address + 8)];
+        if isError(bufferAddress) || bufferAddress == null { bufferAddress = readU64(base, headerAt + 8); };
+        if bufferAddress == 0 { return { ok: false, count: checked, message: name + ": null buffer pointer" }; };
+        let bufferAt = fileOffset(bufferAddress);
+        if bufferAt < 0 { return { ok: false, count: checked, message: name + ": buffer not in a loadable segment" }; };
+        if __elf_hex(base, bufferAt, __s_len(hex) / 2) != hex { return { ok: false, count: checked, message: name + ": linked bytes do not match" }; };
+        checked = checked + 1;
+      };
+    };
+    pos = pos + 1;
+  };
+  // 用户 IR 的字符串
+  let bi5 = 0;
+  while bi5 < irBoxes.length {
+    let box = irBoxes[bi5];
+    let hex = irBuffers[__itoa(box.buffer)];
+    if isError(hex) || hex == null { return { ok: false, count: checked, message: ".strbox" + __itoa(box.id) + ": IR buffer missing" }; };
+    let idText2 = __itoa(box.id);
+    let symbol2 = symbols[idText2];
+    if isError(symbol2) || symbol2 == null { return { ok: false, count: checked, message: ".strbox" + idText2 + ": missing ELF symbol" }; };
+    let headerAt2 = fileOffset(symbol2.address);
+    if headerAt2 < 0 { return { ok: false, count: checked, message: ".strbox" + idText2 + ": address not in a segment" }; };
+    if readU64(base, headerAt2) != 2 { return { ok: false, count: checked, message: ".strbox" + idText2 + ": tag is not 2" }; };
+    if readU64(base, headerAt2 + 16) * 2 != __s_len(hex) { return { ok: false, count: checked, message: ".strbox" + idText2 + ": size does not match" }; };
+    let bufferAddress2 = reloc[__itoa(symbol2.address + 8)];
+    if isError(bufferAddress2) || bufferAddress2 == null { bufferAddress2 = readU64(base, headerAt2 + 8); };
+    if bufferAddress2 == 0 { return { ok: false, count: checked, message: ".strbox" + idText2 + ": null buffer" }; };
+    let bufferAt2 = fileOffset(bufferAddress2);
+    if bufferAt2 < 0 { return { ok: false, count: checked, message: ".strbox" + idText2 + ": buffer not in a segment" }; };
+    if __elf_hex(base, bufferAt2, __s_len(hex) / 2) != hex { return { ok: false, count: checked, message: ".strbox" + idText2 + ": linked bytes do not match" }; };
+    checked = checked + 1;
+    bi5 = bi5 + 1;
+  };
+  { ok: true, count: checked, message: "" };
+};
+let stdBytes = { read: __bytes_read, length: __bytes_length, byteAt: __bytes_at, u32: __bytes_u32, u64: __bytes_u64, hex: __bytes_hex, slice: __bytes_slice, verifyStrings: __verify_elf_strings };
 let stdFs = { readFileText: __fs_read_text, canonicalPath: __fs_canonical, writeText: __fs_write_text, remove: __fs_remove };
 // 公开能力:运行一个外部程序并拿到 status/stdout/stderr。
 let stdProcess = { run: __procRun };
