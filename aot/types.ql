@@ -1430,7 +1430,11 @@ let inferTypes = (stmts) -> {
   typeErrors;
 };
 
-let isStaticNumber = (node) -> !isError(node.staticType) && node.staticType == "Number";
+// 「静态类型是 Number」还不足以下结论:除零、可能返回 Error 的调用都会让运行期拿到
+// Error 而静态类型仍是 Number(AGENTS §7.1)。发射端用它来省 tag 测试/走裸数值路径,
+// 所以必须同时要求「不可能为 Error」,否则会把 Error 的载荷当数字算。
+let isStaticNumber = (node) -> !isError(node.staticType) && node.staticType == "Number"
+  && !isError(node.cannotBeError) && node.cannotBeError == true;
 // 右值静态类型已等于目标声明的内建类型 ⇒ 写入时的注解检查不可能失败(死代码)。
 let checkIsDead = (valueNode, declaredName) -> {
   if declaredName == "" { return false; };

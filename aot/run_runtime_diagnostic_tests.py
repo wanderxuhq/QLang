@@ -11,7 +11,7 @@ FIXTURES = (
     # 17 -> 16: the "declaration annotation source" check moved to the frontend
     # (run_semantic_diagnostic_tests.py, case `annotation-literal`), because a
     # wrong-typed literal on an annotated binding is now a compile-time error.
-    ('t38_runtime_diagnostics', b'runtime source checks: 16\n'),
+    ('t38_runtime_diagnostics', b'runtime source checks: 17\n'),
     ('t39_runtime_module_diagnostics', b'runtime module source checks: 7\n'),
 )
 

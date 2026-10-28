@@ -1697,7 +1697,7 @@ tag==5 才解引用 `payload+8` 取数据指针)。
 验收:selfhost 与 interpreter 套件都 ALL PASS;`QLANG_STDLIB_OBJECT/SYMBOLS/INTERFACE` 指向
 `target/stdlib/<key>/`。至此**构建路径上不再有 Python**,Python 只剩测试驱动与两个回落分支。
 
-## 68. t38「provenance survives allocations」的进一步诊断(2026-10-29,未修)
+## 68. t38「provenance survives allocations」= staticType 被当成运行期类型(已修)(2026-10-29)
 
 `run_runtime_diagnostic_tests` 的 `t38:38` 仍红。最小复现(不依赖 t38 的其它断言):
 
@@ -1719,7 +1719,22 @@ println(chained.cause.line);    // 11  ← 又变了
    cause 的定位字段会被**后续读取所在的行**改写,不是「分配导致丢 provenance」。
 3. `chained.type` 是 UndefinedField —— 它没有 Error 的字段布局。
 
-所以 handoff 里把它记成「cause provenance 真 bug(runtime.ql:97-120 的守卫)」不够准确:
-先要看**链式错误的构造点**(算术遇到 Error 时生成的那个值)到底建的是什么对象。
-下一步:`emitBinaryOp` 里 Error 操作数的链式错误路径 + `__err_chain`/`__err_new`,核对字段
-布局与 tag;修好之后 `isError(chained)` 与 cause 的定位应同时正确,`t38:38` 才可能转绿。
+**根因**:不是 provenance 守卫,而是 `isStaticNumber` 只查 `staticType == "Number"` ——
+发射端据此**省掉 tag 测试**走裸数值路径。但「静态类型 Number」的运行期值还可能是 Error
+(除零、可能出错的调用),于是 `direct + 1` 直接对 Error 的载荷做了一次 double 加法,
+得到的是一个**垃圾 Number**,链式错误根本没被构造。
+
+**修法**:`isStaticNumber` 同时要求 `cannotBeError == true`(与 AGENTS §7.1「staticType ≠
+运行期类型」一致)。分析已经为「两个操作数都不可能出错 + 该运算本身不产生错误」的节点盖上
+`cannotBeError`,所以安全表达式仍然走裸数值路径。
+
+| 指标 | 修复前 | 修复后 |
+|---|---|---|
+| t38 运行时诊断 | 16/17(1 FAIL) | **17/17 全过** |
+| `direct + 1` | 垃圾 Number,`isError` 为 false | `TypeMismatch` Error,cause 定位正确 |
+| t41 / t30 / b_chars 机器指令 | 136,865 / 151,774 / 131,745 | 147,257 / 162,851 / 141,958(**+7.6%**) |
+| b_chars 运行 | 0.64s | 0.66s |
+
+**代价是 +7.6% 体积**:凡是「静态 Number 但没被证明不可能出错」的表达式(主要是运行时/库里
+那些**没有参数注解**的助手)现在都要发 tag 菱形。这是正确性换来的;要收回去只能靠给热助手
+补注解(handoff F),让 `cannotBeError` 成立。
