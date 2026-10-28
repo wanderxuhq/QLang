@@ -3372,21 +3372,49 @@ let loadStdlibInterface = (text) -> {
   };
   null;
 };
+// 进程 CPU 时钟(微秒,10ms 粒度):本机 /proc/uptime 是冻结的,不能用;/proc/self/stat 的
+// utime+stime(clock ticks,100Hz)在沙箱里可用,且编译是单线程,CPU 时间就是阶段耗时。
+let nowUs = () -> {
+  let text = std.fs.readFileText("/proc/self/stat");
+  if isError(text) { return 0; };
+  let close = std.String.split(text)(")");
+  if close.length < 2 { return 0; };
+  let rest = std.String.split(close[1])(" ");
+  let fields = [];
+  let i = 0;
+  while i < rest.length { if rest[i] != "" { fields[fields.length] = rest[i]; }; i = i + 1; };
+  if fields.length < 13 { return 0; };
+  let utime = std.Number.parseFloat(fields[11]);
+  let stime = std.Number.parseFloat(fields[12]);
+  if isError(utime) || isError(stime) { return 0; };
+  (utime + stime) * 10000;
+};
+// 微秒差 → 毫秒整数
+let usToMs = (us) -> {
+  if isError(us) { return 0; };
+  let whole = us - us % 1000;
+  whole / 1000;
+};
 let main = (args) -> {
   // `--fold` 是独立选项(AST 级常量折叠),不属于 codegen;默认关闭。
   let foldEnabled = false;
   // `--static-scan` 只做统计(静态派发候选/拒绝原因),不改发射;默认关闭。
   let staticScan = false;
+  // `--timing` 打印各阶段耗时(写在 IR 注释里;默认关闭,固定点比较不受影响)。
+  let timingOn = false;
   let keptArgs = [];
   let argIndex = 0;
   while argIndex < args.length {
     if args[argIndex] == "--fold" { foldEnabled = true; }
     else if args[argIndex] == "--static-scan" { staticScan = true; }
+    else if args[argIndex] == "--timing" { timingOn = true; }
     else { keptArgs[keptArgs.length] = args[argIndex]; };
     argIndex = argIndex + 1;
   };
   args = keptArgs;
   staticScanSet(staticScan);
+  let tStart = 0; let tLib = 0; let tParse = 0; let tAnalyze = 0;
+  if timingOn { tStart = nowUs(); };
   let interfaceDump = args.length == 2 && args[0] == "--emit-stdlib-interface";
   splitStdlibMode = args.length == 5 && args[0] == "--emit-llvm-split";
   if args.length != 3 && !splitStdlibMode && !interfaceDump { return std.Error.raise("CompileError", "usage: qlangc --emit-llvm|--emit-module source.ql runtime.ql", null); };
@@ -3426,6 +3454,7 @@ let main = (args) -> {
   let path = std.fs.canonicalPath(sourcePath);
   if isError(path) && !interfaceDump { std.Error.raise("CompileError", path.message, null)?; };
   let root = loadModuleProgram(source, if interfaceDump { "<interface>"; } else { path; }, 0)?;
+  if timingOn { tParse = nowUs(); };
   let userProgram = root.program;
   // 类型信息在生成代码之前算好。顺序:运行期在先(它的成员签名要用来建模块索引),再分析
   // 标准库(它自己的推导结论同时补齐索引),最后是用户程序与已加载的 import 模块。
@@ -3460,9 +3489,11 @@ let main = (args) -> {
     typeSetStdNamespace(false);
     buildStdTypes(libraryProgram.statements);
   };
+  if timingOn { tLib = nowUs(); };
   if interfaceDump { writeStdlibInterface(program, libraryProgram); return null; };
   typeSetCallSafety(true);
   let typeErrs = inferTypes(userProgram.statements);
+  if timingOn { tAnalyze = nowUs(); };
   knownScan(userProgram.statements, "user");
   typeSetCallSafety(false);
   let typePaths = std.Object.keys(moduleCache); let typeIndex = 0;
@@ -3728,6 +3759,9 @@ let main = (args) -> {
   out[out.length] = "; astvisits: walkers=" + std.String.toString(astVisits) + " module=" + std.String.toString(visitBy.module) + " slots=" + std.String.toString(visitBy.slots) + " names=" + std.String.toString(visitBy.names) + " leaf=" + std.String.toString(visitBy.leaf) + " bodylets=" + std.String.toString(visitBy.bodylets);
   out[out.length] = "; constfold:" + foldReport;
   out[out.length] = "; directreject: nohit=" + std.String.toString(directReject.nohit) + " notable=" + std.String.toString(directReject.notable) + " noinfo=" + std.String.toString(directReject.noinfo) + " assigned=" + std.String.toString(directReject.assigned) + " arity=" + std.String.toString(directReject.arity) + " args=" + std.String.toString(directReject.args) + " ann=" + std.String.toString(directReject.ann);
+  if timingOn {
+    out[out.length] = "; phase: parse=" + std.String.toString(usToMs(tParse - tStart)) + "ms lib=" + std.String.toString(usToMs(tLib - tParse)) + "ms analyze=" + std.String.toString(usToMs(tAnalyze - tLib)) + "ms emit=" + std.String.toString(usToMs(nowUs() - tAnalyze)) + "ms";
+  };
   out[out.length] = "; stdchain: hits=" + std.String.toString(stdChainHits) + " cached=" + std.String.toString(stdCachedCalls) + " nokey=" + std.String.toString(stdChainReject.nokey) + " arity=" + std.String.toString(stdChainReject.arity) + " args=" + std.String.toString(stdChainReject.args) + " written=" + std.String.toString(stdChainReject.written);
   let staticLine = knownReportLine();
   if staticLine != "" { out[out.length] = "; staticcall: " + staticLine; };
