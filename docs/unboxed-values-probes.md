@@ -1756,3 +1756,28 @@ println(chained.cause.line);    // 11  ← 又变了
 
 验收:demo 419/419;固定点成立;selfhost、interpreter、runtime-diagnostic 全过。
 剩下的 ~7% 只能靠给热助手补注解/加强 known-safe(handoff F/M)把裸数值路径赢回来。
+
+## 70. 工具链两条验收(2026-10-29)
+
+**① 链接路径在四个优化级别都通**(之前非 `-O2` 的委托刚放开,没回归):
+
+```
+stage2 --emit-llvm-split t16_functions.ql runtime.ql symbols.tsv interface.txt
+tools/link <ir> -o <bin> --opt {0,1,2,3} --stdlib-object stdlib.o --stdlib-ir strings.tsv
+```
+
+四个级别都链接成功、运行退出 0、输出与 `t16_functions.expected` 逐字节相同。
+
+**② 工具链能从零重建**(证明构建路径不依赖 Python):
+
+```
+rm -rf target/tools && aot/bootstrap.sh --compiler target/selfhost/stage2
+```
+
+1m49s 产出 `target/tools/{build,link,stdlib,verify}` 四个可执行;随后 selfhost 套件用这套
+新工具跑 **ALL REQUESTED CHECKS PASS**。
+
+**③ 安全分析扩到运行时/库:仍然没有新事实**。把 `typeSetCallSafety(true)` 包在
+runtime/library 的 `inferTypes` 外面,`t41/b_chars` 的指令数**一模一样**
+(146,741 / 141,457) —— 和 §59 的结论一致:库里的绑定过不了安全证明,所以那 ~7% 的
+tag 菱形靠「开分析开关」收不回来;要收只能靠**注解**(让参数/返回带类型)或改判据本身。
