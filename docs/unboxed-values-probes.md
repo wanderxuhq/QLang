@@ -1682,3 +1682,17 @@ tag==5 才解引用 `payload+8` 取数据指针)。
 
 验收:输出一致;demo 419/419;固定点成立;selfhost 与 interpreter 套件全过。
 收益不大,但它是纯减法(体积也降),而且清掉的是每次调用都付的固定成本。
+
+## 67. 门禁的标准库对象改用 QLang 构建器(2026-10-29)
+
+`run_selfhost_tests._use_stdlib_object` 原来直接 `from stdlib_split import build_stdlib`
+(Python)。现在:
+
+1. 先确保 `target/tools/{stdlib,build,link,verify}` 存在(`aot/bootstrap.sh`,shell + clang);
+2. 优先跑 `target/tools/stdlib --compiler <c>`(QLang 构建器,产物与 Python 版逐字节相同,
+   布局一致:`stdlib.o / stdlib.ll / symbols.tsv / strings.tsv / interface.txt / symbols.json`);
+3. 工具不可用时才回落 Python 的 `build_stdlib`(保留,供没有工具链的检出)。
+
+`run_interpreter_tests` 里那份重复的 `_use_stdlib_object` 删掉,直接从 `run_selfhost_tests` 导入。
+验收:selfhost 与 interpreter 套件都 ALL PASS;`QLANG_STDLIB_OBJECT/SYMBOLS/INTERFACE` 指向
+`target/stdlib/<key>/`。至此**构建路径上不再有 Python**,Python 只剩测试驱动与两个回落分支。

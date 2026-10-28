@@ -151,13 +151,46 @@ def run_program_tasks(compiler, tasks, work, jobs):
             future.result()
 
 
+def _bootstrap_tools(compiler):
+    """Build target/tools/{stdlib,build,link,verify}（shell + clang，不用 Python）。"""
+    script = ROOT / 'aot' / 'bootstrap.sh'
+    if (ROOT / 'target' / 'tools' / 'stdlib').exists():
+        return
+    mode = '--self' if (ROOT / 'target' / 'tools' / 'link').exists() else '--compiler'
+    command = [str(script), mode, str(compiler)] if mode == '--compiler' else [str(script), '--self', '--compiler', str(compiler)]
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError((result.stdout + result.stderr).strip()[-400:])
+
 def _use_stdlib_object(compiler):
     """Compile the fixed runtime/stdlib prefix once and link it per fixture.
 
     Every fixture otherwise re-emits ~180k IR lines of runtime+stdlib and asks
-    `clang -O2` to optimise them again. `stdlib_split.build_stdlib` caches the
-    object by (compiler, runtime, bundle) hash, so a gate run pays for it once.
+    `clang -O2` to optimise them again. The object is cached by
+    (compiler, runtime, bundle) hash, so a gate run pays for it once.
+
+    Prefer the QLang builder (`target/tools/stdlib`), which produces the same
+    four artifacts as `aot/stdlib_split.py`; keep the Python builder as the
+    fallback for checkouts without a toolchain.
     """
+    object_path = None
+    try:
+        _bootstrap_tools(compiler)
+        result = subprocess.run([str(ROOT / 'target' / 'tools' / 'stdlib'), '--compiler', str(compiler)],
+                                capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError((result.stdout + result.stderr).strip()[-400:])
+        object_path = Path(result.stdout.strip().splitlines()[-1])
+    except Exception as error:  # pragma: no cover - fall back to the Python builder
+        print(f'note: QLang stdlib builder unavailable ({error}); using stdlib_split.py', flush=True)
+        object_path = None
+    if object_path is not None:
+        os.environ['QLANG_STDLIB_OBJECT'] = str(object_path)
+        os.environ['QLANG_STDLIB_SYMBOLS'] = str(object_path.with_name('symbols.tsv'))
+        interface = object_path.with_name('interface.txt')
+        if interface.exists():
+            os.environ['QLANG_STDLIB_INTERFACE'] = str(interface)
+        return
     try:
         from stdlib_split import build_stdlib
         object_path, _symbols = build_stdlib(compiler)
@@ -166,16 +199,8 @@ def _use_stdlib_object(compiler):
         interface = object_path.with_name('interface.txt')
         if interface.exists():
             os.environ['QLANG_STDLIB_INTERFACE'] = str(interface)
-        # 顺手构建 QLang 工具链(link/verify/build/stdlib)。引导用 aot/bootstrap.sh
-        # (shell + clang,不用 Python);已有 tools/link 时可以 --self 自举重建。
-        # 构建失败不影响门禁,回落 native_link.py。
         try:
-            script = ROOT / 'aot' / 'bootstrap.sh'
-            mode = '--self' if (ROOT / 'target' / 'tools' / 'link').exists() else '--compiler'
-            command = [str(script), mode, str(compiler)] if mode == '--compiler' else [str(script), '--self', '--compiler', str(compiler)]
-            result = subprocess.run(command, capture_output=True, text=True)
-            if result.returncode != 0:
-                raise RuntimeError((result.stdout + result.stderr).strip()[-400:])
+            _bootstrap_tools(compiler)
         except Exception as error:  # pragma: no cover
             print(f'note: QLang toolchain unavailable ({error}); linking with native_link.py', flush=True)
     except Exception as error:  # pragma: no cover - fall back to the monolithic link

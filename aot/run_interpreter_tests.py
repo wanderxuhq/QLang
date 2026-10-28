@@ -9,7 +9,7 @@ import subprocess
 import sys
 import tempfile
 
-from run_selfhost_tests import ROOT, TIMEOUT, emit, link
+from run_selfhost_tests import ROOT, TIMEOUT, emit, link, _use_stdlib_object
 
 
 def execute(binary, source, cwd=ROOT):
@@ -26,31 +26,6 @@ def body(result):
     return result.stdout.split(start, 1)[1][:-len(end)]
 
 
-
-def _use_stdlib_object(compiler):
-    """Compile the fixed runtime/stdlib prefix once and link it per fixture.
-
-    Every fixture otherwise re-emits ~180k IR lines of runtime+stdlib and asks
-    `clang -O2` to optimise them again. `stdlib_split.build_stdlib` caches the
-    object by (compiler, runtime, bundle) hash, so a gate run pays for it once.
-    """
-    try:
-        from stdlib_split import build_stdlib
-        object_path, _symbols = build_stdlib(compiler)
-        # The object supplies the library at link time, so the compiler must emit the
-        # user part only (`--emit-llvm-split`); exporting just QLANG_STDLIB_OBJECT
-        # leaves the emitter monolithic and every runtime/stdlib symbol is defined
-        # twice (duplicate `__panic_exit` / `.strbox7` at link time).
-        os.environ['QLANG_STDLIB_OBJECT'] = str(object_path)
-        os.environ['QLANG_STDLIB_SYMBOLS'] = str(object_path.with_name('symbols.tsv'))
-        interface = object_path.with_name('interface.txt')
-        if interface.exists():
-            os.environ['QLANG_STDLIB_INTERFACE'] = str(interface)
-    except Exception as error:  # pragma: no cover - fall back to the monolithic link
-        print(f'note: precompiled stdlib unavailable ({error}); linking monolithically', flush=True)
-        os.environ.pop('QLANG_STDLIB_OBJECT', None)
-        os.environ.pop('QLANG_STDLIB_SYMBOLS', None)
-        os.environ.pop('QLANG_STDLIB_INTERFACE', None)
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
