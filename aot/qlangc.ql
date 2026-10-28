@@ -1482,7 +1482,9 @@ let emitLetStmt = (node) -> {
         curScope.directFns[node.name] = { inline: true, arity: inline.arity, params: inline.params, body: inline.body };
       } else if rawInfo != null && !isError(node.value.rawDirect) && node.value.rawDirect == true {
         curScope.directFns[node.name] = { raw: true, ir: node.value.emittedIr, arity: node.value.parameters.length, rawRet: !isError(node.value.returnsNumberSafe) && node.value.returnsNumberSafe == true };
-      } else if !isError(node.value.emittedIr) && node.value.directLeaf == true && node.value.directNoParamAnnotations == true {
+      } else if !isError(node.value.emittedIr) && node.value.directNoParamAnnotations == true {
+        // 装箱直调不需要 leaf 条件(那是 raw ABI 的判据):只要形参没有注解
+        // (分派器负责的检查因此不会丢)、实参不可能为 Error、元数精确即可。
         curScope.directFns[node.name] = { ir: node.value.emittedIr, arity: node.value.parameters.length,
                                           fast: fastArityFor(node.name) };
       };
