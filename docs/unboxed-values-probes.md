@@ -1869,3 +1869,24 @@ b_chars、同编译器:
 
 **注意**:`stdlib.bc` 目前由 `native_link.py --lto` 按需生成并缓存;`tools/link`(QLang 链接器)
 还不支持 `--lto`,所以带 `--lto` 的路径暂时走 Python 链接器。
+
+## 75. 一个开关切到「库只编一次」:`--stdlib-object <dir>`(2026-10-29)
+
+`tools/stdlib` 的产物目录里已有 `symbols.tsv` / `interface.txt`,所以编译器接受一个目录参数即可:
+
+```
+stage2 --emit-llvm --stdlib-object target/stdlib/<key> prog.ql runtime.ql > prog.ll
+```
+
+内部等价于 `--emit-llvm-split <src> <runtime> <dir>/symbols.tsv <dir>/interface.txt`。
+
+| 输入 | 单模块 | `--stdlib-object` |
+|---|---|---|
+| 夹具 t30 前端 | 11.2s | **0.81s** |
+| 产物 IR 行数 | ~180k | 25,901(仅用户模块) |
+
+配合 `native_link.py --lto`(ThinLTO)已能端到端:b_chars 前端 0.8s + 链接 15.1s(默认 `--opt 2`)
+≈ **15.9s**,单模块 23.6s;运行 CPU 0.764s vs 0.596s。
+
+**注意**:手动用 `-O1 -flto=thin` 时链接只有 9.6s、CPU 0.556s —— 对这个 bench 而言 `-O1` LTO
+比 `-O2` LTO **又快又稳**。下一轮把 LTO 的默认优化级别定为 O1(`--lto` 时),再用 bench 套件复测。

@@ -3403,15 +3403,22 @@ let main = (args) -> {
   // `--timing` 打印各阶段耗时(写在 IR 注释里;默认关闭,固定点比较不受影响)。
   let timingOn = false;
   let keptArgs = [];
+  let stdlibDir = "";
   let argIndex = 0;
   while argIndex < args.length {
     if args[argIndex] == "--fold" { foldEnabled = true; }
     else if args[argIndex] == "--static-scan" { staticScan = true; }
     else if args[argIndex] == "--timing" { timingOn = true; }
+    else if args[argIndex] == "--stdlib-object" { stdlibDir = args[argIndex + 1]; argIndex = argIndex + 1; }
     else { keptArgs[keptArgs.length] = args[argIndex]; };
     argIndex = argIndex + 1;
   };
   args = keptArgs;
+  // `--stdlib-object <dir>`:一个开关就把编译切到「库只编一次」——目录里放
+  // symbols.tsv / interface.txt(由 tools/stdlib 产出),不用再记三个参数。
+  if stdlibDir != "" && args.length == 3 {
+    args = ["--emit-llvm-split", args[1], args[2], stdlibDir + "/symbols.tsv", stdlibDir + "/interface.txt"];
+  };
   staticScanSet(staticScan);
   let tStart = 0; let tLib = 0; let tParse = 0; let tAnalyze = 0;
   if timingOn { tStart = nowUs(); };
