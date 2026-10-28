@@ -1451,3 +1451,24 @@ arity/部分应用;这与 "hosting runtime 的派发器拥有 arity 与 Error �
 
 验收:demo/type_gymnastics 419/419;stage2/stage3 固定点成立;selfhost 套件 ALL PASS;
 interpreter 套件 ALL CHECKS PASS。
+
+## 58. 内联 lambda 成员也有符号了,但链的下一道墙是「实参证明」(2026-10-28)
+
+`std.String.length` 这类成员是**内联 lambda**(不是标识符绑定),之前没有名字也就没有可调符号。
+现在发射期递归收「模块对象绑定名 -> 成员 -> ql_fnN/元数」,以及导出表「模块名 -> 对象绑定名」,
+链目标表把这类成员也登记上。
+
+| 夹具 | 之前(v16,仅标识符成员) | 之后(v17) |
+|---|---|---|
+| t30_strings | 155,483 | **155,363(−120)** |
+| t41_math_library | 136,925 | 136,925(该夹具的 sqrt/pow 本来就命中) |
+
+**为什么只有 −120**:t30 的计数是 `hits=8 nokey=1 args=62` —— 71 个链调用点里 62 个被
+「实参可能是 Error」挡住,只有 8 个拿到直调。也就是说链的收益已经撞上同一堵墙:
+roadmap 的「库调用图的 known-safe 证明」(handoff 待办 M)。
+
+还剩下的 `nokey`:`std.Object.keys` / `std.JSON.*` 的模块对象是**工厂调用产物**
+(`ObjectLibrary = makeObjectAlgorithms(...)`),不是字面量,静态收不到成员表 —— 要么内联工厂,
+要么让工厂自己登记(不在这一片)。
+
+验收:demo 419/419;固定点成立;selfhost ALL PASS;interpreter ALL CHECKS PASS。

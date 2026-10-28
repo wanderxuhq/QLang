@@ -66,8 +66,47 @@ let stdChainHits = 0;
 let stdChainReject = { nokey: 0, arity: 0, args: 0, written: 0 };
 let stdMembersWritten = false;
 let stdMonoIr = {};
+// 内联 lambda 成员(如 Object.keys)没有绑定名,但发射时每个函数都有 ql_fnN;
+// 这里记「模块对象绑定名 -> 成员 -> 符号/元数」,以及「模块名 -> 对象绑定名」。
+let stdMemberIr = {};
+let stdModuleBinding = {};
 let stdMonoArity = {};
 let stdSlotScope = null;
+// 递归收库里的对象字面量成员(内联 lambda → ql_fnN)与导出表(模块名 -> 对象绑定名)。
+let collectLibraryFacts = (stmts) -> {
+  let i = 0;
+  while i < stmts.length {
+    let st = stmts[i];
+    if !isError(st.type) {
+      if st.type == "Object" {
+        let fi = 0;
+        while fi < st.fields.length {
+          let fv = st.fields[fi].value;
+          if fv != null && !isError(fv) && !isError(fv.type) && fv.type == "Identifier" {
+            stdModuleBinding[st.fields[fi].name] = fv.name;
+          };
+          fi = fi + 1;
+        };
+      };
+      if st.type == "Let" && st.value != null && !isError(st.value.type) {
+        if st.value.type == "Object" {
+          let fi = 0;
+          while fi < st.value.fields.length {
+            let fv = st.value.fields[fi].value;
+            if fv != null && !isError(fv) && !isError(fv.type) && fv.type == "Function" && !isError(fv.emittedIr) {
+              if isError(stdMemberIr[st.name]) { stdMemberIr[st.name] = {}; };
+              stdMemberIr[st.name][st.value.fields[fi].name] = { ir: fv.emittedIr, arity: fv.parameters.length };
+            };
+            fi = fi + 1;
+          };
+        };
+        if st.value.type == "Function" && st.value.body != null { collectLibraryFacts(st.value.body.statements); };
+      };
+    };
+    i = i + 1;
+  };
+  null;
+};
 // 单模块模式:库函数是包在 __build_standard_library 里的嵌套 let,所以递归收。
 let collectMonoFns = (stmts) -> {
   let i = 0;
@@ -86,6 +125,22 @@ let collectMonoFns = (stmts) -> {
 };
 // 由「模块 -> 成员 -> 源绑定名」和「源绑定名 -> 符号/元数」拼出 std 链的直调目标。
 let buildStdChainTargets = (fromObject) -> {
+  if !fromObject {
+    let mods0 = std.Object.keys(stdModuleBinding);
+    let mi0 = 0;
+    while mi0 < mods0.length {
+      let members0 = stdMemberIr[stdModuleBinding[mods0[mi0]]];
+      if !isError(members0) {
+        let mk0 = std.Object.keys(members0); let mj0 = 0;
+        while mj0 < mk0.length {
+          let info0 = members0[mk0[mj0]];
+          stdChainTargets[mods0[mi0] + "." + mk0[mj0]] = { ir: info0.ir, arity: info0.arity, fast: -1 };
+          mj0 = mj0 + 1;
+        };
+      };
+      mi0 = mi0 + 1;
+    };
+  };
   let table = stdMemberBindingGet();
   let mods = std.Object.keys(table);
   let i = 0;
@@ -2974,6 +3029,7 @@ let emitStdlibInit = (runtimeStmts, libraryStmts) -> {
     li = li + 1;
   };
   collectMonoFns(libraryStmts);
+  collectLibraryFacts(libraryStmts);
   allowDirectUserCalls = false;
   let libraryBase = emitCallRegs("__fresh_std", []);
   let library = emitCallRegs("__build_standard_library", [libraryBase]);
