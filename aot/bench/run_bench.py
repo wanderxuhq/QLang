@@ -11,6 +11,7 @@ Usage:
   python3 aot/bench/run_bench.py --compiler /tmp/stage2_new --only b_chars
 """
 import argparse
+import os
 import pathlib
 import re
 import resource
@@ -19,6 +20,7 @@ import sys
 import time
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / 'aot'))
 BENCH_DIR = ROOT / "aot" / "bench"
 RUNTIME = ROOT / "aot" / "runtime.ql"
 INSN = re.compile(r"^\s+[a-z]")
@@ -45,9 +47,23 @@ def main():
     ap.add_argument("--only", default="")
     ap.add_argument("--keep", action="store_true", help="keep intermediate files")
     ap.add_argument("--no-run", action="store_true", help="skip linking/running")
+    ap.add_argument("--split", action="store_true",
+                    help="compile via the precompiled stdlib object (fast compile; "
+                         "insns then only cover the user module and are NOT comparable)")
     args = ap.parse_args()
 
     compiler = str(pathlib.Path(args.compiler).resolve())
+    symbols = None
+    interface = None
+    if args.split:
+        # 库只编一次:编译只发用户模块(编译时间口径)。
+        try:
+            from run_selfhost_tests import _use_stdlib_object
+            _use_stdlib_object(pathlib.Path(compiler))
+            symbols = os.environ.get('QLANG_STDLIB_SYMBOLS')
+            interface = os.environ.get('QLANG_STDLIB_INTERFACE')
+        except Exception as error:  # pragma: no cover
+            print(f"note: stdlib object unavailable ({error}); emitting monolithically", file=sys.stderr)
     work = ROOT / "target" / "bench"
     work.mkdir(parents=True, exist_ok=True)
 
@@ -66,7 +82,10 @@ def main():
         binary = work / name
 
         t0 = time.monotonic()
-        proc = run([compiler, "--emit-llvm", str(source), str(RUNTIME)], timeout=600)
+        emit_args = [compiler, "--emit-llvm-split" if symbols else "--emit-llvm", str(source), str(RUNTIME)]
+        if symbols:
+            emit_args += [symbols, interface if interface else '-']
+        proc = run(emit_args, timeout=600)
         frontend = time.monotonic() - t0
         if proc.returncode != 0:
             print(f"{name}: compiler failed\n{proc.stderr}", file=sys.stderr)
