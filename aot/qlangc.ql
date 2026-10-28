@@ -878,6 +878,29 @@ let emitBinaryOp = (node) -> {
       // 标签感知的 __op_eq/__op_ne ⇒ 两个 tag 测试与整个菱形都不发,直接派发。
       let oneString = (!isError(node.left.staticType) && node.left.staticType == "String") || (!isError(node.right.staticType) && node.right.staticType == "String");
       if oneString && (op == "+" || op == "==" || op == "!=") {
+        // 一侧静态是 String 且是 `==`:另一侧运行时也是 String(tag 2)时,通用派发
+        // 的唯一结果就是 __str_eq(a,b)。先内联一次 tag 判断,命中就直接调 __str_eq,
+        // 省掉 __op_eq 那一层调用(否则每字符比较是两层 QLang 调用)。
+        if op == "==" {
+          let lStr = !isError(node.left.staticType) && node.left.staticType == "String";
+          let S = if lStr { L } else { R };
+          let O = if lStr { R } else { L };
+          let t = temp(); let isStr = temp();
+          line("  " + t + " = call i64 @ql_tag(%ql_value " + O + ")");
+          line("  " + isStr + " = icmp eq i64 " + t + ", 2");
+          let fFast = lbl(); let fSlow = lbl(); let fDone = lbl();
+          line("  br i1 " + isStr + ", label %" + fFast + ", label %" + fSlow);
+          line(fFast + ":"); curLbl = fFast;
+          let rFast = emitCallRegs("__str_eq", [S, O]);
+          let pFast = curLbl; line("  br label %" + fDone);
+          line(fSlow + ":"); curLbl = fSlow;
+          let rSlow = emitDispOp(op, L, R);
+          let pSlow = curLbl; line("  br label %" + fDone);
+          line(fDone + ":"); curLbl = fDone;
+          let r = temp();
+          line("  " + r + " = phi %ql_value [ " + rFast + ", %" + pFast + " ], [ " + rSlow + ", %" + pSlow + " ]");
+          return r;
+        };
         return emitDispOp(op, L, R);
       };
       let lNum = lbl(); let lDisp = lbl(); let lMerge = lbl();
