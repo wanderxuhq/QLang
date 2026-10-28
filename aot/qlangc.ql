@@ -2340,6 +2340,31 @@ let emitInvokeRegs = (FN, argRegs) -> {
 
 // Only __call_borrowed may borrow this Array descriptor. It never exposes the descriptor
 // to a user function; __partial copies arguments before capturing them.
+// 实参不可证的直调:走共享检查入口(一份代码,所有调用点复用)。
+let emitCheckedDirect = (fn, values) -> {
+  let bytes = 32 + 16 * values.length;
+  let storage = stackSlot(bytes); let data = temp();
+  line("  call void @llvm.lifetime.start.p0(i64 " + std.String.toString(bytes) + ", ptr " + storage + ")");
+  line("  store i64 5, ptr " + storage);
+  line("  " + data + " = getelementptr i8, ptr " + storage + ", i64 32");
+  let bp = temp(); let np = temp(); let cp = temp();
+  line("  " + bp + " = getelementptr i8, ptr " + storage + ", i64 8");
+  line("  store ptr " + data + ", ptr " + bp);
+  line("  " + np + " = getelementptr i8, ptr " + storage + ", i64 16");
+  line("  store i64 " + std.String.toString(values.length) + ", ptr " + np);
+  line("  " + cp + " = getelementptr i8, ptr " + storage + ", i64 24");
+  line("  store i64 " + std.String.toString(values.length) + ", ptr " + cp);
+  let i = 0;
+  while i < values.length {
+    let off = temp();
+    line("  " + off + " = getelementptr %ql_value, ptr " + data + ", i64 " + std.String.toString(i));
+    line("  store %ql_value " + values[i] + ", ptr " + off);
+    i = i + 1;
+  };
+  let result = emitCallRegs("__direct_checked", [fn, emitPointerValue(storage)]);
+  line("  call void @llvm.lifetime.end.p0(i64 " + std.String.toString(bytes) + ", ptr " + storage + ")");
+  result;
+};
 let emitBorrowedCall = (fn, values, exempt) -> {
   let bytes = 32 + 16 * values.length;
   let storage = stackSlot(bytes); let data = temp();
@@ -2408,7 +2433,6 @@ let directCallTarget = (node, cname) -> {
   if isError(info) || info == null { directReject.noinfo = directReject.noinfo + 1; return null; };
   if !isError(assignedUserNames[cname]) && assignedUserNames[cname] == true { directReject.assigned = directReject.assigned + 1; return null; };
   if node.arguments.length != info.arity { directReject.arity = directReject.arity + 1; return null; };
-  if !callArgsCannotBeError(node.arguments) { directReject.args = directReject.args + 1; return null; };
   // 形参注解:只有实参静态类型恰好是那个内建类型,分派器那次检查才必然通过。
   if !isError(info.anns) {
     let ai = 0;
@@ -2461,9 +2485,10 @@ let emitStdChainCall = (node) -> {
   if cached != "" { FN = emitIdentifier({ type: "Identifier", name: cached }); } else { FN = emitExpr(callee); };
   let values = []; let i = 0;
   while i < node.arguments.length { values.add(emitExpr(node.arguments[i])); i = i + 1; };
-  if !isError(target) && node.arguments.length == target.arity && callArgsCannotBeError(node.arguments) {
+  if !isError(target) && node.arguments.length == target.arity {
     stdChainHits = stdChainHits + 1;
-    emitDirectCallValue(target.ir, FN, values, target.fast);
+    if callArgsCannotBeError(node.arguments) { emitDirectCallValue(target.ir, FN, values, target.fast); }
+    else { emitCheckedDirect(FN, values); };
   } else {
     if !isError(target) && node.arguments.length != target.arity { stdChainReject.arity = stdChainReject.arity + 1; }
     else if !isError(target) && !callArgsCannotBeError(node.arguments) { stdChainReject.args = stdChainReject.args + 1; };
@@ -2619,13 +2644,13 @@ let emitCall = (node) -> {
     } else { ordCallsNotYet = ordCallsNotYet + 1; };
   };
   if direct != null {
-    // The target is an immutable leaf with an exact arity and non-Error
-    // arguments; the generic dispatcher's argument/arity/annotation/depth
-    // checks are statically discharged, so a direct boxed-ABI call is safe.
     directCalls = directCalls + 1;
     let directFast = -1;
     if !isError(direct.fast) && direct.fast != null { directFast = direct.fast; };
-    return emitDirectCallValue(direct.ir, FN, values, directFast);
+    if callArgsCannotBeError(node.arguments) {
+      return emitDirectCallValue(direct.ir, FN, values, directFast);
+    };
+    return emitCheckedDirect(FN, values);
   };
   let trusted = false;
   if inRuntime && calleeIsId && !isError(runtimeFunctions[cname]) {

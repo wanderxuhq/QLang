@@ -2365,6 +2365,39 @@ let __call_depth = 0;
 // args is borrowed and read-only. Normal callees receive only its elements.
 // Modes 4/5/6 consume the wrapper synchronously (partial / Error / Math extrema).
 // A new partial must own a copy; no return path may retain the borrowed list.
+// 直调点的共享检查入口:按「普通用户函数、元数已由调用点保证」这条最短路径做
+// Error 实参、形参注解、递归深度三项检查,然后进函数体。与 __call_borrowed 的同名
+// 步骤逐条一致,只是省掉策略分支与部分应用。任何非普通函数的被调者原样退回分派器。
+let __direct_checked = (fn, args) -> {
+  if readU64(fn, 0) != 7 || readU64(fn, 32) != 0 { return __call_borrowed(fn, args, false); };
+  let count = readU64(args, 16);
+  let name = ql_value_get(fn, 40);
+  let i = 0;
+  while i < count {
+    let v = __get_index(args, i);
+    if __isError(v) {
+      return __err_new("TypeMismatch", "attempt to pass error value as argument to " + name, v);
+    };
+    i = i + 1;
+  };
+  let annotations = ql_value_get(fn, 56);
+  if readU64(annotations, 0) == 5 {
+    let j = 0;
+    while j < count {
+      let ann = __get_index(annotations, j);
+      if ann != null {
+        let passed = __check_value(__get_index(args, j), ann[0])?;
+        if !passed { return __err("TypeCheck", "argument " + __itoa(j + 1) + " does not match the annotated type \"" + ann[1] + "\""); };
+      };
+      j = j + 1;
+    };
+  };
+  if __call_depth >= 300 { return __err("StackOverflow", "maximum recursion depth exceeded"); };
+  __call_depth = __call_depth + 1;
+  let result = __invoke(fn, args);
+  __call_depth = __call_depth - 1;
+  result;
+};
 let __call_borrowed = (fn, args, exempt) -> {
   if readU64(fn, 0) != 7 { return __err("NotCallable", "Not callable: " + __type_name(fn)); };
   let mode = readU64(fn, 32);
