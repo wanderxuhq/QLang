@@ -148,7 +148,10 @@ let outDir = cacheRoot + "/" + digest;
 
 let objectPath = outDir + "/stdlib.o";
 let existing = std.Bytes.read(objectPath);
-if !isError(existing) && std.Bytes.length(existing) > 1024 {
+// 缓存命中要求 mod.ql 也在:接口是产物的一部分,缺了就得重建(否则 split 路径读不到白名单)。
+let cachedMod = std.Bytes.read(outDir + "/mod.ql");
+let modReady = !isError(cachedMod) && std.Bytes.length(cachedMod) > 64;
+if !isError(existing) && std.Bytes.length(existing) > 1024 && modReady {
   // 缓存命中也要保证 bitcode 在(--lto 链接要用);缺了就补一份。
   let bcPath = outDir + "/stdlib.bc";
   let bc = std.Bytes.read(bcPath);
@@ -389,6 +392,66 @@ while mfi < parsed.functions.length {
 let membersText = std.fs.readFileText(membersPath);
 if isError(membersText) { membersText = ""; };
 std.fs.writeText(outDir + "/interface.txt", iface.stdout + membersText + "MAX " + std.Number.toString(maxFn) + "\n");
+
+// 7b) mod.ql:接口配置(JSON5;QLang 用 std.JSON 读)。没有 codegen SDK,这里字符串拼接。
+// 只写**事实**:slots / functions(符号+元数) / modules(成员->符号+元数) / mt / maxFn。
+let symOf = (name) -> {
+  let k = 0;
+  while k < named.length { if named[k].name == name { return named[k].symbol; }; k = k + 1; };
+  "";
+};
+let fastOf = (name) -> {
+  let k = 0;
+  while k < named.length { if named[k].name == name { return named[k].fast; }; k = k + 1; };
+  "-1";
+};
+let jq = (v) -> {
+  let escaped = std.String.replace(v)("\\")("\\\\");
+  escaped = std.String.replace(escaped)("\"")("\\\"");
+  "\"" + escaped + "\"";
+};
+let joinArr = (items) -> {
+  let out = "";
+  let k = 0;
+  while k < items.length { if k > 0 { out = out + ","; }; out = out + items[k]; k = k + 1; };
+  out;
+};
+let iLines = std.String.split(iface.stdout)("\n");
+let slotItems = []; let fnItems = []; let mtItems = []; let memItems = []; let mtMap = {};
+let li2 = 0;
+while li2 < iLines.length {
+  let row = iLines[li2];
+  if row != "" {
+    let cells = std.String.split(row)(" ");
+    if cells[0] == "SLOT" { slotItems[slotItems.length] = jq(cells[1]); }
+    else if cells[0] == "DFN" { fnItems[fnItems.length] = jq(cells[1]) + ":{\"symbol\":" + jq(symOf(cells[1])) + ",\"arity\":" + cells[2] + "}"; }
+    else if cells[0] == "MT" { mtItems[mtItems.length] = jq(cells[1]) + ":" + jq(cells[2]); }
+    else if cells[0] == "MEM" { memItems[memItems.length] = jq(cells[1]) + "\u0001" + jq(cells[2]) + "\u0001" + jq(symOf(cells[3])) + "\u0001" + fastOf(cells[3]); };
+  };
+  li2 = li2 + 1;
+};
+// modules:按模块分组
+let modNames = []; let mi4 = 0;
+while mi4 < memItems.length {
+  let parts = std.String.split(memItems[mi4])("\u0001");
+  let seen = 0; let k4 = 0;
+  while k4 < modNames.length { if modNames[k4] == parts[0] { seen = 1; }; k4 = k4 + 1; };
+  if seen == 0 { modNames[modNames.length] = parts[0]; };
+  mi4 = mi4 + 1;
+};
+let modItems = []; let mi5 = 0;
+while mi5 < modNames.length {
+  let memberItems = []; let mj5 = 0;
+  while mj5 < memItems.length {
+    let parts5 = std.String.split(memItems[mj5])("\u0001");
+    if parts5[0] == modNames[mi5] { memberItems[memberItems.length] = parts5[1] + ":{\"symbol\":" + parts5[2] + ",\"arity\":" + parts5[3] + "}"; };
+    mj5 = mj5 + 1;
+  };
+  modItems[modItems.length] = modNames[mi5] + ":{" + joinArr(memberItems) + "}";
+  mi5 = mi5 + 1;
+};
+let modText3 = "let mod = {\"version\":1,\"slots\":[" + joinArr(slotItems) + "],\"functions\":{" + joinArr(fnItems) + "},\"modules\":{" + joinArr(modItems) + "},\"mt\":{" + joinArr(mtItems) + "},\"maxFn\":" + std.Number.toString(maxFn) + "};\n";
+std.fs.writeText(outDir + "/mod.ql", modText3);
 
 // 8) 目标文件
 let compiled = std.process.run(["llc", "-O2", "-filetype=obj", stdlibPath, "-o", objectPath]);
