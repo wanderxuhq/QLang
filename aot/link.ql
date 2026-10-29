@@ -14,7 +14,7 @@ let clean = (paths) -> { let i = 0; while i < paths.length { std.process.run(["r
 
 let irPath = ""; let output = ""; let stdlibObject = ""; let runtimeObject = "";
 let verifyTool = "target/tools/verify"; let stdlibIr = ""; let skipVerify = false;
-let optLevel = "2"; let sharedMode = false; let ltoMode = false; let ltoOpt = "2";
+let optLevel = "2"; let sharedMode = false; let ltoMode = false; let ltoOpt = "2"; let debugMode = false;
 let ai = 0;
 while ai < args.length {
   let arg = args[ai];
@@ -27,6 +27,7 @@ while ai < args.length {
   else if arg == "--opt" { ai = ai + 1; optLevel = args[ai]; }
   else if arg == "--shared" { sharedMode = true; }
   else if arg == "--lto" { ltoMode = true; }
+  else if arg == "--debug" { debugMode = true; }
   else if arg == "--lto-opt" { ai = ai + 1; ltoOpt = args[ai]; }
   else if irPath == "" { irPath = arg; };
   ai = ai + 1;
@@ -77,6 +78,14 @@ if ltoMode {
   clean([merged, mergedOpt]);
   if compiledLto.status != 0 { fail("llc (lto) failed:\n" + compiledLto.stderr); };
   stdlibObject = "";
+} else if debugMode {
+// debug:让 llc **直接吃 IR**(llc 自己会做代码生成需要的规范化),跳过 opt 这一趟。
+// 少一次进程启动,也少一遍 IR 级优化 —— 代价是运行期(没有内联/合并),产物语义不变。
+// verify 仍然默认开着(它是"不发布错二进制"的门,和优化等级无关)。
+let llcArgs = ["llc", "-O1", "-filetype=obj", irPath, "-o", object];
+if sharedMode { llcArgs = ["llc", "-O1", "-relocation-model=pic", "-filetype=obj", irPath, "-o", object]; };
+let compiled = std.process.run(llcArgs);
+if compiled.status != 0 { fail("llc (debug) failed:\n" + compiled.stderr); };
 } else {
 let optimized = std.process.run(["opt", "-O2", irPath, "-o", bitcode]);
 if optimized.status != 0 { fail("opt failed:\n" + optimized.stderr); };

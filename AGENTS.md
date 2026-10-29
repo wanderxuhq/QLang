@@ -77,6 +77,9 @@ python3 aot/native_link.py /tmp/p.ll -o /tmp/p
   (t30 前端 11.2s → 0.8s);链接用 `target/tools/link ... --stdlib-object <key>/stdlib.o`(快速)
   或再加 `--stdlib-ir <key>/strings.tsv --lto`(发布:库走 bitcode + LTO,运行与单模块持平)。
   `--timing` 打印 `; phase: parse/lib/analyze/emit` 四段耗时(默认关,固定点不受影响)。
+  **链接分档**:默认 release(`opt -O2 → llc -O2 → ld.lld → ELF 校验`);`tools/link --debug`
+  跳过 `opt`、让 `llc -O1` 直接吃 IR,链接快 ~0.3s、运行慢约 2 倍,两种档位发射的 IR 完全相同
+  (只有后端优化等级不同)。测量见 probes §95。
 - **快路径(2026-10 起)**:标准库可以只编一次再链接。
   `aot/stdlib_split.py <compiler>` 产出 `target/stdlib/<hash>/{stdlib.o,symbols.tsv,mod.ql,interface.txt}`;
   `stage2 --emit-llvm-split <源码> <runtime> <symbols.tsv> <mod.ql>` 只发用户模块
