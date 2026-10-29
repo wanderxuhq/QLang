@@ -59,7 +59,7 @@ python3 aot/native_link.py /tmp/example.ll -o /tmp/example
 约 7s 花在库上)。日常构建走「库只编一次」:
 
 ```bash
-# 1) 库编一次:stdlib.o + stdlib.bc + symbols.tsv/interface.txt(按编译器+runtime+bundle 的哈希缓存)
+# 1) 库编一次:stdlib.o + stdlib.bc + symbols.tsv/mod.ql(按编译器+runtime+bundle 的哈希缓存)
 ./target/tools/stdlib --compiler ./target/selfhost/stage2
 #    → target/stdlib/<key>/stdlib.o
 

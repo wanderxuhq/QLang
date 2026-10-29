@@ -128,6 +128,17 @@ let collectMonoFns = (stmts) -> {
   };
   null;
 };
+// 字节序比较(QLang 的字符串 `<` 不是字节序;这里要的是可复现的规范序)。
+let lessBytes = (a, b) -> {
+  let n = if a.length < b.length { a.length; } else { b.length; };
+  let i = 0; let verdict = -1;
+  while i < n && verdict < 0 {
+    let ca = std.Bytes.byteAt(a, i); let cb = std.Bytes.byteAt(b, i);
+    if ca < cb { verdict = 1; } else if ca > cb { verdict = 0; } else { i = i + 1; };
+  };
+  if verdict >= 0 { return verdict == 1; };
+  a.length < b.length;
+};
 // 由「模块 -> 成员 -> 源绑定名」和「源绑定名 -> 符号/元数」拼出 std 链的直调目标。
 let buildStdChainTargets = (fromObject) -> {
   if !fromObject {
@@ -3339,8 +3350,142 @@ let writeStdlibInterface = (runtimeProgram, libraryProgram) -> {
   };
   null;
 };
-// 对象化模式的消费端:按接口重建槽表/名字集合/std 索引。
+// ---- mod.ql:接口就是 QLang 值 -------------------------------------------------
+// 对象化模式的接口是 QLang 对象字面量(`let mod = {...};`),不是行式文本。这里用**共享前端**
+// 解析它,再把纯字面量的 AST 解成 QLang 值:不引入第二套 JSON 读取器,也不执行配置里的任何
+// 表达式 —— 出现非字面量就报错(配置里藏代码是隐性语义)。
+let modLiteralValue = (node) -> {
+  if isError(node) { return node; };
+  let kind = node.type;
+  if kind == "Number" { return node.value; };
+  if kind == "String" { return node.value; };
+  if kind == "Boolean" { return node.value; };
+  if kind == "Null" { return null; };
+  // -1 这种负数是 UnaryOp("-", Number),不是负数字面量。
+  if kind == "UnaryOp" && node.operator == "-" && !isError(node.operand.type) && node.operand.type == "Number" {
+    return -node.operand.value;
+  };
+  if kind == "Array" {
+    let out = []; let i = 0;
+    while i < node.elements.length { out[i] = modLiteralValue(node.elements[i])?; i = i + 1; };
+    return out;
+  };
+  if kind == "Object" {
+    let out = {}; let i = 0;
+    while i < node.fields.length { out[node.fields[i].name] = modLiteralValue(node.fields[i].value)?; i = i + 1; };
+    return out;
+  };
+  std.Error.raise("CompileError", "mod.ql: unsupported literal '" + kind + "'", null);
+};
+// 把 mod.ql 的字段落成发射器要的那几张表。和 interface.txt 的装载一一对应:
+// slots->槽位,functions->直接调用目标(DFN),runtime->运行期函数名(RFN),
+// modules->std 成员(MEM/SYM),mt->模块静态类型(MT),values/calls->成员类型(MV/MC),
+// maxFn->函数编号下界(MAX)。
+let loadStdlibInterfaceMod = (text) -> {
+  let program = parseModule(text, "<mod.ql>");
+  if isError(program) { return program; };
+  let node = null;
+  let si0 = 0;
+  while si0 < program.statements.length {
+    let st = program.statements[si0];
+    if !isError(st.type) && st.type == "Let" && st.name == "mod" { node = st.value; };
+    si0 = si0 + 1;
+  };
+  if node == null { return std.Error.raise("CompileError", "mod.ql: missing `let mod = {...}`", null); };
+  let mod = modLiteralValue(node)?;
+  if isError(mod) { return mod; };
+  let version = mod.version;
+  if isError(version) || version != 1 { return std.Error.raise("CompileError", "mod.ql: unsupported version", null); };
+  let slots = mod.slots;
+  if isError(slots) || slots.length == 0 { return std.Error.raise("CompileError", "mod.ql: missing slots", null); };
+  let functions = mod.functions;
+  if isError(functions) { return std.Error.raise("CompileError", "mod.ql: missing functions", null); };
+  let runtime = mod.runtime;
+  if isError(runtime) || runtime.length == 0 { return std.Error.raise("CompileError", "mod.ql: missing runtime list", null); };
+  let modules = mod.modules;
+  if isError(modules) { return std.Error.raise("CompileError", "mod.ql: missing modules", null); };
+  let i = 0;
+  while i < slots.length { defineSlot(slots[i]); curScope.active[slots[i]] = true; i = i + 1; };
+  let isRuntimeFn = {};
+  let ri = 0;
+  while ri < runtime.length { isRuntimeFn[runtime[ri]] = true; ri = ri + 1; };
+  let fnNames = std.Object.keys(functions);
+  let fi = 0;
+  while fi < fnNames.length {
+    let name = fnNames[fi];
+    let decl = functions[name];
+    if isError(decl) { return std.Error.raise("CompileError", "mod.ql: bad entry for " + name, null); };
+    let sym = decl.symbol;
+    if isError(sym) || sym == "" { return std.Error.raise("CompileError", "mod.ql: no symbol for " + name, null); };
+    runtimeFnIr[name] = sym;
+    if isError(curScope.directFns) { curScope.directFns = {}; };
+    let arity = decl.arity;
+    if isError(arity) { arity = -1; };
+    curScope.directFns[name] = { ir: sym, arity: arity };
+    if !isError(isRuntimeFn[name]) { runtimeFunctions[name] = true; };
+    fi = fi + 1;
+  };
+  let modNames = std.Object.keys(modules);
+  let mi = 0;
+  while mi < modNames.length {
+    let moduleName = modNames[mi];
+    let members = modules[moduleName];
+    if !isError(members) {
+      let mk = std.Object.keys(members);
+      let mj = 0;
+      while mj < mk.length {
+        let member = mk[mj];
+        let decl = members[member];
+        let arity = decl.arity;
+        if isError(arity) { arity = -1; };
+        let bind = decl.bind;
+        if !isError(bind) && bind != "" {
+          // MEM:成员是库里的一个源绑定;直调符号/快入口按绑定名查符号表。
+          stdMemberBindingSet(moduleName, member, bind);
+          let memSym = stdlibSymbolMap[bind];
+          if !isError(memSym) && memSym != "" {
+            stdChainTargets[moduleName + "." + member] = { ir: memSym, arity: arity, fast: -1 };
+          };
+        } else {
+          // SYM:成员是内联 lambda,符号只在这里存在。
+          let sym = decl.symbol;
+          if isError(sym) || sym == "" { return std.Error.raise("CompileError", "mod.ql: no symbol for " + moduleName + "." + member, null); };
+          stdChainTargets[moduleName + "." + member] = { ir: sym, arity: arity, fast: -1 };
+        };
+        mj = mj + 1;
+      };
+    };
+    mi = mi + 1;
+  };
+  let mt = mod.mt;
+  if !isError(mt) {
+    let mtNames = std.Object.keys(mt);
+    let ti = 0;
+    while ti < mtNames.length { stdModuleType[mtNames[ti]] = mt[mtNames[ti]]; ti = ti + 1; };
+  };
+  // 模块成员的静态类型/返回类型:分析阶段解析 std.<模块>.<成员> 时用(MV/MC)。
+  let values = mod.values;
+  if !isError(values) {
+    let vNames = std.Object.keys(values);
+    let vi = 0;
+    while vi < vNames.length { stdModuleValues[vNames[vi]] = values[vNames[vi]]; vi = vi + 1; };
+  };
+  let calls = mod.calls;
+  if !isError(calls) {
+    let cNames = std.Object.keys(calls);
+    let ci = 0;
+    while ci < cNames.length { stdModuleCalls[cNames[ci]] = calls[cNames[ci]]; ci = ci + 1; };
+  };
+  let maxFn = mod.maxFn;
+  if !isError(maxFn) && maxFn >= 0 && maxFn + 1 > funcCounter { funcCounter = maxFn + 1; };
+  null;
+};
+// 对象化模式的消费端:按接口重建槽表/名字集合/std 索引。接口有两种落盘形式:
+// mod.ql(QLang 对象字面量,现在的产物)与 interface.txt(行式文本,留有兼容)。
 let loadStdlibInterface = (text) -> {
+  let head = 0;
+  while head < text.length && (text[head] == " " || text[head] == "\n" || text[head] == "\t" || text[head] == "\r") { head = head + 1; };
+  if head < text.length && (text[head] == "{" || text[head] == "l") { return loadStdlibInterfaceMod(text); };
   let lines = std.String.split(text)("\n");
   let i = 0;
   while i < lines.length {
@@ -3439,9 +3584,9 @@ let main = (args) -> {
   };
   args = keptArgs;
   // `--stdlib-object <dir>`:一个开关就把编译切到「库只编一次」——目录里放
-  // symbols.tsv / interface.txt(由 tools/stdlib 产出),不用再记三个参数。
+  // symbols.tsv / mod.ql(由 tools/stdlib 产出),不用再记三个参数。
   if stdlibDir != "" && args.length == 3 {
-    args = ["--emit-llvm-split", args[1], args[2], stdlibDir + "/symbols.tsv", stdlibDir + "/interface.txt"];
+    args = ["--emit-llvm-split", args[1], args[2], stdlibDir + "/symbols.tsv", stdlibDir + "/mod.ql"];
   };
   staticScanSet(staticScan);
   let tStart = 0; let tLib = 0; let tParse = 0; let tAnalyze = 0;
@@ -3477,7 +3622,7 @@ let main = (args) -> {
     };
     funcCounter = highest + 1;
     stdlibFromCache = args[4] != "-";
-    if stdlibFromCache { loadStdlibInterface(std.fs.readFileText(args[4])?); };
+    if stdlibFromCache { loadStdlibInterface(std.fs.readFileText(args[4])?)?; };
   };
   if interfaceDump {
     source = ""; sourcePath = "<interface>"; runtimeSource = std.fs.readFileText(args[1])?;
@@ -3589,10 +3734,14 @@ let main = (args) -> {
     line("declare %ql_value @__cold_located_error(ptr, %ql_value, %ql_value, %ql_value, %ql_value, %ql_value)");
     line("declare void @__panic_exit(ptr, %ql_value, %ql_value)");
     line("declare void @__stdlib_init(ptr, i32, ptr)");
+    let declaredSym = {};
     let symNames = std.Object.keys(stdlibSymbolMap); let sni = 0;
     while sni < symNames.length {
       let sym = stdlibSymbolMap[symNames[sni]];
-      line("declare %ql_value @" + sym + "(ptr, ptr, i64, %ql_value)");
+      if isError(declaredSym[sym]) {
+        declaredSym[sym] = true;
+        line("declare %ql_value @" + sym + "(ptr, ptr, i64, %ql_value)");
+      };
       let fdecl = stdlibFastArity[symNames[sni]];
       if !isError(fdecl) && fdecl != null {
         let sig = "ptr";
@@ -3601,6 +3750,34 @@ let main = (args) -> {
         line("declare %ql_value @" + sym + "_f(" + sig + ")");
       };
       sni = sni + 1;
+    };
+    // SYM 成员(库里的内联 lambda,例如 `std.Math.abs` → ql_fn250)在接口里只有符号,
+    // 没有源绑定名,所以不在符号表里。但它们的定义确实在对象中 —— 不补声明,发射出的
+    // 直调就指向未声明的符号(`opt` 报 use of undefined value)。
+    // 顺序按字节序:成员表的书写顺序来自接口文件,不能当规范序(否则 mod.ql 与
+    // interface.txt 两条路径的声明顺序不同,IR 就不再逐字节相同)。
+    let extraSyms = [];
+    let chainKeys = std.Object.keys(stdChainTargets);
+    let ck = 0;
+    while ck < chainKeys.length {
+      let csym = stdChainTargets[chainKeys[ck]].ir;
+      if !isError(csym) && csym != "" && isError(declaredSym[csym]) {
+        declaredSym[csym] = true;
+        extraSyms[extraSyms.length] = csym;
+      };
+      ck = ck + 1;
+    };
+    let ei = 0;
+    while ei < extraSyms.length {
+      let best = ei; let bj = ei + 1;
+      while bj < extraSyms.length { if lessBytes(extraSyms[bj], extraSyms[best]) { best = bj; }; bj = bj + 1; };
+      if best != ei { let swapped = extraSyms[ei]; extraSyms[ei] = extraSyms[best]; extraSyms[best] = swapped; };
+      ei = ei + 1;
+    };
+    let xi = 0;
+    while xi < extraSyms.length {
+      line("declare %ql_value @" + extraSyms[xi] + "(ptr, ptr, i64, %ql_value)");
+      xi = xi + 1;
     };
   };
   // 助手插在 prelude 之后、按程序的计数注释之前:「prelude + 助手」因此是一段与用户

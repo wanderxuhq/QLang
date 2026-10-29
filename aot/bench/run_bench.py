@@ -57,14 +57,14 @@ def main():
 
     compiler = str(pathlib.Path(args.compiler).resolve())
     symbols = None
-    interface = None
+    mod = None
     if args.split:
         # 库只编一次:编译只发用户模块(编译时间口径)。
         try:
             from run_selfhost_tests import _use_stdlib_object
             _use_stdlib_object(pathlib.Path(compiler))
             symbols = os.environ.get('QLANG_STDLIB_SYMBOLS')
-            interface = os.environ.get('QLANG_STDLIB_INTERFACE')
+            mod = os.environ.get('QLANG_STDLIB_MOD')
         except Exception as error:  # pragma: no cover
             print(f"note: stdlib object unavailable ({error}); emitting monolithically", file=sys.stderr)
     work = ROOT / "target" / "bench"
@@ -87,7 +87,7 @@ def main():
         t0 = time.monotonic()
         emit_args = [compiler, "--emit-llvm-split" if symbols else "--emit-llvm", str(source), str(RUNTIME)]
         if symbols:
-            emit_args += [symbols, interface if interface else '-']
+            emit_args += [symbols, mod if mod else '-']
         proc = run(emit_args, timeout=600)
         frontend = time.monotonic() - t0
         if proc.returncode != 0:

@@ -2283,3 +2283,77 @@ mod.ql,并把"白名单完整性"作为验收(与 `MAX`/符号表交叉核对)�
 **再补充**:mod.ql **不经过 JSON 解析**——它就是一个 QLang 对象字面量(`let mod = { ... };`),
 读取方用**自己的 QLang parser** 把它当对象拿到(JSON5 是 QLang 的子集,所以两种写法都接受),
 不引入 `std.JSON` 这一层。构建器现在直接写 `let mod = {...};`。
+
+## 94. split 路径切到 mod.ql(接口是 QLang 值),并修掉 SYM 成员的未声明符号(2026-10-29)
+
+上一节的接线失败过一次(手工生成的 mod.ql 漏条目 → `numeric.ll` 链接失败),这次的结论是
+**不是格式的问题,而是"手工生成"的问题**:接口必须由发射那一趟的数据长出来。
+
+### 94.1 mod.ql 的最终形态
+
+构建器(`aot/stdlib_build.ql`)从一个 `interface.txt` 的生成过程里同时拼出 `mod.ql`,
+它是 **QLang 对象字面量** `let mod = { ... };`,字段是 interface.txt 的无损映射:
+
+| 字段 | 来源 | 实测条数 |
+|---|---|---|
+| `slots` | `SLOT` | 205 |
+| `functions` | `DFN`(源顶层函数)+ 符号表 | 158 |
+| `runtime` | `RFN` | 158 |
+| `modules` | `MEM` / `SYM`(成员 → `{symbol, arity[, bind]}`) | 4 模块 / 39 成员 |
+| `mt` | `MT` | 26 |
+| `values` | `MV` | 4 模块 |
+| `calls` | `MC` | 7 模块 |
+| `maxFn` | `MAX` | 300 |
+
+两个坑:
+- `MEM` 的元数必须取 MEM 行带过来的**源绑定参数个数**(`cells[4]`),不是 symbols.tsv 的
+  fast 寄存器元数;两者语义不同(`-1` vs 1..3),直调按前者判。
+- `MEM` 的 `bind`(源绑定名)不能丢:成员身份是绑定名,符号是查出来的;`SYM`(内联 lambda)
+  没有绑定名,符号只存在于接口里。`std->成员` 两条链因此形状不同。
+- `functions` 只放 DFN(直接调用目标),不放模块成员的符号 —— 后者走 `modules`;符号表里另有
+  一批"库内部函数"的符号,split 模式只声明不使用,不需要归属。
+
+### 94.2 消费端:一个 QLang 值,一个解析器
+
+编译器的 `loadStdlibInterface` 按内容分派:以 `{` / `let mod` 开头走 mod.ql,否则走旧的行格式。
+mod.ql 用**共享前端**(`parseModule`)解析,再用 `modLiteralValue` 把 AST 解成 QLang 值:
+
+- 只接受纯字面量(`Number/String/Boolean/Null/Array/Object`,以及 `-1` 这种 UnaryOp 负数);
+  出现任何表达式都报 `CompileError` —— 配置里藏代码是隐性语义。
+- 不引入第二套 JSON 读取器(上一版试过 `std.JSON.parse`,等于多一层而且要走第二套校验)。
+- 校验 version / slots / functions / runtime / modules 缺失,缺就报错,不静默。
+
+### 94.3 等价性:mod.ql 与 interface.txt 的 IR 逐字节相同
+
+同一编译器、同一份 symbols.tsv,只换第 5 个参数:
+
+```
+same=69  diff=0  fail=4
+```
+
+四个 `fail` 是 `t8_comp / t8_leaf / t8_obj / t9_error` —— 它们直接引用运行期内部名
+(`allocBox`/`ql_alloc`/`__obj_new`/`__err`),本来就只能走单模块路径;**两条路径的报错完全相同**,
+不是本次改动引入的。`t58_direct_calls`、`t30_strings`、`t61_known_safe` 等代表夹具逐字节相同。
+
+### 94.4 顺带修掉:SYM 成员的符号没有声明 → `opt: use of undefined value`
+
+整套门禁第一次跑,`t25_numeric` 链接失败:
+
+```
+opt: numeric.ll:13373:27: error: use of undefined value '@ql_fn250'
+  %t8344 = call %ql_value @ql_fn250(...)
+```
+
+`std.Math.abs` 是 `SYM` 成员(库里的内联 lambda),符号 `ql_fn250` 只在接口里出现,`symbols.tsv`
+的键是**绑定名**(`absolute` → 另一个符号),所以 split 模式的声明循环(只遍历 symbols.tsv)
+永远不会声明它。
+
+**这不是本次改动引入的**:用 HEAD 的编译器(`git show HEAD:aot/qlangc.ql` 重建)跑同一夹具,
+同样产生 1 处 `call @ql_fn250` / 0 处 `declare`。是 §91/§92 加 SYM 直调时留下的缺口 —— 那之后
+没有再跑过全量套件。修法:split 模式声明完符号表后,再遍历 `stdChainTargets`,把不在表里的
+符号补一条通用入口声明(36 条 SYM 里只有被真正用到的会进 IR,其余由 `opt` 清掉)。
+
+补声明按**字节序**排(不能用成员表的书写顺序:mod.ql 的模块成员顺序来自对象,行式文本来自
+文件行序)。不排序时两条路径的声明顺序不同 → IR 文本不同(语义相同),等价性断言就没法
+逐字节比。排序后回到 `same=69 diff=0`;声明顺序本身不影响机器码:同一 t20 用排序前/后的
+编译器各发一遍,IR 逐字节相同(IR 185,619 / 机器 141,116,输出 `20`)。

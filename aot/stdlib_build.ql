@@ -8,12 +8,13 @@
 //   3. value-ABI 叶子(internal + alwaysinline)两个模块各留一份,其余 `define internal`
 //      改成 `define hidden`(跨模块可见);`@qlang_extension_abi_v1` 由用户模块定义,
 //      对象里改成 external 引用;
-//   4. 写 stdlib.ll / symbols.tsv / strings.tsv,跑编译器拿 interface.txt,llc 出 stdlib.o;
+//   4. 写 stdlib.ll / symbols.tsv / strings.tsv,跑编译器拿 interface.txt,再落 mod.ql
+//      (QLang 对象字面量形式的接口),llc 出 stdlib.o;
 //   5. 缓存键 = sha256(SPLIT_VERSION + 编译器 + runtime.ql + bundle.ql)。
 //
 // 输出最后一行的对象路径给调用方(和 Python 版一致)。
 
-let splitVersion = "7";
+let splitVersion = "8";
 let fail = (message) -> { assert(false, "stdlib_build: " + message); 1; };
 let startsWith = (text, prefix) -> std.String.startsWith(text)(prefix);
 let endsWith = (text, suffix) -> {
@@ -393,8 +394,17 @@ while mfi < parsed.functions.length {
 };
 std.fs.writeText(outDir + "/interface.txt", iface.stdout + membersText0 + "MAX " + std.Number.toString(maxFn) + "\n");
 
-// 7b) mod.ql:接口配置(JSON5;QLang 用 std.JSON 读)。没有 codegen SDK,这里字符串拼接。
-// 只写**事实**:slots / functions(符号+元数) / modules(成员->符号+元数) / mt / maxFn。
+// 7b) mod.ql:接口配置。它是 **QLang 对象字面量**(`let mod = {...};`),编译器用共享前端
+// 把它当 QLang 值读 —— 不引入第二套 JSON 读取器,也不解析行式文本。
+// 字段是 interface.txt 的无损映射,只写事实:
+//   slots     绑定槽顺序                       (SLOT)
+//   functions 直接调用目标:名字 -> 符号+元数    (DFN)
+//   runtime   运行期函数名                     (RFN)
+//   modules   模块 -> 成员 -> {symbol, arity [, bind]}  (MEM 的 bind 是源绑定名,SYM 没有)
+//   mt        模块的静态类型                   (MT)
+//   values    模块 -> 成员 -> 静态类型          (MV)
+//   calls     模块 -> 成员 -> 返回类型          (MC)
+//   maxFn     库函数最大编号(含未导出的)      (MAX)
 let symOf = (name) -> {
   let k = 0;
   while k < named.length { if named[k].name == name { return named[k].symbol; }; k = k + 1; };
@@ -416,8 +426,11 @@ let joinArr = (items) -> {
   while k < items.length { if k > 0 { out = out + ","; }; out = out + items[k]; k = k + 1; };
   out;
 };
+let sep = "\u0001";
 let iLines = std.String.split(iface.stdout + membersText0)("\n");
-let slotItems = []; let fnItems = []; let mtItems = []; let memItems = []; let mtMap = {}; let dfnArity = {};
+let slotItems = []; let fnItems = []; let mtItems = []; let memItems = []; let rfnItems = [];
+let mvMods = []; let mvFrag = {}; let mcMods = []; let mcFrag = {};
+let dfnArity = {};
 let li2 = 0;
 while li2 < iLines.length {
   let row = iLines[li2];
@@ -425,9 +438,32 @@ while li2 < iLines.length {
     let cells = std.String.split(row)(" ");
     if cells[0] == "SLOT" { slotItems[slotItems.length] = jq(cells[1]); }
     else if cells[0] == "DFN" { dfnArity[cells[1]] = cells[2]; }
+    else if cells[0] == "RFN" { rfnItems[rfnItems.length] = jq(cells[1]); }
     else if cells[0] == "MT" { mtItems[mtItems.length] = jq(cells[1]) + ":" + jq(cells[2]); }
-    else if cells[0] == "MEM" { memItems[memItems.length] = jq(cells[1]) + "\u0001" + jq(cells[2]) + "\u0001" + jq(symOf(cells[3])) + "\u0001" + fastOf(cells[3]); }
-    else if cells[0] == "SYM" { memItems[memItems.length] = jq(cells[1]) + "\u0001" + jq(cells[2]) + "\u0001" + jq(cells[3]) + "\u0001" + cells[4]; };
+    else if cells[0] == "MV" {
+      let mvm = cells[1];
+      if isError(mvFrag[mvm]) { mvFrag[mvm] = []; mvMods[mvMods.length] = mvm; };
+      let frag = mvFrag[mvm];
+      frag[frag.length] = jq(cells[2]) + ":" + jq(cells[3]);
+    }
+    else if cells[0] == "MC" {
+      let mcm = cells[1];
+      if isError(mcFrag[mcm]) { mcFrag[mcm] = []; mcMods[mcMods.length] = mcm; };
+      let frag = mcFrag[mcm];
+      frag[frag.length] = jq(cells[2]) + ":" + jq(cells[3]);
+    }
+    else if cells[0] == "MEM" {
+      // 成员的身份是源绑定名;符号必须能在符号表里查到 —— 否则生成的直调会指向没声明的
+      // 符号(上一次 selfhost 的 numeric.ll 就是这么红的)。
+      let memSym = symOf(cells[3]);
+      if memSym == "" { fail("mod.ql: binding " + cells[3] + " (" + cells[1] + "." + cells[2] + ") is not a symbol"); };
+      // 元数取 MEM 行带过来的**源绑定参数个数**(不是 fast 寄存器元数):直调用它判。
+      let memArity = if cells.length > 4 { cells[4]; } else { fastOf(cells[3]); };
+      memItems[memItems.length] = jq(cells[1]) + sep + jq(cells[2]) + sep + jq(memSym) + sep + memArity + sep + jq(cells[3]);
+    }
+    else if cells[0] == "SYM" {
+      memItems[memItems.length] = jq(cells[1]) + sep + jq(cells[2]) + sep + jq(cells[3]) + sep + cells[4] + sep + "-";
+    };
   };
   li2 = li2 + 1;
 };
@@ -444,30 +480,42 @@ let modItems = []; let mi5 = 0;
 while mi5 < modNames.length {
   let memberItems = []; let mj5 = 0;
   while mj5 < memItems.length {
-    let parts5 = std.String.split(memItems[mj5])("\u0001");
-    if parts5[0] == modNames[mi5] { memberItems[memberItems.length] = parts5[1] + ":{\"symbol\":" + parts5[2] + ",\"arity\":" + parts5[3] + "}"; };
+    let parts5 = std.String.split(memItems[mj5])(sep);
+    if parts5[0] == modNames[mi5] {
+      let entry5 = parts5[1] + ":{\"symbol\":" + parts5[2] + ",\"arity\":" + parts5[3];
+      if parts5.length > 4 && parts5[4] != "-" { entry5 = entry5 + ",\"bind\":" + parts5[4]; };
+      memberItems[memberItems.length] = entry5 + "}";
+    };
     mj5 = mj5 + 1;
   };
   modItems[modItems.length] = modNames[mi5] + ":{" + joinArr(memberItems) + "}";
   mi5 = mi5 + 1;
 };
+// functions 只放**直接调用目标**(DFN):顶层函数的符号与参数个数;模块成员的符号走 modules。
+// 顺序按 symbols.tsv,保证产物可复现。
 let ni = 0;
 while ni < named.length {
   let nm = named[ni].name;
   let ar = dfnArity[nm];
-  if isError(ar) || ar == null { ar = fastOf(nm); };
-  fnItems[fnItems.length] = jq(nm) + ":{\"symbol\":" + jq(named[ni].symbol) + ",\"arity\":" + ar + "}";
+  if !isError(ar) && ar != null {
+    fnItems[fnItems.length] = jq(nm) + ":{\"symbol\":" + jq(named[ni].symbol) + ",\"arity\":" + ar + "}";
+  };
   ni = ni + 1;
 };
-let modText3 = "let mod = {\"version\":1,\"slots\":[" + joinArr(slotItems) + "],\"functions\":{" + joinArr(fnItems) + "},\"modules\":{" + joinArr(modItems) + "},\"mt\":{" + joinArr(mtItems) + "},\"maxFn\":" + std.Number.toString(maxFn) + "};\n";
-std.fs.writeText(outDir + "/mod.ql", modText3);
-// 完整性:mod.ql 必须列全所有导出符号(函数表 = 符号表条数),否则 split 模式的
-// 白名单会让生成代码引用到没声明的符号(上次 selfhost 就是这么红的)。
-if fnItems.length != named.length {
-  fail("mod.ql incomplete: " + std.String.toString(fnItems.length) + " functions vs " + std.String.toString(named.length) + " symbols");
+// 模块 -> 成员 -> 类型名 这类嵌套表按模块分组拼(顺序 = 出现顺序,产物可复现)。
+let groupTable = (modsIn, fragOf) -> {
+  let items = []; let k = 0;
+  while k < modsIn.length { items[items.length] = jq(modsIn[k]) + ":{" + joinArr(fragOf[modsIn[k]]) + "}"; k = k + 1; };
+  joinArr(items);
 };
+let modText3 = "let mod = {\"version\":1,\"slots\":[" + joinArr(slotItems) + "],\"functions\":{" + joinArr(fnItems) + "},\"runtime\":[" + joinArr(rfnItems) + "],\"modules\":{" + joinArr(modItems) + "},\"mt\":{" + joinArr(mtItems) + "},\"values\":{" + groupTable(mvMods, mvFrag) + "},\"calls\":{" + groupTable(mcMods, mcFrag) + "},\"maxFn\":" + std.Number.toString(maxFn) + "};\n";
+std.fs.writeText(outDir + "/mod.ql", modText3);
+// 完整性:三张表都不能空。符号表里还有一批「库内部函数」的符号(function 与 member 都
+// 不直接引用),它们在 split 模式里只是被声明,不需要归属。
+if fnItems.length == 0 { fail("mod.ql: empty functions"); };
 if slotItems.length == 0 { fail("mod.ql: empty slots"); };
 if modItems.length == 0 { fail("mod.ql: empty modules"); };
+if rfnItems.length == 0 { fail("mod.ql: empty runtime"); };
 
 // 8) 目标文件
 let compiled = std.process.run(["llc", "-O2", "-filetype=obj", stdlibPath, "-o", objectPath]);

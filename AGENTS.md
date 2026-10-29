@@ -70,15 +70,18 @@ python3 aot/native_link.py /tmp/p.ll -o /tmp/p
 
 - `--emit-module` 用于单独编译的 native 扩展。
 - **库只编一次(2026-10-29 起的默认快路径)**:
-  `target/tools/stdlib --compiler <c>` 产出 `target/stdlib/<key>/{stdlib.o,stdlib.bc,symbols.tsv,interface.txt}`;
+  `target/tools/stdlib --compiler <c>` 产出 `target/stdlib/<key>/{stdlib.o,stdlib.bc,symbols.tsv,mod.ql,interface.txt}`
+  (`mod.ql` 是接口本体:QLang 对象字面量,split 路径直接读它;`interface.txt` 是同一份事实的行式
+  文本,保留作回退);
   `stage2 --emit-llvm --stdlib-object target/stdlib/<key> <src> aot/runtime.ql` 只发用户模块
   (t30 前端 11.2s → 0.8s);链接用 `target/tools/link ... --stdlib-object <key>/stdlib.o`(快速)
   或再加 `--stdlib-ir <key>/strings.tsv --lto`(发布:库走 bitcode + LTO,运行与单模块持平)。
   `--timing` 打印 `; phase: parse/lib/analyze/emit` 四段耗时(默认关,固定点不受影响)。
 - **快路径(2026-10 起)**:标准库可以只编一次再链接。
-  `aot/stdlib_split.py <compiler>` 产出 `target/stdlib/<hash>/{stdlib.o,symbols.tsv,interface.txt}`;
-  `stage2 --emit-llvm-split <源码> <runtime> <symbols.tsv> <interface.txt>` 只发用户模块
-  (`{interface}` 传 `-` 则回落到「从源码分析」的对照路径);`native_link.py --stdlib-object`
+  `aot/stdlib_split.py <compiler>` 产出 `target/stdlib/<hash>/{stdlib.o,symbols.tsv,mod.ql,interface.txt}`;
+  `stage2 --emit-llvm-split <源码> <runtime> <symbols.tsv> <mod.ql>` 只发用户模块
+  (第 5 个参数按内容分派:JSON 对象字面量走 mod.ql,行式文本走旧路径;传 `-` 则回落到
+  「从源码分析」的对照路径);`native_link.py --stdlib-object`
   或环境变量 `QLANG_STDLIB_OBJECT` 链接对象。单夹具构建 ~22s → ~1.7s。
   两套主门禁会自动构建并启用它。测量见 `docs/unboxed-values-probes.md` §22-§29。
 - `native_link.py` 用单线程 LLD,并校验每个静态字符串的 ELF 重定位/字节;不要绕过它直接 clang 链接。

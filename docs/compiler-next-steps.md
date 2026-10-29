@@ -1234,25 +1234,26 @@ library call graph.
 Acceptance: `directreject.args` falls, the stdlib object's `clang -O2` instruction count falls,
 stage2/stage3 IR fixed point holds, both engines agree.
 
-## Deferred: typed module definitions (`mod.ql`), shared with reflection/introspection (2026-10-29)
+## Done: typed module definitions (`mod.ql`), shared with reflection/introspection (2026-10-29)
 
 A package directory can carry a `mod.ql` describing its surface: version, visible slots,
-functions (symbol + arity + type), module members (nested, so chains resolve), and the
-highest function number. It is a **configuration read with `std.JSON`** (QLang is JSON5
-compatible), not a second language: dedicated code validates it and applies its rules.
+functions (symbol + arity), module members (nested, so chains resolve, with the source binding
+name for `MEM` entries), module/member types, and the highest function number. It is a **QLang
+object literal** (`let mod = {...};`) read with the shared parser: the compiler decodes the
+literal AST into a QLang value, so there is no second language and no second JSON reader. Only
+literals are accepted — anything else is a bad interface, not code hidden in config.
 
-Rules agreed for it:
+Rules as agreed:
 
-- **Optional**: with a `mod.ql` the surface is exactly what it declares (white-list; names it
-  does not mention are unusable, reported at analysis time); without one the previous
-  `interface.txt` behaviour is unchanged.
+- **Optional**: with a `mod.ql` the surface is exactly what it declares (white-list); without one
+  the previous `interface.txt` behaviour is unchanged (the loader picks by content).
 - **Not std-only**: third-party packages will use the same mechanism.
-- **Types**: every entry carries an inferred type where one exists, `Any` otherwise, so the
+- **Types**: `mt` / `values` / `calls` carry the analysed types, `Any` where none exists, so the
   file doubles as the type surface of the package.
-- Generated today by string concatenation (no codegen SDK yet); acceptance includes
-  white-list completeness cross-checked against `MAX` and `symbols.tsv`.
+- Acceptance (probes §94): the generated `mod.ql` must reproduce `interface.txt` IR **byte for
+  byte** across the fixture set, then both suites must stay green.
 
-**Deferred on purpose**: giving `mod` definitions a *dedicated type* (a `Module`/`Definition`
+**Still deferred on purpose**: giving `mod` definitions a *dedicated type* (a `Module`/`Definition`
 type value, checkable like any other type). When reflection/introspection lands it will need
 exactly such a type for describing values and members, so the two should share one design
 instead of inventing a shape here now. Do not add a bespoke type for `mod` in the meantime.

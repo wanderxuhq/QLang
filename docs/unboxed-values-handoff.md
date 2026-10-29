@@ -163,6 +163,14 @@ ASCII 单字符改成共享盒(runtime 初始化时预建 128 个,模块级数�
 的第 5 个参数装载它,**完全跳过** runtime/stdlib 的 parse+分析。第 5 个参数传 `-` 是从源码
 分析的对照路径。
 
+> **2026-10-29 更新:接口换成了 `mod.ql`(QLang 对象字面量 `let mod = {...};`)。**
+> 同一份事实现在两种落盘形式:构建器写 `mod.ql`(split 路径默认读它)与 `interface.txt`
+> (行式文本,保留兼容;第 5 个参数按内容分派)。读取用**共享前端**把字面量解成 QLang 值,
+> 只接受纯字面量、不引入第二套 JSON 读取器。字段:`slots / functions(DFN) / runtime(RFN) /
+> modules(MEM/SYM,带源绑定名 `bind`) / mt / values(MV) / calls(MC) / maxFn`。
+> **等价性**:69 个夹具的 IR 与 `interface.txt` 路径逐字节相同(4 个 runtime-internal 夹具
+> 两条路径报同一个错,本来就只能单模块)。细节与踩坑:probes §94。
+
 单夹具前端 9.7s → **0.45s**,整条构建 ~22s → **~1.7s**;selfhost 全套 **2.3 min**。
 两条路径的代码归一化后逐行相同;门禁全绿;固定点成立。门禁的 `emit()` 已自动使用它。
 
