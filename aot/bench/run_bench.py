@@ -105,10 +105,22 @@ def main():
 
         output = ""
         if not args.no_run:
-            link_args = [sys.executable, str(LINK), str(ir), "-o", str(binary)]
-            if args.lto:
-                link_args.append("--lto")
-            proc = run(link_args, timeout=900)
+            # split 模式优先用 QLang 链接器(构建路径不再依赖 Python);不可用时回落。
+            link_tool = ROOT / "target" / "tools" / "link"
+            obj = os.environ.get('QLANG_STDLIB_OBJECT')
+            proc = None
+            if symbols and obj and link_tool.exists():
+                tool_args = [str(link_tool), str(ir), "-o", str(binary), "--stdlib-object", obj]
+                if args.lto:
+                    tool_args += ["--stdlib-ir", os.environ.get('QLANG_STDLIB_OBJECT', '').replace('stdlib.o', 'strings.tsv'), "--lto"]
+                proc = run(tool_args, timeout=1800)
+                if proc.returncode != 0:
+                    proc = None
+            if proc is None:
+                link_args = [sys.executable, str(LINK), str(ir), "-o", str(binary)]
+                if args.lto:
+                    link_args.append("--lto")
+                proc = run(link_args, timeout=900)
             if proc.returncode != 0:
                 print(f"{name}: link failed\n{proc.stderr}", file=sys.stderr)
                 return 1

@@ -1968,3 +1968,12 @@ clang 的 LTO 驱动(它在 internal 化/字符串全局/目标文件组织上�
 
 **结论:静态派发的剩余面到此关闭**,不再投入;`ns-unresolved` 那 30 个是**类型索引**的缺口
 (`Error.raise`/`String.fromCodePoint` 等),影响的是 `.check`/收窄的信息量,不是直调覆盖率。
+
+## 80. 工具链:bench 也走 QLang 链接器;`--shared` 链接验证(2026-10-29)
+
+- `aot/bench/run_bench.py --split` 现在优先用 `target/tools/link`(带 `--lto` 时也一样),
+  工具不存在才回落 Python 的 `native_link.py`。也就是说**度量与门禁的构建路径都不再依赖 Python**。
+- `--shared`(native 扩展)链接验证:`stage2 --emit-module` 出 IR →
+  `tools/link <ir> -o ext.so --shared` 成功,产物是 ELF 共享对象(导出 `__cold_located_error`/
+  `__panic_exit`,未定义 `memcpy`)。本机无法 dlopen 运行扩展(环境缺口),这里只验到链接层。
+- 从零重建工具链已在 §70 验过(`rm -rf target/tools` → `bootstrap.sh` 1m49s)。
