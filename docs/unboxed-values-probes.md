@@ -2037,3 +2037,38 @@ Python 只剩「没有工具链时的回落」和测试编排。
    编译时间,走 `native_link.py --lto`。
 4. 之前的「`--lto` 运行与单模块持平」只在 b_chars 上测过、且是不同负载下的数;全套件不支持
    「QLang 链接器路径持平」这个说法,已在 README 更正。
+
+## 84. 把 QLang 链接器的 LTO 修成 clang 同款管线:运行回到 ±12%(2026-10-29)
+
+§83 的「QLang `--lto` 慢 6%–71%」有两个原因,现在都处理了:
+
+1. **漏了 internalize + globaldce**:库函数在 stdlib.ll 里是 `hidden`(跨模块可见性需要),
+   而 clang 的 LTO 会先把它们 internalize 再删没人用的;不做这一步,代码里留下 612 个文本符号
+   (单模块 426),内联/DCE 都保守。
+2. **跑的是 `opt -O2` 通用管线**,不是 LTO 专用的 `lto<O>` 管线。
+
+修法(`tools/link --lto`,exe 模式):
+
+```
+opt -passes="internalize,globaldce,lto<O2>" -internalize-public-api-list=main merged.bc
+llc -O2 -filetype=obj
+```
+
+(shared 模式不做 internalize,否则扩展导出的符号会被删。校验器在 `--lto` 下也放宽了用户 IR
+字符串的「必须存在」——globaldce 会删掉只出现在死代码里的字符串。)
+
+同源、顺序跑、harness 取 5 次最小值:
+
+| bench | 单模块 CPU | split+LTO CPU | 差 |
+|---|---|---|---|
+| b_build | 4.141 | 4.004 | −3% |
+| b_calls | 0.014 | 0.021 | — |
+| b_chars | 0.605 | 0.622 | +3% |
+| b_index | 0.466 | 0.524 | +12% |
+| b_strat | 1.987 | 1.999 | +1% |
+| b_untyped_calls | 0.282 | 0.284 | +1% |
+
+6 个 bench 输出**全部一致**;编译前端 10.7–11.0s → 0.15–0.21s。文本符号 421(单模块 426)。
+
+**教训**:这台机器的 run-to-run 噪声能到 ±20%(同一个二进制先后测出 0.578 与 0.72),任何
+「A 比 B 快多少」的结论都必须在**同一次运行里交替**测,或者用 harness 的 5 次最小值。

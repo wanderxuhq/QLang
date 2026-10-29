@@ -56,7 +56,20 @@ if ltoMode {
   let merged = output + ".merged.bc"; let mergedOpt = output + ".lto.bc";
   let linkStep = std.process.run(["llvm-link", irPath, stdlibBc, "-o", merged]);
   if linkStep.status != 0 { clean([merged]); fail("llvm-link failed:\n" + linkStep.stderr); };
-  let optimized = std.process.run(["opt", "-O" + ltoOpt, merged, "-o", mergedOpt]);
+  // clang 的 LTO 驱动做两件我们之前漏掉的事:**先 internalize+globaldce**(把库函数变成
+  // internal 并删掉没人用的),然后跑 **lto<O> 管线**(LTO 专用的优化顺序)。缺了这两步,
+  // 库函数停留在 hidden、内联/DCE 都保守,热循环会慢 15–20%。
+  let passes = "lto<O" + ltoOpt + ">";
+  let optArgs = ["opt"];
+  if !sharedMode {
+    passes = "internalize,globaldce," + passes;
+    optArgs[optArgs.length] = "-internalize-public-api-list=main";
+  };
+  optArgs[optArgs.length] = "-passes=" + passes;
+  optArgs[optArgs.length] = merged;
+  optArgs[optArgs.length] = "-o";
+  optArgs[optArgs.length] = mergedOpt;
+  let optimized = std.process.run(optArgs);
   if optimized.status != 0 { clean([merged, mergedOpt]); fail("opt (lto) failed:\n" + optimized.stderr); };
   let ltoLlc = ["llc", "-O" + ltoOpt, "-filetype=obj", mergedOpt, "-o", object];
   if sharedMode { ltoLlc = ["llc", "-O" + ltoOpt, "-relocation-model=pic", "-filetype=obj", mergedOpt, "-o", object]; };

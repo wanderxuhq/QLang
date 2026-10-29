@@ -2154,7 +2154,12 @@ let __verify_elf_strings = (elfPath, stringsPath, irPath, relaxed) -> {
     if isError(hex) || hex == null { return { ok: false, count: checked, message: ".strbox" + __itoa(box.id) + ": IR buffer missing" }; };
     let idText2 = __itoa(box.id);
     let symbol2 = symbols[idText2];
-    if isError(symbol2) || symbol2 == null { return { ok: false, count: checked, message: ".strbox" + idText2 + ": missing ELF symbol" }; };
+    let missing2 = isError(symbol2) || symbol2 == null;
+    // LTO 的 globaldce 会删掉没人用的字符串(用户 IR 里只出现在死代码中的也算):跳过。
+    if missing2 && relaxed == 1 {
+      bi5 = bi5 + 1;
+    } else {
+    if missing2 { return { ok: false, count: checked, message: ".strbox" + idText2 + ": missing ELF symbol" }; };
     let headerAt2 = fileOffset(symbol2.address);
     if headerAt2 < 0 { return { ok: false, count: checked, message: ".strbox" + idText2 + ": address not in a segment" }; };
     if readU64(base, headerAt2) != 2 { return { ok: false, count: checked, message: ".strbox" + idText2 + ": tag is not 2" }; };
@@ -2167,6 +2172,7 @@ let __verify_elf_strings = (elfPath, stringsPath, irPath, relaxed) -> {
     if __elf_hex(base, bufferAt2, __s_len(hex) / 2) != hex { return { ok: false, count: checked, message: ".strbox" + idText2 + ": linked bytes do not match" }; };
     checked = checked + 1;
     bi5 = bi5 + 1;
+    };
   };
   { ok: true, count: checked, message: "" };
 };
