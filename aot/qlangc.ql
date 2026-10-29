@@ -3436,7 +3436,10 @@ let main = (args) -> {
       let row = rows[ri];
       if row != "" {
         let cells = std.String.split(row)("\t");
-        if cells.length == 2 {
+        // 构建器写的是三列(`名字<TAB>ql_fnN<TAB>fastArity`);只认两列会让 stdlibSymbolMap
+        // 全空 —— split 模式下所有直接调用(含 __op_eq/__str_eq 这些运行时助手)都会静默退化成
+        // 闭包间接调用。这是 split 路径比单模块慢 3–5× 的主因之一。
+        if cells.length == 3 || cells.length == 2 {
           stdlibSymbolMap[cells[0]] = cells[1];
           // 用户函数接着库函数的编号往下排,否则会重定义对象里的 ql_fnN。
           let digits = std.String.replace(cells[1])("ql_fn")("");
