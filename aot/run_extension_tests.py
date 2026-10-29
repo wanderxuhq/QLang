@@ -13,6 +13,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--compiler', required=True, type=Path)
     parser.add_argument('--keep', type=Path)
+    parser.add_argument('--tmp', type=Path,
+                        help='work 目录(必须在 dlopen 允许的路径下;Android 的 /tmp 不允许,'
+                             '会报 "not accessible for the namespace" 而假红)')
     options = parser.parse_args()
     compiler = options.compiler.resolve()
     temporary = None
@@ -22,7 +25,9 @@ def main():
             parser.error('--keep must name an empty output directory')
         work.mkdir(parents=True, exist_ok=True)
     else:
-        temporary = tempfile.TemporaryDirectory(prefix='qlang-extensions-'); work = Path(temporary.name)
+        tempdir = str(options.tmp) if options.tmp else None
+        temporary = tempfile.TemporaryDirectory(prefix='qlang-extensions-', dir=tempdir)
+        work = Path(temporary.name)
     try:
         source = work/'source'; source.mkdir(exist_ok=True)
         shutil.copytree(ROOT/'aot/tests/extensions', source, dirs_exist_ok=True)
