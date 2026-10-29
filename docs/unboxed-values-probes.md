@@ -1948,3 +1948,23 @@ clang 的 LTO 驱动(它在 internal 化/字符串全局/目标文件组织上�
 - `tools/stdlib` 现在**同时产出 `stdlib.bc`**(缓存命中时也会补),`--lto` 不再依赖 Python 生成;
 - 校验器加了 relaxed 模式(LTO 会常量合并/GC,`verify <elf> <strings> <ir> --lto` 只要求
   「ELF 里没有预期外的字符串符号」)。
+
+## 79. 静态派发收尾:剩余拒绝面只有 0.2% 的量级(2026-10-29)
+
+当前计数器(t30 + runtime):
+
+```
+; directreject: nohit=0 notable=20 noinfo=30 assigned=0 arity=0 args=0 ann=10
+; stdchain: hits=70 cached=1 nokey=0 arity=0 args=0 written=0
+```
+
+- `args=0` 已经清零(共享入口 `__direct_checked` 之后不再需要)；
+- 剩下 60 个点:`notable`(作用域名解析到没有 directFns 表的绑定)、`noinfo`(表里没有该名字:
+  定义晚于调用、或被赋值/导出)、`ann`(实参静态类型不等于形参注解)。
+- 覆盖率按早先的账(278 个直调点)算约 82%;按每个直调点省 ~5.8 条指令(§63 的实测)折算,
+  这 60 个点约 **350 条指令 ≈ 0.2%**。
+- 真要吃掉它们需要「预扫所有顶层函数、预分配符号名」的前置 pass(处理前向引用),
+  改动面大、收益固定且很小。
+
+**结论:静态派发的剩余面到此关闭**,不再投入;`ns-unresolved` 那 30 个是**类型索引**的缺口
+(`Error.raise`/`String.fromCodePoint` 等),影响的是 `.check`/收窄的信息量,不是直调覆盖率。

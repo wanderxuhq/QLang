@@ -55,6 +55,27 @@ QLANG=./target/release/qlang python3 aot/run_selfhost_tests.py --self --output-d
 python3 aot/native_link.py /tmp/example.ll -o /tmp/example
 ```
 
+那条命令是**单模块**构建:每次都要把 runtime + 标准库重新解析、分析、发射(小程序的 ~11s 里
+约 7s 花在库上)。日常构建走「库只编一次」:
+
+```bash
+# 1) 库编一次:stdlib.o + stdlib.bc + symbols.tsv/interface.txt(按编译器+runtime+bundle 的哈希缓存)
+./target/tools/stdlib --compiler ./target/selfhost/stage2
+#    → target/stdlib/<key>/stdlib.o
+
+# 2) 只发用户模块(前端 ~0.8s,单模块是 ~11s)
+./target/selfhost/stage2 --emit-llvm --stdlib-object target/stdlib/<key> example.ql aot/runtime.ql > /tmp/example.ll
+
+# 3a) 快速链接(库用 .o;最快,适合互相验证)
+./target/tools/link /tmp/example.ll -o /tmp/example --stdlib-object target/stdlib/<key>/stdlib.o
+# 3b) 发布链接(库用 bitcode + LTO,跨模块内联,运行与单模块持平)
+./target/tools/link /tmp/example.ll -o /tmp/example --stdlib-object target/stdlib/<key>/stdlib.o \
+    --stdlib-ir target/stdlib/<key>/strings.tsv --lto
+```
+
+`--lto` 的优化级别用 `--lto-opt`(默认 2;链接 ~11s,运行 CPU 与单模块 0.55s 同量级)。
+想看编译器各阶段耗时,加 `--timing`(输出 `; phase: parse=… lib=… analyze=… emit=…`,默认关闭)。
+
 Build the native interpreter using that compiler, then run QLang files:
 
 ```bash
