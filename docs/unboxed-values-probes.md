@@ -1989,3 +1989,19 @@ clang 的 LTO 驱动(它在 internal 化/字符串全局/目标文件组织上�
 - B2(缺失字段/索引 ⇒ Null)与 B4(`/0` 保持 Error)同属已定口径,不动。
 
 结论:第 5 项到此关闭 —— 没有遗留的可执行工作。
+
+## 82. 第 6 项:仓库卫生清扫 + 驱动 QLang 化的判断(2026-10-29)
+
+**清扫**:删掉两个陈旧 worktree(`/tmp/wt_head` = 394e473、`/tmp/wt_p0` = 2c800e8)和两个
+difftest 遗留文件(`_df_boot.ql`、`_df_host.ql`,10-15 的产物,本来也在 .gitignore 里)。
+现在 `git worktree list` 只剩主工作树,`git status` 干净。
+
+**驱动 QLang 化的判断**:22 个 Python runner(48–143 行/个)是**编排**:
+建临时目录、按模式拼编译器命令行、clang 链接、跑二进制、和 `.expected` 比对、报告 fatal 用例。
+这些是测试基础设施,不是语言运行时——AGENTS §2.7 明确「Python 只是测试/链接/数据生成工具」。
+真正有意义的那一半(**构建路径**不依赖 Python)已经在第 2/4 项做完:
+门禁与 bench 的标准库对象走 `target/tools/stdlib`,链接走 `target/tools/link`,
+Python 只剩「没有工具链时的回落」和测试编排。
+
+**结论:不做驱动 QLang 化。** 移植 22 个 runner 会把「测试怎么跑」从成熟工具链搬到自研进程
+编排上,收益是零(用户跑不到这些脚本),风险是门禁不稳。这一项到此关闭,记在这里避免以后重开。
