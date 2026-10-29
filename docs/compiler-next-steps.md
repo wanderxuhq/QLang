@@ -1233,3 +1233,26 @@ library call graph.
 
 Acceptance: `directreject.args` falls, the stdlib object's `clang -O2` instruction count falls,
 stage2/stage3 IR fixed point holds, both engines agree.
+
+## Deferred: typed module definitions (`mod.ql`), shared with reflection/introspection (2026-10-29)
+
+A package directory can carry a `mod.ql` describing its surface: version, visible slots,
+functions (symbol + arity + type), module members (nested, so chains resolve), and the
+highest function number. It is a **configuration read with `std.JSON`** (QLang is JSON5
+compatible), not a second language: dedicated code validates it and applies its rules.
+
+Rules agreed for it:
+
+- **Optional**: with a `mod.ql` the surface is exactly what it declares (white-list; names it
+  does not mention are unusable, reported at analysis time); without one the previous
+  `interface.txt` behaviour is unchanged.
+- **Not std-only**: third-party packages will use the same mechanism.
+- **Types**: every entry carries an inferred type where one exists, `Any` otherwise, so the
+  file doubles as the type surface of the package.
+- Generated today by string concatenation (no codegen SDK yet); acceptance includes
+  white-list completeness cross-checked against `MAX` and `symbols.tsv`.
+
+**Deferred on purpose**: giving `mod` definitions a *dedicated type* (a `Module`/`Definition`
+type value, checkable like any other type). When reflection/introspection lands it will need
+exactly such a type for describing values and members, so the two should share one design
+instead of inventing a shape here now. Do not add a bespoke type for `mod` in the meantime.
