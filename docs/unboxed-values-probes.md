@@ -2405,3 +2405,43 @@ debug 剩下的 1.1s 基本是地板:`llc` 0.28 + `ld.lld` 0.26 + 校验 0.13 + 
 
 正确性对照:6 个夹具(`t20/t30/t43/t54/t58/t61`)两种档位的输出与 `.expected` 逐字节相同。
 `--no-verify` 仍可叠加(再省 0.13s),但默认开着——它是"不发布错二进制"的门,与优化等级无关。
+
+## 96. debug / release 两档:debug 不消费分析的优化结论(2026-10-30)
+
+作者定的分档口径:**debug 走保守路线(所有值走通用路径),release 能删的删、能静态的静态**。
+所以分档点不是"分析跑不跑",而是**发射器是否消费分析结论**——分析两档都照跑,诊断因此完全一致
+(同一份源码两档都合法或都不合法)。
+
+| 档位 | 编译器 | 链接器 |
+|---|---|---|
+| release(默认) | 消费全部结论:直调/内联/raw ABI/闭包省略/死函数删除/unbox 裸槽/可证检查省略 | `opt -O2 → llc -O2 → ld.lld → 校验` |
+| debug | 一条都不用:所有值装箱、所有调用走通用路径、检查全留 | `llc -O1` 直接吃 IR(§95) |
+
+实现是**一个开关 + 若干消费点**,没有第二套发射器:
+
+```
+conservativeMode（--debug）:
+  buildInlineCandidates + allowDirectUserCalls   → 不跑（库那趟与入口那趟都关）
+  curScope.unbox / node.unboxType                → 不标记（绑定与形参都不裸）
+  deadCheck / 返回类型的 proven                   → 不成立（注解检查与返回检查全发）
+  `; proven-safe call is not directly dispatched` → 不检查（保守路径走通用调用同样正确）
+```
+
+最后一条是**踩到的真问题**:那条 internal 不变量原本假定"分析证明不可能出错的调用一定已被
+内联/直调",debug 下必然触发,`t55/t59/t61` 三个夹具直接编译失败。它说明"分析结论"曾被
+当成"发射器不变量"——分档正好把这类隐性耦合暴露出来。
+
+**差分套件** `aot/run_debug_diff_tests.py`:每个夹具两档各编一次,判据是**两档输出逐字节相同**
+(顺带与 `.expected` 比)。它有两个用途:①优化不健全会表现为"debug 对、release 错";②语言调试
+时所有值都走通用路径,没有裸槽/直调/闭包省略这些特例。实测 42 个夹具:41 个两档一致且正确,
+`t37_extensions` 两档**同样**红(需要 extension 宿主,与档位无关,已列入 SKIP)。
+
+不变量与体积(同源):
+
+| | t20(单模块 IR) | t30(用户模块 IR) |
+|---|---|---|
+| release | 185,619 行(与 HEAD 基线**逐字节相同**,只多一行 `; conservative: off`) | 24,512 行 |
+| debug | 187,334 行 | 24,719 行 |
+
+debug 的 `; rawABI order` 计数:`direct=0 inline=0 rawcalls=0 rawfuncs=0 rawretcalls=0`,
+即确实一条优化都没用。

@@ -1706,7 +1706,8 @@ let emitLetStmt = (node) -> {
   //  · 否则类型/文本槽必须照写(非同体写入会读它决定要不要检查),只是本次写入若右值
   //    类型已等于注解,这一次检查是死代码。
   let typeFree = annotated && !inRuntime && !isError(node.runtimeTypeFree) && node.runtimeTypeFree == true;
-  let deadCheck = !inRuntime && (typeFree || checkIsDead(node.value, node.annotationType));
+  // debug 档不省略"可证不会失败"的检查:注解检查一律发出来(慢一点,但每条路径都走)。
+  let deadCheck = !conservativeMode && !inRuntime && (typeFree || checkIsDead(node.value, node.annotationType));
   if annotated && !typeFree { ty = emitExpr(node.annotation); text = internString(annotationText(node.annotation)); };
   let value = "null";
   let inline = null;
@@ -1735,7 +1736,8 @@ let emitLetStmt = (node) -> {
   curScope.active[node.name] = true;
   // 裸槽:分析期判定这个绑定是裸 double(unboxType)。槽里 payload 就是 double 的位
   // (写成 Number 盒时如此),所以裸写只需写位(tag 早已是 NUMBER,槽仍是合法盒)。
-  if !isError(node.unboxType) && node.unboxType == "Number" {
+  // debug 档不 unbox:槽里永远是合法 %ql_value(所有读取走装箱路径)。
+  if !conservativeMode && !isError(node.unboxType) && node.unboxType == "Number" {
     if isError(curScope.unbox) { curScope.unbox = {}; };
     curScope.unbox[node.name] = true;
   };
@@ -1769,7 +1771,7 @@ let emitLetStmt = (node) -> {
   } else {
     // 未初始化声明的裸槽也要写成一个合法的 NUMBER 盒(tag=1),否则后续只写 payload
     // 的裸写会留下 tag=0,任何按 %ql_value 读它的路径都会把它当成指针。
-    if value == "null" && !isError(node.unboxType) && node.unboxType == "Number" { value = "{ i64 1, i64 0 }"; };
+    if value == "null" && !conservativeMode && !isError(node.unboxType) && node.unboxType == "Number" { value = "{ i64 1, i64 0 }"; };
     emitBindingStore(off, value, ty, text);
   };
   // P0: a named function literal becomes a direct-call target only when it is
@@ -2067,7 +2069,7 @@ let emitFunction = (node, name, rawDirect) -> {
       };
       emitBindingStore(off, rv, ty, text);
     };
-    if !isError(node.parameters[a].unboxType) && node.parameters[a].unboxType == "Number" {
+    if !conservativeMode && !isError(node.parameters[a].unboxType) && node.parameters[a].unboxType == "Number" {
       if isError(curScope.unbox) { curScope.unbox = {}; };
       curScope.unbox[node.parameters[a].name] = true;
     };
@@ -2086,7 +2088,8 @@ let emitFunction = (node, name, rawDirect) -> {
   curReturnActive = false; curReturnType = ""; curReturnTy = "null"; curReturnText = "null";
   if !inRuntime && !isError(node.returnTypeAnnotation) && node.returnTypeAnnotation != null {
     let proven = false;
-    if !isError(node.declaredReturnType) && node.declaredReturnType != ""
+    if conservativeMode { proven = false; }
+    else if !isError(node.declaredReturnType) && node.declaredReturnType != ""
        && !isError(node.derivedReturnType) && node.declaredReturnType == node.derivedReturnType { proven = true; };
     if !proven {
       curReturnActive = true;
