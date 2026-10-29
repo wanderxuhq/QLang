@@ -3366,7 +3366,12 @@ let loadStdlibInterface = (text) -> {
         if isError(stdModuleCalls[cells[1]]) { stdModuleCalls[cells[1]] = {}; };
         stdModuleCalls[cells[1]][cells[2]] = cells[3];
       }
-      else if kind == "MEM" { stdMemberBindingSet(cells[1], cells[2], cells[3]); };
+      else if kind == "MEM" { stdMemberBindingSet(cells[1], cells[2], cells[3]); }
+      else if kind == "MAX" {
+        // 库函数的**总**最大编号(含未导出):用户模块的编号从这里往上走,避免和库内部撞号。
+        let top = std.Number.parseFloat(cells[1]);
+        if !isError(top) && top >= funcCounter { funcCounter = top + 1; };
+      };
     };
     i = i + 1;
   };
