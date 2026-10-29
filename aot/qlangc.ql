@@ -1463,7 +1463,31 @@ let collectRawCandidates = (candidates, refs) -> {
     i = i + 1;
   };
 };
-let buildInlineCandidates = (program) -> {
+// 完全没有引用的顶层函数:绑定既没被当值读、也没被调用 —— 不可能贡献任何可观察行为。
+// **只对入口程序**生效:编译器自己会按名字直调库函数(`emitCallRegs("__build_standard_library")`
+// 等),那些边不在 AST 里,用 AST 引用计数删库函数会删掉仍在被调的函数。
+let deadFunctionCandidates = {};
+let deadFunctionsDropped = 0;
+let collectDeadFunctions = (refs) -> {
+  let i = 0;
+  while i < directSlots.length {
+    let s = directSlots[i];
+    let letNode = s.letNode; let fn = s.fnNode;
+    let ok = !isError(letNode) && letNode != null && !isError(fn) && fn != null && !isError(s.bid);
+    if ok && (isError(s.letSeq) || s.letSeq < 0) { ok = false; };
+    if ok && !isError(s.value) && s.value != 0 { ok = false; };
+    if ok && !isError(s.callee) && s.callee != 0 { ok = false; };
+    if ok && !isError(fn.moduleBody) && fn.moduleBody == true { ok = false; };
+    if ok && letNode.annotation != null && !isError(letNode.annotation) { ok = false; };
+    if ok && !isError(assignedUserNames[letNode.name]) { ok = false; };
+    if ok && !isError(redeclaredUserNames[letNode.name]) { ok = false; };
+    if ok && !isError(exportedUserNames[letNode.name]) { ok = false; };
+    if ok && !isError(importedNames[letNode.name]) { ok = false; };
+    if ok { deadFunctionCandidates[s.bid] = { name: letNode.name, node: letNode }; };
+    i = i + 1;
+  };
+};
+let buildInlineCandidates = (program, allowDead) -> {
   inlineCandidates = {};
   rawDirectCandidates = {};
   directSlots = [];
@@ -1476,6 +1500,8 @@ let buildInlineCandidates = (program) -> {
   collectDirectRefs(program, refs);
   collectInlineCandidates(program, refs, inlineCandidates);
   collectRawCandidates(rawDirectCandidates, refs);
+  deadFunctionCandidates = {};
+  if allowDead { collectDeadFunctions(refs); };
 };
 let emitInlineDirect = (info, values) -> {
   let saved = inlineSubst; inlineSubst = {};
@@ -1712,6 +1738,7 @@ let emitLetStmt = (node) -> {
   let value = "null";
   let inline = null;
   let rawInfo = null;
+  let deadInfo = null;
   if allowDirectUserCalls && node.value != null && !isError(node.value.type) && node.value.type == "Function" && !isError(node.bindId) {
     let candidate = inlineCandidates[node.bindId];
     // Bind ids restart for every program (entry/library/each module), so an
@@ -1719,9 +1746,15 @@ let emitLetStmt = (node) -> {
     if !isError(candidate) && candidate != null && candidate.node == node { inline = candidate; };
     let rawCandidate = rawDirectCandidates[node.bindId];
     if !isError(rawCandidate) && rawCandidate != null && rawCandidate.node == node { rawInfo = rawCandidate; };
+    let deadCandidate = deadFunctionCandidates[node.bindId];
+    if !isError(deadCandidate) && deadCandidate != null && deadCandidate.node == node { deadInfo = deadCandidate; };
   };
   if node.value != null {
     if inline != null { value = emitNull(); }
+    else if deadInfo != null {
+      value = "null";
+      deadFunctionsDropped = deadFunctionsDropped + 1;
+    }
     else if node.value.type == "Function" { value = emitFunction(node.value, node.name, rawInfo != null); }
     else { value = emitExpr(node.value); };
     // A typed binding holds only its type. The check's value still goes through
@@ -3255,7 +3288,7 @@ let emitStdlibInit = (runtimeStmts, libraryStmts) -> {
   // 库内直调:库自己的候选表在这里重建(稍后用户程序的候选表会把它整表覆盖,
   // 两段的 bindId 编号互不干扰)。发射器要求被调函数的定义先于调用点,统计显示
   // 库内 285 个绑定调用点全部满足。
-  if !conservativeMode { buildInlineCandidates(libraryStmts); allowDirectUserCalls = true; };
+  if !conservativeMode { buildInlineCandidates(libraryStmts, false); allowDirectUserCalls = true; };
   let li = 0;
   while li < libraryStmts.length {
     let stmt = libraryStmts[li];
@@ -3978,7 +4011,7 @@ let main = (args) -> {
   let exportsOff = emitBindingPtr({depth: 0, slot: curScope.slots["$exports"]});
   emitBindingStore(exportsOff, moduleExportsReg, "null", "null");
   emitSetModuleLoading(path, true);
-  if !conservativeMode { buildInlineCandidates(userProgram.statements); allowDirectUserCalls = true; };
+  if !conservativeMode { buildInlineCandidates(userProgram.statements, true); allowDirectUserCalls = true; };
   let last = emitBlockStmts(userProgram.statements);
   allowDirectUserCalls = false;
   emitSetModuleLoading(path, false);
@@ -4066,6 +4099,7 @@ let main = (args) -> {
   let staticLine = knownReportLine();
   if staticLine != "" { out[out.length] = "; staticcall: " + staticLine; };
   // ②a 补充:发射序折扣(同样要等主函数体发完 —— 函数体是在 main 发射过程中才发现并发出的)。
+  out[out.length] = "; deadfns: dropped=" + std.String.toString(deadFunctionsDropped);
   out[out.length] = "; rawABI order: usercalls=" + std.String.toString(ordCallsTotal) + " emitted=" + std.String.toString(ordCallsEmitted) + " notyet=" + std.String.toString(ordCallsNotYet) + " retraw=" + std.String.toString(ordCallsRetRaw) + " direct=" + std.String.toString(directCalls) + " inline=" + std.String.toString(inlineUsed) + " rawcalls=" + std.String.toString(rawCalls) + " rawfuncs=" + std.String.toString(rawFuncs) + " rawretcalls=" + std.String.toString(rawDoubleCalls) + " rawretfuncs=" + std.String.toString(rawDoubleReturns);
   // R10-c: out[0..mainAt) = prelude plus the cold helper, then every function body,
   // then main. Function bodies come before their direct callers because this
