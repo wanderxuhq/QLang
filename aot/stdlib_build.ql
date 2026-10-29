@@ -417,14 +417,14 @@ let joinArr = (items) -> {
   out;
 };
 let iLines = std.String.split(iface.stdout + membersText0)("\n");
-let slotItems = []; let fnItems = []; let mtItems = []; let memItems = []; let mtMap = {};
+let slotItems = []; let fnItems = []; let mtItems = []; let memItems = []; let mtMap = {}; let dfnArity = {};
 let li2 = 0;
 while li2 < iLines.length {
   let row = iLines[li2];
   if row != "" {
     let cells = std.String.split(row)(" ");
     if cells[0] == "SLOT" { slotItems[slotItems.length] = jq(cells[1]); }
-    else if cells[0] == "DFN" { fnItems[fnItems.length] = jq(cells[1]) + ":{\"symbol\":" + jq(symOf(cells[1])) + ",\"arity\":" + cells[2] + "}"; }
+    else if cells[0] == "DFN" { dfnArity[cells[1]] = cells[2]; }
     else if cells[0] == "MT" { mtItems[mtItems.length] = jq(cells[1]) + ":" + jq(cells[2]); }
     else if cells[0] == "MEM" { memItems[memItems.length] = jq(cells[1]) + "\u0001" + jq(cells[2]) + "\u0001" + jq(symOf(cells[3])) + "\u0001" + fastOf(cells[3]); }
     else if cells[0] == "SYM" { memItems[memItems.length] = jq(cells[1]) + "\u0001" + jq(cells[2]) + "\u0001" + jq(cells[3]) + "\u0001" + cells[4]; };
@@ -451,8 +451,23 @@ while mi5 < modNames.length {
   modItems[modItems.length] = modNames[mi5] + ":{" + joinArr(memberItems) + "}";
   mi5 = mi5 + 1;
 };
+let ni = 0;
+while ni < named.length {
+  let nm = named[ni].name;
+  let ar = dfnArity[nm];
+  if isError(ar) || ar == null { ar = fastOf(nm); };
+  fnItems[fnItems.length] = jq(nm) + ":{\"symbol\":" + jq(named[ni].symbol) + ",\"arity\":" + ar + "}";
+  ni = ni + 1;
+};
 let modText3 = "let mod = {\"version\":1,\"slots\":[" + joinArr(slotItems) + "],\"functions\":{" + joinArr(fnItems) + "},\"modules\":{" + joinArr(modItems) + "},\"mt\":{" + joinArr(mtItems) + "},\"maxFn\":" + std.Number.toString(maxFn) + "};\n";
 std.fs.writeText(outDir + "/mod.ql", modText3);
+// 完整性:mod.ql 必须列全所有导出符号(函数表 = 符号表条数),否则 split 模式的
+// 白名单会让生成代码引用到没声明的符号(上次 selfhost 就是这么红的)。
+if fnItems.length != named.length {
+  fail("mod.ql incomplete: " + std.String.toString(fnItems.length) + " functions vs " + std.String.toString(named.length) + " symbols");
+};
+if slotItems.length == 0 { fail("mod.ql: empty slots"); };
+if modItems.length == 0 { fail("mod.ql: empty modules"); };
 
 // 8) 目标文件
 let compiled = std.process.run(["llc", "-O2", "-filetype=obj", stdlibPath, "-o", objectPath]);
