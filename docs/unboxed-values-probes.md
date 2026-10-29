@@ -2567,3 +2567,35 @@ bindId**(多半是 -1 或另一个 id)——计数再严格也数不到边。
 
 在做到那一步之前,死函数删除不落地(连续三次尝试都被门禁否掉)。当前 HEAD 的编译器与 `cbcd3f8`
 逐字相同(`git diff cbcd3f8 HEAD -- aot/qlangc.ql` 为空)。
+
+### 99.3 证据:前向引用在分析期就是 `bindId = -1`(2026-10-30)
+
+给编译器加 `--dump-ids`(打印每个 `Let`/`Identifier` 的 `bindId`),对
+
+```qlang
+let a = (x) -> late(x) + 1;
+let late = (x) -> x * 2;
+println(a(3));
+```
+
+的输出是:
+
+```
+DUMP Let a bid=1
+DUMP Identifier x bid=0
+DUMP Identifier late bid=-1     ← 前向引用拿不到 id
+DUMP Let late bid=3
+DUMP Identifier a bid=1
+DUMP Identifier println bid=-1
+```
+
+原因在 `types.ql:899`:`node.bindId = typeBindLookup(node.name)` —— **分析按位置解析词法作用域**,
+`a` 的函数体里 `late` 还没进作用域,于是 -1;而 `types.ql:1249` 只有在 `typeCollectWrites` 时
+才给 `Let` 分配 id,后续 pass 复用。**发射器不受影响**:它有一趟 `reserveModuleGlobals` 预先把
+模块级名字全部占槽,所以运行期能正确解析——这也解释了为什么"程序能跑,但 AST 引用分析数不到边"。
+
+所以要做 AST 级引用分析,必须新增一趟**模块级名字解析**(像发射器那样先把整个模块的 `let` 名字收齐,
+再把所有 `Identifier` 解析到唯一 id,盖在**新字段**(例如 `refId`)上,不要动现有 `bindId` ——
+后者被表示分析/unbox 依赖,改动会波及全部分析结论)。
+
+在这之前,死函数删除不落地(三次尝试都被门禁否掉,证据 §99/99.1/99.2/99.3)。
