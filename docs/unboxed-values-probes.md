@@ -1905,3 +1905,23 @@ stage2 --emit-llvm --stdlib-object target/stdlib/<key> prog.ql runtime.ql > prog
 
 注意:bench 表里的 `clang(s)` 列是**指令计数**用的 `clang -O2 -S`(只扫用户模块),
 不是 LTO 链接时间;端到端要额外加 ~10.6s 的链接。
+
+## 77. 手搓的 llvm-link LTO 管线是错的(不做,改走 clang 驱动)(2026-10-29)
+
+想让 QLang 链接器(`tools/link`)也支持 `--lto`,按经典管线实现:
+`llvm-link user.ll stdlib.bc → opt -O1 → llc -filetype=obj → ld.lld`(库不再单独进 ld)。
+
+结果(同一份 split IR、同一个库对象):
+
+| 链接方式 | 链接时间 | b_chars 输出 | CPU |
+|---|---|---|---|
+| `clang -O1 -flto=thin`(Python 路径,已验收) | 10.6s | **10,487,500** ✓ | 0.653s |
+| `llvm-link + opt -O1 + llc + ld.lld` | 6.9s | **10,515,500** ✗ | 0.503s |
+| 同上,t16 夹具 | — | 3 3 8 ✓ | — |
+
+简单夹具(t16)是对的,b_chars 差 **28,000**(多算了空格) —— 说明这条管线**不等价**于
+clang 的 LTO 驱动(它在 internal 化/字符串全局/目标文件组织上有额外处理),不能拿去发布。
+
+**结论:不做手搓 LTO。** `--lto` 保留在 `native_link.py`(clang 驱动 + `-flto=thin`),它已经
+被 `validate` 兜住;`tools/link` 继续只做 `.o` 路径。真要 QLang 链接器支持 LTO,得复刻
+clang 的 LTO 驱动行为,那是另一个题目。
