@@ -14,7 +14,7 @@ let clean = (paths) -> { let i = 0; while i < paths.length { std.process.run(["r
 
 let irPath = ""; let output = ""; let stdlibObject = ""; let runtimeObject = "";
 let verifyTool = "target/tools/verify"; let stdlibIr = ""; let skipVerify = false;
-let optLevel = "2"; let sharedMode = false;
+let optLevel = "2"; let sharedMode = false; let ltoMode = false; let ltoOpt = "2";
 let ai = 0;
 while ai < args.length {
   let arg = args[ai];
@@ -26,6 +26,8 @@ while ai < args.length {
   else if arg == "--no-verify" { skipVerify = true; }
   else if arg == "--opt" { ai = ai + 1; optLevel = args[ai]; }
   else if arg == "--shared" { sharedMode = true; }
+  else if arg == "--lto" { ltoMode = true; }
+  else if arg == "--lto-opt" { ai = ai + 1; ltoOpt = args[ai]; }
   else if irPath == "" { irPath = arg; };
   ai = ai + 1;
 };
@@ -46,12 +48,30 @@ let bitcode = output + ".bc";
 let object = output + ".user.o";
 let staged = output + ".tmp";
 
+if ltoMode {
+  // 库只编一次(bitcode),这里做跨模块内联:llvm-link → opt → llc。
+  let stdlibBc = stdlibObject;
+  if stdlibBc == "" { fail("--lto requires --stdlib-object (next to stdlib.bc)"); };
+  if std.String.endsWith(stdlibBc)(".o") { stdlibBc = std.String.replace(stdlibBc)(".o")("") + ".bc"; };
+  let merged = output + ".merged.bc"; let mergedOpt = output + ".lto.bc";
+  let linkStep = std.process.run(["llvm-link", irPath, stdlibBc, "-o", merged]);
+  if linkStep.status != 0 { clean([merged]); fail("llvm-link failed:\n" + linkStep.stderr); };
+  let optimized = std.process.run(["opt", "-O" + ltoOpt, merged, "-o", mergedOpt]);
+  if optimized.status != 0 { clean([merged, mergedOpt]); fail("opt (lto) failed:\n" + optimized.stderr); };
+  let ltoLlc = ["llc", "-O" + ltoOpt, "-filetype=obj", mergedOpt, "-o", object];
+  if sharedMode { ltoLlc = ["llc", "-O" + ltoOpt, "-relocation-model=pic", "-filetype=obj", mergedOpt, "-o", object]; };
+  let compiledLto = std.process.run(ltoLlc);
+  clean([merged, mergedOpt]);
+  if compiledLto.status != 0 { fail("llc (lto) failed:\n" + compiledLto.stderr); };
+  stdlibObject = "";
+} else {
 let optimized = std.process.run(["opt", "-O2", irPath, "-o", bitcode]);
 if optimized.status != 0 { fail("opt failed:\n" + optimized.stderr); };
 let llcArgs = ["llc", "-O2", "-filetype=obj", bitcode, "-o", object];
 if sharedMode { llcArgs = ["llc", "-O2", "-relocation-model=pic", "-filetype=obj", bitcode, "-o", object]; };
 let compiled = std.process.run(llcArgs);
 if compiled.status != 0 { fail("llc failed:\n" + compiled.stderr); };
+};
 
 let cfgText = std.fs.readFileText("aot/toolchain/aarch64-android24.cfg");
 if isError(cfgText) { fail("cannot read toolchain template"); };
@@ -91,6 +111,7 @@ if linked.status != 0 {
 // 校验:链接产物里的静态字符串必须和 IR 一致。校验不过就不发布(保留旧产物)。
 if !skipVerify && !sharedMode {
   let checkArgs = [verifyTool, staged, if stdlibIr == "" { "-"; } else { stdlibIr; }, irPath];
+  if ltoMode { checkArgs[checkArgs.length] = "--lto"; };
   let checked = std.process.run(checkArgs);
   if checked.status != 0 {
     clean([bitcode, object, staged]);

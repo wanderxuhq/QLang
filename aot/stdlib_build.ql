@@ -149,6 +149,13 @@ let outDir = cacheRoot + "/" + digest;
 let objectPath = outDir + "/stdlib.o";
 let existing = std.Bytes.read(objectPath);
 if !isError(existing) && std.Bytes.length(existing) > 1024 {
+  // 缓存命中也要保证 bitcode 在(--lto 链接要用);缺了就补一份。
+  let bcPath = outDir + "/stdlib.bc";
+  let bc = std.Bytes.read(bcPath);
+  if isError(bc) || std.Bytes.length(bc) < 1024 {
+    let made = std.process.run(["clang", "-O1", "-emit-llvm", "-c", outDir + "/stdlib.ll", "-o", bcPath]);
+    if made.status != 0 { fail("bitcode failed:\n" + made.stderr); };
+  };
   println(objectPath);
   return 0;
 };
@@ -369,6 +376,9 @@ std.fs.writeText(outDir + "/interface.txt", iface.stdout);
 // 8) 目标文件
 let compiled = std.process.run(["llc", "-O2", "-filetype=obj", stdlibPath, "-o", objectPath]);
 if compiled.status != 0 { fail("llc failed:\n" + compiled.stderr); };
+// 同一份 IR 再产一份 bitcode:发布构建用 --lto 做跨模块内联(库仍然只编一次)。
+let bitcodeMade = std.process.run(["clang", "-O1", "-emit-llvm", "-c", stdlibPath, "-o", outDir + "/stdlib.bc"]);
+if bitcodeMade.status != 0 { fail("bitcode failed:\n" + bitcodeMade.stderr); };
 std.fs.remove(emptyPath);
 println(objectPath);
 };

@@ -1906,7 +1906,7 @@ stage2 --emit-llvm --stdlib-object target/stdlib/<key> prog.ql runtime.ql > prog
 注意:bench 表里的 `clang(s)` 列是**指令计数**用的 `clang -O2 -S`(只扫用户模块),
 不是 LTO 链接时间;端到端要额外加 ~10.6s 的链接。
 
-## 77. 手搓的 llvm-link LTO 管线是错的(不做,改走 clang 驱动)(2026-10-29)
+## 77. [已更正,见 §78] 手搓 llvm-link LTO 管线"输出错误"的误判(2026-10-29)
 
 想让 QLang 链接器(`tools/link`)也支持 `--lto`,按经典管线实现:
 `llvm-link user.ll stdlib.bc → opt -O1 → llc -filetype=obj → ld.lld`(库不再单独进 ld)。
@@ -1922,6 +1922,29 @@ stage2 --emit-llvm --stdlib-object target/stdlib/<key> prog.ql runtime.ql > prog
 简单夹具(t16)是对的,b_chars 差 **28,000**(多算了空格) —— 说明这条管线**不等价**于
 clang 的 LTO 驱动(它在 internal 化/字符串全局/目标文件组织上有额外处理),不能拿去发布。
 
-**结论:不做手搓 LTO。** `--lto` 保留在 `native_link.py`(clang 驱动 + `-flto=thin`),它已经
-被 `validate` 兜住;`tools/link` 继续只做 `.o` 路径。真要 QLang 链接器支持 LTO,得复刻
-clang 的 LTO 驱动行为,那是另一个题目。
+**结论当时写错了,§78 更正**:差异来自 b_chars 读取的 `aot/runtime.ql` 在两次测量之间被我编辑过
+(每次多算的空格数 = 文件里多出来的空格数),不是 LTO 管线的问题。
+
+## 78. 更正 §77:手搓 LTO 管线是对的;QLang 链接器现在支持 `--lto`(2026-10-29)
+
+§77 那个「b_chars 多算 28,000」的真因:**b_chars 读的是 `aot/runtime.ql` 这份源码文件**,
+而我在两次测量之间编辑过它(给校验器加 relaxed 参数)。HEAD 的 runtime.ql 有 **20,975** 个空格
+(= 正确输出 10,487,500 / 500 轮);补丁版多 48–56 个空格/轮,正好对上差值。
+
+**教训**:凡是读源文件当输入的 benchmark,基线必须**同源同时测**——历史数字会随文件内容漂移。
+这次就是拿旧数字对比新文件,误判成 LTO 错了。
+
+更正后的测量(同一份源码、同一份 split IR):
+
+| 链接方式 | 链接时间 | 运行 CPU | 输出 |
+|---|---|---|---|
+| 单模块(同源对照) | — | 0.551s | 10,515,500 |
+| `clang -O1 -flto=thin`(Python) | 10.6s | 0.653s | 10,515,500 ✓ |
+| `tools/link --lto --lto-opt 2`(QLang:llvm-link→opt→llc→ld) | 11.2s | 0.621s | 10,515,500 ✓ |
+| `tools/link --lto --lto-opt 1` | 17.9s | 1.020s | 10,515,500 ✓(但 llc -O1 的码更慢) |
+
+所以:
+- QLang 链接器 `--lto` **可用**,默认 `--lto-opt 2`(llc -O1 虽然链接慢一点、运行反而更慢);
+- `tools/stdlib` 现在**同时产出 `stdlib.bc`**(缓存命中时也会补),`--lto` 不再依赖 Python 生成;
+- 校验器加了 relaxed 模式(LTO 会常量合并/GC,`verify <elf> <strings> <ir> --lto` 只要求
+  「ELF 里没有预期外的字符串符号」)。

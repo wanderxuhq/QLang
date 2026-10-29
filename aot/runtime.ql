@@ -1930,7 +1930,7 @@ let __elf_at = (base, offset, count) -> {
   while i < count { ql_mem_store(out, i, ql_mem_get(base, offset + i)); i = i + 1; };
   __str_new(out, count);
 };
-let __verify_elf_strings = (elfPath, stringsPath, irPath) -> {
+let __verify_elf_strings = (elfPath, stringsPath, irPath, relaxed) -> {
   let elf = __bytes_read(elfPath);
   if isError(elf) { return { ok: false, count: 0, message: "cannot read " + elfPath }; };
   let text = "";
@@ -2125,7 +2125,11 @@ let __verify_elf_strings = (elfPath, stringsPath, irPath) -> {
         let hex = __bytes_slice(text, tab + 1, lineStart + lineLen - tab - 1);
         let idText = __bytes_slice(name, 7, __s_len(name) - 7);
         let symbol = symbols[idText];
-        if isError(symbol) || symbol == null { return { ok: false, count: checked, message: name + ": missing ELF symbol" }; };
+        let missing = isError(symbol) || symbol == null;
+        // LTO 会常量合并/GC 掉没人用的库字符串:relaxed 模式下当作"被丢弃",不判失败。
+        if missing && relaxed == 1 {
+        } else {
+        if missing { return { ok: false, count: checked, message: name + ": missing ELF symbol" }; };
         let headerAt = fileOffset(symbol.address);
         if headerAt < 0 { return { ok: false, count: checked, message: name + ": symbol address not in a loadable segment" }; };
         if readU64(base, headerAt) != 2 { return { ok: false, count: checked, message: name + ": tag is not 2" }; };
@@ -2137,6 +2141,7 @@ let __verify_elf_strings = (elfPath, stringsPath, irPath) -> {
         if bufferAt < 0 { return { ok: false, count: checked, message: name + ": buffer not in a loadable segment" }; };
         if __elf_hex(base, bufferAt, __s_len(hex) / 2) != hex { return { ok: false, count: checked, message: name + ": linked bytes do not match" }; };
         checked = checked + 1;
+        };
       };
     };
     pos = pos + 1;
