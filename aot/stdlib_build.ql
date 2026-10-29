@@ -373,9 +373,11 @@ while bj < slines.length {
 };
 std.fs.writeText(outDir + "/strings.tsv", std.String.join(stringLines)("\n") + "\n");
 
-// 7) interface.txt(分析接口)
+// 7) interface.txt(分析接口)+ 发射那一趟导出的成员符号(members.txt)
 let iface = std.process.run([compiler, "--emit-stdlib-interface", runtimePath]);
 if iface.status != 0 { fail("interface dump failed:\n" + iface.stderr); };
+let membersText0 = std.fs.readFileText(membersPath);
+if isError(membersText0) { membersText0 = ""; };
 // 末尾记一条 MAX:库函数编号的最大值(**包括未导出的**)。用户模块必须从它之上开始编号,
 // 否则用户函数会和库内部函数撞号 —— 合并/内联模块时就是「重复定义」。
 let maxFn = 0;
@@ -389,9 +391,7 @@ while mfi < parsed.functions.length {
   };
   mfi = mfi + 1;
 };
-let membersText = std.fs.readFileText(membersPath);
-if isError(membersText) { membersText = ""; };
-std.fs.writeText(outDir + "/interface.txt", iface.stdout + membersText + "MAX " + std.Number.toString(maxFn) + "\n");
+std.fs.writeText(outDir + "/interface.txt", iface.stdout + membersText0 + "MAX " + std.Number.toString(maxFn) + "\n");
 
 // 7b) mod.ql:接口配置(JSON5;QLang 用 std.JSON 读)。没有 codegen SDK,这里字符串拼接。
 // 只写**事实**:slots / functions(符号+元数) / modules(成员->符号+元数) / mt / maxFn。
@@ -416,7 +416,7 @@ let joinArr = (items) -> {
   while k < items.length { if k > 0 { out = out + ","; }; out = out + items[k]; k = k + 1; };
   out;
 };
-let iLines = std.String.split(iface.stdout)("\n");
+let iLines = std.String.split(iface.stdout + membersText0)("\n");
 let slotItems = []; let fnItems = []; let mtItems = []; let memItems = []; let mtMap = {};
 let li2 = 0;
 while li2 < iLines.length {
@@ -426,7 +426,8 @@ while li2 < iLines.length {
     if cells[0] == "SLOT" { slotItems[slotItems.length] = jq(cells[1]); }
     else if cells[0] == "DFN" { fnItems[fnItems.length] = jq(cells[1]) + ":{\"symbol\":" + jq(symOf(cells[1])) + ",\"arity\":" + cells[2] + "}"; }
     else if cells[0] == "MT" { mtItems[mtItems.length] = jq(cells[1]) + ":" + jq(cells[2]); }
-    else if cells[0] == "MEM" { memItems[memItems.length] = jq(cells[1]) + "\u0001" + jq(cells[2]) + "\u0001" + jq(symOf(cells[3])) + "\u0001" + fastOf(cells[3]); };
+    else if cells[0] == "MEM" { memItems[memItems.length] = jq(cells[1]) + "\u0001" + jq(cells[2]) + "\u0001" + jq(symOf(cells[3])) + "\u0001" + fastOf(cells[3]); }
+    else if cells[0] == "SYM" { memItems[memItems.length] = jq(cells[1]) + "\u0001" + jq(cells[2]) + "\u0001" + jq(cells[3]) + "\u0001" + cells[4]; };
   };
   li2 = li2 + 1;
 };
