@@ -166,7 +166,9 @@ let fullPath = outDir + "/full.ll";
 let stdlibPath = outDir + "/stdlib.ll";
 std.process.run(["mkdir", "-p", outDir]);
 std.fs.writeText(emptyPath, "");
-let emitted = std.process.run([compiler, "--emit-llvm", emptyPath, runtimePath]);
+// 顺便导出「模块 -> 成员 -> 符号/元数」表(内联 lambda 的符号只在发射时存在)。
+let membersPath = outDir + "/members.txt";
+let emitted = std.process.run([compiler, "--emit-llvm", "--members-out", membersPath, emptyPath, runtimePath]);
 if emitted.status != 0 { fail("emit failed:\n" + emitted.stderr); };
 let wrote = std.fs.writeText(fullPath, emitted.stdout);
 if isError(wrote) { fail("cannot write " + fullPath); };
@@ -384,7 +386,9 @@ while mfi < parsed.functions.length {
   };
   mfi = mfi + 1;
 };
-std.fs.writeText(outDir + "/interface.txt", iface.stdout + "MAX " + std.Number.toString(maxFn) + "\n");
+let membersText = std.fs.readFileText(membersPath);
+if isError(membersText) { membersText = ""; };
+std.fs.writeText(outDir + "/interface.txt", iface.stdout + membersText + "MAX " + std.Number.toString(maxFn) + "\n");
 
 // 8) 目标文件
 let compiled = std.process.run(["llc", "-O2", "-filetype=obj", stdlibPath, "-o", objectPath]);

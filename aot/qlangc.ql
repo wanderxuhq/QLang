@@ -3369,6 +3369,12 @@ let loadStdlibInterface = (text) -> {
         if isError(stdModuleCalls[cells[1]]) { stdModuleCalls[cells[1]] = {}; };
         stdModuleCalls[cells[1]][cells[2]] = cells[3];
       }
+      else if kind == "SYM" {
+        // 直接给出符号的成员(内联 lambda):module member ql_fnN arity
+        let symKind = cells[3];
+        let arKind = if cells.length > 4 { std.Number.parseFloat(cells[4]) } else { -1 };
+        stdChainTargets[cells[1] + "." + cells[2]] = { ir: symKind, arity: arKind, fast: -1 };
+      }
       else if kind == "MEM" {
         stdMemberBindingSet(cells[1], cells[2], cells[3]);
         // split 模式:成员身份=源绑定名,符号来自 symbols.tsv,元数由 MEM 行带过来。
@@ -3420,12 +3426,14 @@ let main = (args) -> {
   let timingOn = false;
   let keptArgs = [];
   let stdlibDir = "";
+  let membersOutPath = "";
   let argIndex = 0;
   while argIndex < args.length {
     if args[argIndex] == "--fold" { foldEnabled = true; }
     else if args[argIndex] == "--static-scan" { staticScan = true; }
     else if args[argIndex] == "--timing" { timingOn = true; }
     else if args[argIndex] == "--stdlib-object" { stdlibDir = args[argIndex + 1]; argIndex = argIndex + 1; }
+    else if args[argIndex] == "--members-out" { membersOutPath = args[argIndex + 1]; argIndex = argIndex + 1; }
     else { keptArgs[keptArgs.length] = args[argIndex]; };
     argIndex = argIndex + 1;
   };
@@ -3802,6 +3810,29 @@ let main = (args) -> {
     out[out.length] = "; phase: parse=" + std.String.toString(usToMs(tParse - tStart)) + "ms lib=" + std.String.toString(usToMs(tLib - tParse)) + "ms analyze=" + std.String.toString(usToMs(tAnalyze - tLib)) + "ms emit=" + std.String.toString(usToMs(nowUs() - tAnalyze)) + "ms";
   };
   out[out.length] = "; stdchain: hits=" + std.String.toString(stdChainHits) + " cached=" + std.String.toString(stdCachedCalls) + " nokey=" + std.String.toString(stdChainReject.nokey) + " arity=" + std.String.toString(stdChainReject.arity) + " args=" + std.String.toString(stdChainReject.args) + " written=" + std.String.toString(stdChainReject.written);
+  // 成员表:模块 -> 成员 -> {符号, 元数}。内联 lambda 的 ql_fnN 只有在**发射**时才存在,
+  // 所以这张表必须由发射这一趟导出来,给 split 模式的 std 链直调用。
+  if membersOutPath != "" {
+    let mlines = [];
+    let mmods = std.Object.keys(stdModuleBinding);
+    let mi2 = 0;
+    while mi2 < mmods.length {
+      let mname = mmods[mi2];
+      let mbinding = stdModuleBinding[mname];
+      let members2 = stdMemberIr[mbinding];
+      if !isError(members2) && members2 != null {
+        let mk2 = std.Object.keys(members2);
+        let mj2 = 0;
+        while mj2 < mk2.length {
+          let info2 = members2[mk2[mj2]];
+          mlines[mlines.length] = "SYM " + mname + " " + mk2[mj2] + " " + info2.ir + " " + std.String.toString(info2.arity);
+          mj2 = mj2 + 1;
+        };
+      };
+      mi2 = mi2 + 1;
+    };
+    std.fs.writeText(membersOutPath, std.String.join(mlines)("\n") + "\n");
+  };
   let staticLine = knownReportLine();
   if staticLine != "" { out[out.length] = "; staticcall: " + staticLine; };
   // ②a 补充:发射序折扣(同样要等主函数体发完 —— 函数体是在 main 发射过程中才发现并发出的)。
