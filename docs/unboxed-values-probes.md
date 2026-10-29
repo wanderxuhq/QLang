@@ -1977,3 +1977,15 @@ clang 的 LTO 驱动(它在 internal 化/字符串全局/目标文件组织上�
   `tools/link <ir> -o ext.so --shared` 成功,产物是 ELF 共享对象(导出 `__cold_located_error`/
   `__panic_exit`,未定义 `memcpy`)。本机无法 dlopen 运行扩展(环境缺口),这里只验到链接层。
 - 从零重建工具链已在 §70 验过(`rm -rf target/tools` → `bootstrap.sh` 1m49s)。
+
+## 81. 错误模型第 5 项收口:E 已验证;B1/B3 按口径暂不改(2026-10-29)
+
+- **E(类型面)**:`std.Result(T) ≡ T|Error`、`std.Option(T) ≡ T|Null` 已在 `stdlib/result.ql` 实现,
+  `?` 只在 `Result(...)`/`Option(...)` 注解函数里允许。用库对象路径复跑两个判别夹具:
+  `t53_return_boundaries`、`t56_result_annotations` 输出与 `.expected` 逐字节一致。
+- **B1(StackOverflow)/B3(运行期 arity)**:以 `docs/rust-error-model.md` 为准 ——
+  **「暂不改;panic 边界先不动,避免一次改太多」**。所以这两项不是待办,是**作者已决定的延后**,
+  不再列为缺口。
+- B2(缺失字段/索引 ⇒ Null)与 B4(`/0` 保持 Error)同属已定口径,不动。
+
+结论:第 5 项到此关闭 —— 没有遗留的可执行工作。
