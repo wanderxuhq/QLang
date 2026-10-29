@@ -1125,6 +1125,9 @@ let ordCallsNotYet = 0;
 // P0 direct-call slice: only user-program bindings, only while the flag is on;
 // library/runtime emission keeps its existing eager/dynamic path.
 let allowDirectUserCalls = false;
+// debug 档:保守发射 —— 不消费分析的优化结论(不直调/不内联/不 raw ABI、不删死函数)。
+// 分析照跑(诊断必须两档一致),只是发射器不用它的结论。
+let conservativeMode = false;
 let directCalls = 0;
 // Conservative name-level assignment scan: a name assigned anywhere in the
 // user program is never direct-called (shadowing makes this over-approximate,
@@ -2749,7 +2752,8 @@ let emitCall = (node) -> {
     let hit = lookupSlot(cname); trusted = hit != null && hit.scope == globalScope;
   };
   // A call proven unable to return Error must have been emitted inline/raw.
-  if calleeIsId && !isError(node.cannotBeError) && node.cannotBeError == true {
+  // debug 档故意不消费这条结论:走通用调用路径同样正确(只是多了一次本来可证不会失败的检查)。
+  if !conservativeMode && calleeIsId && !isError(node.cannotBeError) && node.cannotBeError == true {
     addCompileError(node, "internal: proven-safe call is not directly dispatched");
   };
   if trusted { emitCallRegs(cname, values); }
@@ -3248,8 +3252,7 @@ let emitStdlibInit = (runtimeStmts, libraryStmts) -> {
   // 库内直调:库自己的候选表在这里重建(稍后用户程序的候选表会把它整表覆盖,
   // 两段的 bindId 编号互不干扰)。发射器要求被调函数的定义先于调用点,统计显示
   // 库内 285 个绑定调用点全部满足。
-  buildInlineCandidates(libraryStmts);
-  allowDirectUserCalls = true;
+  if !conservativeMode { buildInlineCandidates(libraryStmts); allowDirectUserCalls = true; };
   let li = 0;
   while li < libraryStmts.length {
     let stmt = libraryStmts[li];
@@ -3623,6 +3626,7 @@ let main = (args) -> {
     if args[argIndex] == "--fold" { foldEnabled = true; }
     else if args[argIndex] == "--static-scan" { staticScan = true; }
     else if args[argIndex] == "--timing" { timingOn = true; }
+    else if args[argIndex] == "--debug" { conservativeMode = true; }
     else if args[argIndex] == "--stdlib-object" { stdlibDir = args[argIndex + 1]; argIndex = argIndex + 1; }
     else if args[argIndex] == "--members-out" { membersOutPath = args[argIndex + 1]; argIndex = argIndex + 1; }
     else { keptArgs[keptArgs.length] = args[argIndex]; };
@@ -3829,6 +3833,7 @@ let main = (args) -> {
   // 助手插在 prelude 之后、按程序的计数注释之前:「prelude + 助手」因此是一段与用户
   // 程序无关的连续前缀(调用点在 main/函数体里,顺序仍满足「先定义后引用」)。
   coldHelperAt = out.length;
+  line("; conservative: " + (if conservativeMode { "on" } else { "off" }));
   line("; unboxable bindings: " + std.String.toString(typeUnboxList.length));
   // 诊断:编译期算出的表示各有多少(节点种类/静态类型/表示)。燃料 = 裸读,命中 = 裸比较;
   // 装箱的一侧按静态类型分层,才能分清「根本不是 Number」和「是 Number 但操作数不裸」。
@@ -3970,8 +3975,7 @@ let main = (args) -> {
   let exportsOff = emitBindingPtr({depth: 0, slot: curScope.slots["$exports"]});
   emitBindingStore(exportsOff, moduleExportsReg, "null", "null");
   emitSetModuleLoading(path, true);
-  buildInlineCandidates(userProgram.statements);
-  allowDirectUserCalls = true;
+  if !conservativeMode { buildInlineCandidates(userProgram.statements); allowDirectUserCalls = true; };
   let last = emitBlockStmts(userProgram.statements);
   allowDirectUserCalls = false;
   emitSetModuleLoading(path, false);
