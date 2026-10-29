@@ -2262,3 +2262,20 @@ Python 手工从 `interface.txt` 生成了一份 mod.ql 与旧路径对比:**计
 漏了函数条目 —— 白名单一旦不全,生成代码引用的符号就链接不上。所以 mod.ql **必须由发射那一趟
 的事实生成**(和 `SYM` 同源),不能手工维护;这也是下一步要做的:构建器在写对象时一并产出
 mod.ql,并把"白名单完整性"作为验收(与 `MAX`/符号表交叉核对)。
+
+**补充(同日的进一步定稿)**:
+
+- **格式**:不必是严格 JSON——QLang 兼容 JSON5、自带 `std.JSON`,所以 mod.ql 用 QLang/JSON5
+  字面量写、用现成的 `std.JSON.parse` 读,**不另写解析器**。
+- **类型**:mod 里每个成员/函数**能推导出类型就标推导出的类型,推导不出写 `Any`**;接口因此
+  兼作"类型面",消费方读 mod 就知道 `std.String.length` 的类型,而不是一律未知。
+  ```json
+  { "version": 1,
+    "modules": {
+      "String": {
+        "length":  { "symbol": "ql_fn180", "arity": 1, "type": "Any" },
+        "replace": { "symbol": "ql_fn183", "arity": 2, "type": "Function" }
+      }
+    },
+    "maxFn": 300 }
+  ```
