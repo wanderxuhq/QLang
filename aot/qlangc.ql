@@ -3287,6 +3287,7 @@ let writeStdlibInterface = (runtimeProgram, libraryProgram) -> {
     if !isError(stmt.type) && stmt.type == "Let" && stmt.value != null
        && !isError(stmt.value.type) && stmt.value.type == "Function" {
       println("DFN " + stmt.name + " " + std.String.toString(stmt.value.parameters.length));
+      stdMonoArity[stmt.name] = stmt.value.parameters.length;
     };
     i = i + 1;
   };
@@ -3299,7 +3300,9 @@ let writeStdlibInterface = (runtimeProgram, libraryProgram) -> {
       let mk = std.Object.keys(members);
       let mj = 0;
       while mj < mk.length {
-        println("MEM " + mods[mi] + " " + mk[mj] + " " + members[mk[mj]]);
+        let bindingArity = stdMonoArity[members[mk[mj]]];
+        if isError(bindingArity) { bindingArity = -1; };
+        println("MEM " + mods[mi] + " " + mk[mj] + " " + members[mk[mj]] + " " + std.String.toString(bindingArity));
         mj = mj + 1;
       };
     };
@@ -3366,7 +3369,15 @@ let loadStdlibInterface = (text) -> {
         if isError(stdModuleCalls[cells[1]]) { stdModuleCalls[cells[1]] = {}; };
         stdModuleCalls[cells[1]][cells[2]] = cells[3];
       }
-      else if kind == "MEM" { stdMemberBindingSet(cells[1], cells[2], cells[3]); }
+      else if kind == "MEM" {
+        stdMemberBindingSet(cells[1], cells[2], cells[3]);
+        // split 模式:成员身份=源绑定名,符号来自 symbols.tsv,元数由 MEM 行带过来。
+        let memSym = stdlibSymbolMap[cells[3]];
+        if !isError(memSym) && memSym != "" {
+          let memArity = if cells.length > 4 { std.Number.parseFloat(cells[4]) } else { -1 };
+          stdChainTargets[cells[1] + "." + cells[2]] = { ir: memSym, arity: memArity, fast: -1 };
+        };
+      }
       else if kind == "MAX" {
         // 库函数的**总**最大编号(含未导出):用户模块的编号从这里往上走,避免和库内部撞号。
         let top = std.Number.parseFloat(cells[1]);
@@ -3505,7 +3516,20 @@ let main = (args) -> {
     buildStdTypes(libraryProgram.statements);
   };
   if timingOn { tLib = nowUs(); };
-  if interfaceDump { writeStdlibInterface(program, libraryProgram); return null; };
+  if interfaceDump {
+    // 导出表(模块 -> 成员 -> 源绑定名)是在**分析**里建的;不先跑一遍分析,接口里的 MEM 行
+    // 就只有零星几条、而且没有元数 —— split 模式的 std 链直调因此全部落空。
+    typeSetStdNamespace(true);
+    typeSetDefinesBuiltins(true);
+    inferTypes(program.statements);
+    typeSetDefinesBuiltins(false);
+    inferTypes(libraryProgram.statements);
+    buildStdTypes(program.statements);
+    buildStdTypes(libraryProgram.statements);
+    typeSetStdNamespace(false);
+    writeStdlibInterface(program, libraryProgram);
+    return null;
+  };
   typeSetCallSafety(true);
   let typeErrs = inferTypes(userProgram.statements);
   if timingOn { tAnalyze = nowUs(); };

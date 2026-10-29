@@ -2194,3 +2194,22 @@ b_strat/b_build/b_untyped_calls 的热路径走的是 **std 对象的闭包**(`s
 是间接调用 + 缓存闭包),粘体救不了——它们的前置条件是把 std 链在 split 下变成**直接调用**
 (接口里 `MEM` + `DFN` + 符号已经齐了,只差成员的元数)。所以顺序必须是:
 **先 std 链直调 → 再内联体**,和作者说的优先级一致。
+
+## 91. std 链直调进 split:接口现在带 MEM 元数,但成员符号还拿不到(2026-10-29)
+
+按"先 std 链直调、再内联体"的顺序做第一步:
+
+- 接口的 `DFN` 行顺带填 `stdMonoArity`;`MEM` 行追加第 4 列(成员绑定的元数);
+- `loadStdlibInterface` 遇到 `MEM` 时,用 `symbols.tsv` 的符号 + 元数建 `stdChainTargets`;
+- `--emit-stdlib-interface` 之前**不跑分析**,导出表几乎是空的;现在先跑 runtime+库的分析再 dump。
+
+**但只拿到 3 条 MEM**(`Number.parseFloat`、`Math.sqrt`、`Math.pow`),而且元数是 `-1`,
+`stdchain` 计数变成 `hits=0 cached=71 arity=4` —— 全部因为元数未知被拒。
+
+根因:库的导出表是 `{Math: MathLibrary, ...}`,而 `MathLibrary` 的成员是**内联 lambda**
+(`{sqrt: (x) -> ...}`),没有源绑定名。单模块模式下这些 lambda 在**发射**时被登记进
+`stdMemberIr`(得 `ql_fnN`),接口 dump 只做分析、不发射,所以拿不到它们的符号。
+
+**结论**:要让 split 模式的 std 链直调成立,接口生成必须包含"成员 lambda 的符号",也就是
+dump 时要**发射一遍库**(或由构建器从它自己的发射过程里导出这张表)。成本:对象构建多付
+一次发射(~12s,89s → ~100s),一次性。
