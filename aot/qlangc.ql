@@ -3351,48 +3351,94 @@ let writeStdlibInterface = (runtimeProgram, libraryProgram) -> {
   null;
 };
 // ---- mod.ql:接口就是 QLang 值 -------------------------------------------------
-// 对象化模式的接口是 QLang 对象字面量(`let mod = {...};`),不是行式文本。这里用**共享前端**
-// 解析它,再把纯字面量的 AST 解成 QLang 值:不引入第二套 JSON 读取器,也不执行配置里的任何
-// 表达式 —— 出现非字面量就报错(配置里藏代码是隐性语义)。
-let modLiteralValue = (node) -> {
-  if isError(node) { return node; };
-  let kind = node.type;
-  if kind == "Number" { return node.value; };
-  if kind == "String" { return node.value; };
-  if kind == "Boolean" { return node.value; };
-  if kind == "Null" { return null; };
-  // -1 这种负数是 UnaryOp("-", Number),不是负数字面量。
-  if kind == "UnaryOp" && node.operator == "-" && !isError(node.operand.type) && node.operand.type == "Number" {
-    return -node.operand.value;
+// 对象化模式的接口是 QLang 对象字面量(`let mod = {...};`),不是行式文本。这里用**共享词法器**
+// 直接读它:只认字面量(对象/数组/字符串/数字/true/false/null),不建 AST、不带源码位置 ——
+// 接口是数据,不需要位置,也不执行其中任何表达式(出现别的 token 就报错)。
+// 不走完整 parser 是因为它要建整棵 AST:同一份 15KB 接口,完整解析 ~0.2s,词法级读取 ~0.06s。
+let modKind = (tokens, at) -> {
+  if at < 0 || at >= tokens.length { return ""; };
+  let t = tokens[at];
+  if isError(t) { return ""; };
+  let k = t.kind;
+  if isError(k) { return ""; };
+  k;
+};
+// 换行/分号只是排版,跳过。
+let modSkip = (tokens, at) -> {
+  let i = at;
+  let k = modKind(tokens, i);
+  while k == "Newline" || k == "Semicolon" { i = i + 1; k = modKind(tokens, i); };
+  i;
+};
+// 解一个字面量,返回 { value, next }(QLang 没有元组,用记录把游标带出来)。
+let modLiteralAt = (tokens, at) -> {
+  let i = modSkip(tokens, at);
+  let kind = modKind(tokens, i);
+  if kind == "" { return std.Error.raise("CompileError", "mod.ql: unexpected end of input", null); };
+  if kind == "String" { return { value: tokens[i].value, next: i + 1 }; };
+  if kind == "Number" { return { value: tokens[i].value, next: i + 1 }; };
+  if kind == "True" { return { value: true, next: i + 1 }; };
+  if kind == "False" { return { value: false, next: i + 1 }; };
+  if kind == "Null" { return { value: null, next: i + 1 }; };
+  // -1 这种负数是 Minus + Number 两个 token,不是负数字面量。
+  if kind == "Minus" {
+    let n = modSkip(tokens, i + 1);
+    if modKind(tokens, n) != "Number" { return std.Error.raise("CompileError", "mod.ql: bad negative literal", null); };
+    return { value: -tokens[n].value, next: n + 1 };
   };
-  if kind == "Array" {
-    let out = []; let i = 0;
-    while i < node.elements.length { out[i] = modLiteralValue(node.elements[i])?; i = i + 1; };
-    return out;
+  if kind == "LeftBrace" {
+    let out = {}; let j = modSkip(tokens, i + 1); let closed = false;
+    while !closed {
+      let kk = modKind(tokens, j);
+      if kk == "RightBrace" { j = j + 1; closed = true; }
+      else if kk == "String" || kk == "Identifier" {
+        let key = tokens[j].value;
+        let colon = modSkip(tokens, j + 1);
+        if modKind(tokens, colon) != "Colon" { return std.Error.raise("CompileError", "mod.ql: expected ':' after key " + key, null); };
+        let item = modLiteralAt(tokens, colon + 1);
+        if isError(item) { return item; };
+        out[key] = item.value;
+        j = modSkip(tokens, item.next);
+        if modKind(tokens, j) == "Comma" { j = modSkip(tokens, j + 1); };
+      }
+      else { return std.Error.raise("CompileError", "mod.ql: bad object entry", null); };
+    };
+    return { value: out, next: j };
   };
-  if kind == "Object" {
-    let out = {}; let i = 0;
-    while i < node.fields.length { out[node.fields[i].name] = modLiteralValue(node.fields[i].value)?; i = i + 1; };
-    return out;
+  if kind == "LeftBracket" {
+    let out = []; let j = modSkip(tokens, i + 1); let closed = false;
+    while !closed {
+      if modKind(tokens, j) == "RightBracket" { j = j + 1; closed = true; }
+      else {
+        let item = modLiteralAt(tokens, j);
+        if isError(item) { return item; };
+        out[out.length] = item.value;
+        j = modSkip(tokens, item.next);
+        if modKind(tokens, j) == "Comma" { j = modSkip(tokens, j + 1); };
+      };
+    };
+    return { value: out, next: j };
   };
-  std.Error.raise("CompileError", "mod.ql: unsupported literal '" + kind + "'", null);
+  std.Error.raise("CompileError", "mod.ql: unsupported token '" + kind + "'", null);
 };
 // 把 mod.ql 的字段落成发射器要的那几张表。和 interface.txt 的装载一一对应:
 // slots->槽位,functions->直接调用目标(DFN),runtime->运行期函数名(RFN),
 // modules->std 成员(MEM/SYM),mt->模块静态类型(MT),values/calls->成员类型(MV/MC),
 // maxFn->函数编号下界(MAX)。
 let loadStdlibInterfaceMod = (text) -> {
-  let program = parseModule(text, "<mod.ql>");
-  if isError(program) { return program; };
-  let node = null;
-  let si0 = 0;
-  while si0 < program.statements.length {
-    let st = program.statements[si0];
-    if !isError(st.type) && st.type == "Let" && st.name == "mod" { node = st.value; };
-    si0 = si0 + 1;
+  let tokens = Lexer(text).tokenize();
+  let at = modSkip(tokens, 0);
+  let start = -1;
+  while at < tokens.length {
+    if modKind(tokens, at) == "Let" && modKind(tokens, at + 1) == "Identifier"
+       && tokens[at + 1].value == "mod" && modKind(tokens, at + 2) == "Equal" {
+      start = at + 3; at = tokens.length;
+    } else { at = at + 1; };
   };
-  if node == null { return std.Error.raise("CompileError", "mod.ql: missing `let mod = {...}`", null); };
-  let mod = modLiteralValue(node)?;
+  if start < 0 { return std.Error.raise("CompileError", "mod.ql: missing `let mod = {...}`", null); };
+  let parsed = modLiteralAt(tokens, start);
+  if isError(parsed) { return parsed; };
+  let mod = parsed.value;
   if isError(mod) { return mod; };
   let version = mod.version;
   if isError(version) || version != 1 { return std.Error.raise("CompileError", "mod.ql: unsupported version", null); };

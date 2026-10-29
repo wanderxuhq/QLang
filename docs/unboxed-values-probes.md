@@ -2313,15 +2313,35 @@ mod.ql,并把"白名单完整性"作为验收(与 `MAX`/符号表交叉核对)�
 - `functions` 只放 DFN(直接调用目标),不放模块成员的符号 —— 后者走 `modules`;符号表里另有
   一批"库内部函数"的符号,split 模式只声明不使用,不需要归属。
 
-### 94.2 消费端:一个 QLang 值,一个解析器
+### 94.2 消费端:一个 QLang 值,一个词法器
 
 编译器的 `loadStdlibInterface` 按内容分派:以 `{` / `let mod` 开头走 mod.ql,否则走旧的行格式。
-mod.ql 用**共享前端**(`parseModule`)解析,再用 `modLiteralValue` 把 AST 解成 QLang 值:
+mod.ql 用**共享词法器**(`Lexer(text).tokenize()`)读,再按字面量文法递归下降成 QLang 值
+(`modLiteralAt`,返回 `{value, next}` 把游标带出来):
 
-- 只接受纯字面量(`Number/String/Boolean/Null/Array/Object`,以及 `-1` 这种 UnaryOp 负数);
-  出现任何表达式都报 `CompileError` —— 配置里藏代码是隐性语义。
+- 只接受纯字面量(`String/Number/true/false/null/Array/Object`,以及 `-1` 这种 `Minus`+`Number`);
+  出现别的 token 就报 `CompileError` —— 配置里藏代码是隐性语义。
 - 不引入第二套 JSON 读取器(上一版试过 `std.JSON.parse`,等于多一层而且要走第二套校验)。
 - 校验 version / slots / functions / runtime / modules 缺失,缺就报错,不静默。
+
+**为什么不用完整 parser**:第一版用 `parseModule` + AST 遍历,读接口比 `interface.txt` 慢
+0.14–0.31s(同一夹具多次取最小值:t20 `0.34` vs `0.20`,t30 `1.45` vs `1.14`)。探针把成本
+分到两段(10 次,整程序计时):
+
+```
+tokenize mod.ql × 10 = 0.64s     → 词法 ~0.06s/次
+parseModule      × 10 = 2.68s    → 完整解析 ~0.20s/次(建 AST + 每个节点带 span)
+```
+
+接口是数据,不需要 AST 也不需要位置,所以换成词法级读取。改后同一测量:
+
+```
+t20  mod 0.243s / txt 0.180s   (10 次最小值;均值 0.323 / 0.292)
+t30  mod 1.231s / txt 1.194s
+```
+
+即开销从 0.14–0.31s 降到 **0.03–0.06s**(本机噪声就有 ±0.03s),前端没有可感知的退化;
+`parseModule` 仍然是用户源码那条路用的(它需要 AST)。
 
 ### 94.3 等价性:mod.ql 与 interface.txt 的 IR 逐字节相同
 
