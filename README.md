@@ -68,12 +68,15 @@ python3 aot/native_link.py /tmp/example.ll -o /tmp/example
 
 # 3a) 快速链接(库用 .o;最快,适合互相验证)
 ./target/tools/link /tmp/example.ll -o /tmp/example --stdlib-object target/stdlib/<key>/stdlib.o
-# 3b) 发布链接(库用 bitcode + LTO,跨模块内联,运行与单模块持平)
+# 3b) 发布链接(库用 bitcode + LTO 跨模块内联;详见 probes §83 的实测代价)
 ./target/tools/link /tmp/example.ll -o /tmp/example --stdlib-object target/stdlib/<key>/stdlib.o \
     --stdlib-ir target/stdlib/<key>/strings.tsv --lto
 ```
 
-`--lto` 的优化级别用 `--lto-opt`(默认 2;链接 ~11s,运行 CPU 与单模块 0.55s 同量级)。
+`--lto` 的优化级别用 `--lto-opt`(默认 2;链接 ~11s)。**运行代价要看清**:`tools/link` 的 LTO 走
+`llvm-link`+`opt`+`llc`,不做 clang LTO 的 internalize/globaldce,实测比单模块慢 6%–71%;
+要"编译快且运行接近单模块",用 `aot/native_link.py --lto`(clang 驱动,实测 −23%…+22%,
+噪声主导、大致持平)。纯 `.o` 路径热循环慢 5×,只配给门禁。
 想看编译器各阶段耗时,加 `--timing`(输出 `; phase: parse=… lib=… analyze=… emit=…`,默认关闭)。
 
 Build the native interpreter using that compiler, then run QLang files:
