@@ -180,7 +180,12 @@ ASCII 单字符改成共享盒(runtime 初始化时预建 128 个,模块级数�
 `aot/native_link.py` 用 `--stdlib-object` / `QLANG_STDLIB_OBJECT` 拆掉用户模块里的库定义、
 补 `declare` 后链接;两套门禁自动构建并启用(失败回落单模块)。
 
-单夹具链接 12.3s → **1.5s**;二进制指令数 126,635 → 126,599;selfhost 全套
+单夹具链接 12.3s → **1.5s**;二进制指令数 126,635 → 126,599;
+> **2026-10-29 收尾**:`tools/stdlib` 现在同时产出 `stdlib.bc`;`tools/link` 支持 `--lto`
+> (llvm-link → opt → llc → ld.lld,默认 `--lto-opt 2`);编译器加了 `--stdlib-object <dir>`
+> 一键切 split、`--timing` 阶段探针。三条路径实测:t30 前端单模块 11.2s / `--stdlib-object`
+> **0.8s**;b_chars 链接 .o 0.45s(运行 2.31s)、`--lto` 11.2s(运行 0.621s,单模块 0.551s)。
+selfhost 全套
 **6.3 min**、interpreter **6.2 min**(`--jobs 3`)。`internal alwaysinline` 的 value-ABI
 叶子在两个模块各留一份,避免把 tag 检查变成真调用(+1,038 条)。
 
