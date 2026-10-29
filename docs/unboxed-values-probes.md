@@ -2530,3 +2530,9 @@ debug 档(`--debug`)不跑这条(保守路线保留一切)。
 AST 里除自己的 Let 外没有任何出现**"(把 `callee` 也算出现,不再区分 value/callee)——保守但
 不会漏边;或者等 §97 那条"空值语句出口"做好后,用发射期的使用表(而不是 AST)来判定。
 当前 HEAD 不含该优化。
+
+**更正(2026-10-30)**:上一节的"回滚"没有真正生效 —— `git checkout -- aot/qlangc.ql` 恢复的是**当时
+的 HEAD**(`75ef9ba`,里面已经提交了这条优化),所以那次提交只回滚了文档与测试驱动,编译器仍带着
+不健全的判据。现在用 `git checkout cbcd3f8 -- aot/qlangc.ql` 真正回滚,并以
+`git diff cbcd3f8 HEAD -- aot/qlangc.ql` 为空作为判据(已核对)。教训:**回滚要指定基线提交,
+不能只写 `checkout -- <file>`**(它默认回 HEAD)。
