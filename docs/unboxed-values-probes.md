@@ -2599,3 +2599,33 @@ DUMP Identifier println bid=-1
 后者被表示分析/unbox 依赖,改动会波及全部分析结论)。
 
 在这之前,死函数删除不落地(三次尝试都被门禁否掉,证据 §99/99.1/99.2/99.3)。
+
+### 99.4 语义陷阱:形参注解在**闭包创建时**求值,所以"没人引用的函数"也可能有可观察行为(2026-10-30)
+
+改用"按名字数模块级引用"(过近似,参数/局部同名也算)后,夹具扫描 40/42 通过,只剩
+`t37_extensions`(环境缺口)和 **`t53_return_boundaries`**。t53 的失败点是:
+
+```
+AssertionFailed: annotation slot propagates return   (t53:7:19)
+```
+
+被删掉的是 `annotationCase` 里的嵌套函数:
+
+```qlang
+let annotationCase = () -> {
+  let identity = (value: if true { return Number; } else { Number; }) -> value;
+  99;
+};
+check(annotationCase() == Number, "annotation slot propagates return")?;
+```
+
+`identity` 确实没人调用,但**形参注解是闭包创建时求值的表达式**,里面的 `return` 会让
+`annotationCase` 当场返回 `Number`。删掉闭包创建这一步,`annotationCase()` 就返回 `99` —— 断言失败。
+
+**语言事实**(值得单独记住):函数字面量的注解数组在**创建闭包时**求值一次,不是调用时。
+所以任何"删掉没人引用的函数"的优化都必须排除**带形参注解**的函数;同理,`.annotations` 的
+求值顺序也是可观察的(错误、副作用、`return`)。
+
+本轮给该判据加上了"有形参注解就不删",但在 `collectDeadFunctions` 里没有生效(仍删了 `identity`),
+原因待查(疑似 `fn.parameters` 在该节点上是 Error,导致检查被静默跳过)。**代码回滚到 `cbcd3f8`**,
+四条证据留在 §99–§99.4。
