@@ -59,7 +59,8 @@ while k < names.length {
       let a2 = nowMs();
       monoRun = (a1 - a0) / runs; splitRun = (a2 - a1) / runs;
       let om = std.process.run([monoBin]); let os = std.process.run([splitBin]);
-      same = if om.stdout == os.stdout { "yes"; } else { bad = bad + 1; "NO"; };
+      // A crash in both modes must not look like "same output".
+      same = if om.status == 0 && os.status == 0 && om.stdout == os.stdout { "yes"; } else { bad = bad + 1; "NO"; };
     } else { bad = bad + 1; };
     let ms = (v) -> std.Number.toString(std.Math.floor(v));
     println(name + "  " + ms(t1 - t0) + "ms  " + ms(t2 - t1) + "ms  " + ms(monoRun) + "ms  " + ms(splitRun) + "ms  " + same);

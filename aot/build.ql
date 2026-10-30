@@ -13,8 +13,14 @@
 
 let fail = (message) -> { assert(false, "build: " + message); 1; };
 let dirOf = (path) -> {
-  let parts = std.String.split(path)("/"); let out = ""; let i = 0;
-  while i < parts.length - 1 { out = if out == "" { parts[i]; } else { out + "/" + parts[i]; }; i = i + 1; };
+  let parts = std.String.split(path)("/");
+  if parts.length <= 1 { return "."; };
+  let out = ""; let i = 0;
+  while i < parts.length - 1 {
+    // Preserve the leading empty component of an absolute path ("/root/x").
+    if i == 0 { out = parts[i]; } else { out = out + "/" + parts[i]; };
+    i = i + 1;
+  };
   out;
 };
 
@@ -44,6 +50,9 @@ if stdlibObject != "" {
   if stdlibStrings == "" { stdlibStrings = dir + "/strings.tsv"; };
 };
 
+// 0) 先删旧产物:任一步失败都不能让上一次的二进制留在 -o 位置冒充成功。
+std.fs.remove(output);
+
 // 1) 编译。
 let emitArgs = [];
 if stdlibObject != "" {
@@ -59,9 +68,7 @@ let irPath = output + ".ir.ll";
 let written = std.fs.writeText(irPath, emitted.stdout);
 if isError(written) { fail("cannot write " + irPath); };
 
-// 2) 链接(+ 校验),由 QLang 链接器完成。先删旧产物:链接失败时不能让上一次的
-//    二进制留在 -o 位置冒充成功。
-std.fs.remove(output);
+// 2) 链接(+ 校验),由 QLang 链接器完成。
 let linkArgs = ["target/tools/link", irPath, "-o", output];
 if stdlibObject != "" { linkArgs[linkArgs.length] = "--stdlib-object"; linkArgs[linkArgs.length] = stdlibObject; };
 if stdlibStrings != "" { linkArgs[linkArgs.length] = "--stdlib-ir"; linkArgs[linkArgs.length] = stdlibStrings; };

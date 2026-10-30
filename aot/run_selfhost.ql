@@ -82,19 +82,32 @@ while running.length > 0 { drain(true); };
 
 // 自举固定点:stage2 发 stage3 的 IR,再让 stage3 发一遍,两份 IR 必须逐字节相同。
 if fixedPoint {
+  // `compiler` may be an older bootstrap compiler. The fixed point compares the IR
+  // emitted by a compiler built from this source (stage2) with the IR emitted by
+  // the compiler built from *that* IR (stage3) — stage1 only bootstraps.
+  let bootstrapIr = base + "/compiler-bootstrap.ll";
   let ir2 = base + "/compiler-s2.ll"; let ir3 = base + "/compiler-s3.ll";
-  let s2 = base + "/stage2-copy";
-  let e2 = std.process.run([compiler, "--emit-llvm", "aot/qlangc.ql", "aot/runtime.ql"]);
-  if e2.status != 0 { fail = fail + 1; failed = failed + " stage2-emit"; }
+  let s2 = base + "/stage2-copy"; let s3 = base + "/stage3-copy";
+  let e1 = std.process.run([compiler, "--emit-llvm", "aot/qlangc.ql", "aot/runtime.ql"]);
+  if e1.status != 0 { fail = fail + 1; failed = failed + " stage1-emit"; }
   else {
-    std.fs.writeText(ir2, e2.stdout);
-    let l2 = std.process.run([linkTool, ir2, "-o", s2]);
-    if l2.status != 0 { fail = fail + 1; failed = failed + " stage2-link"; }
+    std.fs.writeText(bootstrapIr, e1.stdout);
+    let l1 = std.process.run([linkTool, bootstrapIr, "-o", s2]);
+    if l1.status != 0 { fail = fail + 1; failed = failed + " stage2-link"; }
     else {
-      let e3 = std.process.run([s2, "--emit-llvm", "aot/qlangc.ql", "aot/runtime.ql"]);
-      if e3.status != 0 { fail = fail + 1; failed = failed + " stage3-emit"; }
-      else if e3.stdout == e2.stdout { pass = pass + 1; }
-      else { fail = fail + 1; failed = failed + " fixed-point"; };
+      let e2 = std.process.run([s2, "--emit-llvm", "aot/qlangc.ql", "aot/runtime.ql"]);
+      if e2.status != 0 { fail = fail + 1; failed = failed + " stage2-emit"; }
+      else {
+        std.fs.writeText(ir2, e2.stdout);
+        let l2 = std.process.run([linkTool, ir2, "-o", s3]);
+        if l2.status != 0 { fail = fail + 1; failed = failed + " stage3-link"; }
+        else {
+          let e3 = std.process.run([s3, "--emit-llvm", "aot/qlangc.ql", "aot/runtime.ql"]);
+          if e3.status != 0 { fail = fail + 1; failed = failed + " stage3-emit"; }
+          else if e3.stdout == e2.stdout { pass = pass + 1; }
+          else { fail = fail + 1; failed = failed + " fixed-point"; };
+        };
+      };
     };
   };
 };

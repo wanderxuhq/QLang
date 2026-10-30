@@ -83,8 +83,10 @@ while r < 2 {
   // cycle 要放在 source/cycle.so 并按那个路径传(宿主用 import(路径) 触发重入,验证 ImportCycle)。
   let cpCycle = sh("cp " + sq(work + "/cycle-O" + opt + ".so") + " " + sq(work + "/source/cycle.so"));
   if cpCycle.status != 0 { die("拷贝 cycle", cpCycle); };
-  let paths = work + "/plugin-O" + opt + ".so " + work + "/second-O" + opt + ".so " + work + "/failure-O" + opt + ".so " +
-              work + "/source/cycle.so " + work + "/wrong-abi.so " + work + "/not-native.so " + work + "/no-entry.so";
+  let soPaths = [work + "/plugin-O" + opt + ".so", work + "/second-O" + opt + ".so", work + "/failure-O" + opt + ".so",
+                 work + "/source/cycle.so", work + "/wrong-abi.so", work + "/not-native.so", work + "/no-entry.so"];
+  let paths = ""; let spi = 0;
+  while spi < soPaths.length { paths = paths + (if spi == 0 { ""; } else { " "; }) + sq(soPaths[spi]); spi = spi + 1; };
   let run = sh(sq(work + "/host-O" + opt) + " " + paths + " 2>/dev/null");
   if run.stdout == expected { ok = ok + 1; println("PASS 宿主 O" + opt + ": 28 契约"); }
   else { bad = bad + 1; println("FAIL 宿主 O" + opt + " 输出不一致"); };

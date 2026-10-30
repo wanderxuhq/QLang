@@ -16,6 +16,17 @@
 
 let splitVersion = "9";
 let fail = (message) -> { assert(false, "stdlib_build: " + message); 1; };
+// Publish an artifact atomically: a killed build must not leave a half-written
+// file that the next run's cache check accepts (mod.ql/symbols.tsv/... used to be
+// written in place and only checked for size > 16 bytes).
+let writeAtomic = (path, text) -> {
+  let tmp = path + ".tmp" + std.Number.toString(std.Math.random());
+  let w = std.fs.writeText(tmp, text);
+  if isError(w) { return w; };
+  let r = std.process.run(["mv", tmp, path]);
+  if r.status != 0 { std.process.run(["rm", "-f", tmp]); return std.Error.raise("IOError", "cannot publish " + path, null); };
+  null;
+};
 let startsWith = (text, prefix) -> std.String.startsWith(text)(prefix);
 let endsWith = (text, suffix) -> {
   if text.length < suffix.length { return false; }
@@ -298,7 +309,8 @@ while xi < symbolLines.length {
   };
   xi = xi + 1;
 };
-std.fs.writeText(outDir + "/symbols.tsv", std.String.join(sorted)("\n") + "\n");
+let w1 = writeAtomic(outDir + "/symbols.tsv", std.String.join(sorted)("\n") + "\n");
+if isError(w1) { fail("cannot write symbols.tsv"); };
 
 // symbols.json:给 Python 侧的 split_file 回落路径用(declare/external 文本)。
 let jsonLines = ["{"];
@@ -380,7 +392,8 @@ while bj < slines.length {
   };
   bj = bj + 1;
 };
-std.fs.writeText(outDir + "/strings.tsv", std.String.join(stringLines)("\n") + "\n");
+let w2 = writeAtomic(outDir + "/strings.tsv", std.String.join(stringLines)("\n") + "\n");
+if isError(w2) { fail("cannot write strings.tsv"); };
 
 // 7) interface.txt(分析接口)+ 发射那一趟导出的成员符号(members.txt)
 let iface = std.process.run([compiler, "--emit-stdlib-interface", runtimePath]);
@@ -400,7 +413,8 @@ while mfi < parsed.functions.length {
   };
   mfi = mfi + 1;
 };
-std.fs.writeText(outDir + "/interface.txt", iface.stdout + membersText0 + "MAX " + std.Number.toString(maxFn) + "\n");
+let w3 = writeAtomic(outDir + "/interface.txt", iface.stdout + membersText0 + "MAX " + std.Number.toString(maxFn) + "\n");
+if isError(w3) { fail("cannot write interface.txt"); };
 
 // 7b) mod.ql:接口配置。它是 **QLang 对象字面量**(`let mod = {...};`),编译器用共享前端
 // 把它当 QLang 值读 —— 不引入第二套 JSON 读取器,也不解析行式文本。
@@ -517,7 +531,8 @@ let groupTable = (modsIn, fragOf) -> {
   joinArr(items);
 };
 let modText3 = "let mod = {\"version\":1,\"slots\":[" + joinArr(slotItems) + "],\"functions\":{" + joinArr(fnItems) + "},\"runtime\":[" + joinArr(rfnItems) + "],\"modules\":{" + joinArr(modItems) + "},\"mt\":{" + joinArr(mtItems) + "},\"values\":{" + groupTable(mvMods, mvFrag) + "},\"calls\":{" + groupTable(mcMods, mcFrag) + "},\"maxFn\":" + std.Number.toString(maxFn) + "};\n";
-std.fs.writeText(outDir + "/mod.ql", modText3);
+let w4 = writeAtomic(outDir + "/mod.ql", modText3);
+if isError(w4) { fail("cannot write mod.ql"); };
 // 完整性:三张表都不能空。符号表里还有一批「库内部函数」的符号(function 与 member 都
 // 不直接引用),它们在 split 模式里只是被声明,不需要归属。
 if fnItems.length == 0 { fail("mod.ql: empty functions"); };
@@ -526,13 +541,13 @@ if modItems.length == 0 { fail("mod.ql: empty modules"); };
 if rfnItems.length == 0 { fail("mod.ql: empty runtime"); };
 
 // 8) 目标文件(先写临时名再 rename:中断不会留下半个 .o 被下次当成命中)
-let objTmp = objectPath + ".tmp";
+let objTmp = objectPath + ".tmp" + std.Number.toString(std.Math.random());
 let compiled = std.process.run(["llc", "-O2", "-filetype=obj", stdlibPath, "-o", objTmp]);
 if compiled.status != 0 { std.process.run(["rm", "-f", objTmp]); fail("llc failed:\n" + compiled.stderr); };
 let objMoved = std.process.run(["mv", objTmp, objectPath]);
 if objMoved.status != 0 { fail("cannot publish " + objectPath + ":\n" + objMoved.stderr); };
 // 同一份 IR 再产一份 bitcode:发布构建用 --lto 做跨模块内联(库仍然只编一次)。
-let bcTmp = outDir + "/stdlib.bc.tmp";
+let bcTmp = outDir + "/stdlib.bc.tmp" + std.Number.toString(std.Math.random());
 let bitcodeMade = std.process.run(["clang", "-O1", "-emit-llvm", "-c", stdlibPath, "-o", bcTmp]);
 if bitcodeMade.status != 0 { std.process.run(["rm", "-f", bcTmp]); fail("bitcode failed:\n" + bitcodeMade.stderr); };
 let bcMoved = std.process.run(["mv", bcTmp, outDir + "/stdlib.bc"]);

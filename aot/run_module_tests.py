@@ -38,7 +38,8 @@ def interpreter():
     path = Path(os.environ.get('QLANG_INTERPRETER', ROOT / 'target/native-interpreter/interpreter'))
     # Reuse only a same-source interpreter: a stale binary silently turns the
     # boot leg into a mixed-source baseline (AGENTS trap #3).
-    sources = [ROOT / 'aot/runtime.ql'] + sorted((ROOT / 'bootstrapped').glob('*.ql'))
+    sources = [ROOT / 'aot/runtime.ql', ROOT / 'aot/runtime.c', ROOT / 'aot/value_abi.ql', COMPILER]
+    sources += sorted((ROOT / 'bootstrapped').glob('*.ql'))
     stale = path.exists() and any(src.stat().st_mtime > path.stat().st_mtime for src in sources)
     if not path.exists() or stale:
         path.parent.mkdir(parents=True, exist_ok=True)

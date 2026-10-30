@@ -45,16 +45,18 @@ if irPath == "" || output == "" { fail("usage: link <ir> -o <out> [--stdlib-obje
 
 // runtime.c → runtime.o。缓存键 = 平台 + 优化级 + 文件内容哈希(改 runtime.c 自动失效);
 // 用 Bytes.read 读 ELF 判存在(按文本读必然 IOError,会导致每次链接都重编)。
-let runtimeContentHash = (path) -> {
-  let bytes = std.Bytes.read(path);
-  if isError(bytes) { return "0"; };
-  let h = 2166136261; let i = 0; let n = std.Bytes.length(bytes);
-  while i < n { h = (h * 131 + std.Bytes.byteAt(bytes, i)) % 4294967296; i = i + 1; };
-  std.Number.toString(h);
+let sqPath = (v) -> "'" + std.String.replace(v)("'")("'\\''") + "'";
+let runtimeContentHash = (path, cfgPath) -> {
+  // sha256(runtime.c + toolchain cfg): content and codegen template both invalidate.
+  let r = std.process.run(["sh", "-c", "cat " + sqPath(path) + " " + sqPath(cfgPath) + " | sha256sum"]);
+  if r.status != 0 { return "0"; };
+  let hex = std.String.split(r.stdout)(" ");
+  if hex.length < 1 { return "0"; };
+  std.Bytes.slice(hex[0], 0, 16);
 };
 if runtimeObject == "" && !sharedMode {
   let runtimeSource = root + "aot/runtime.c";
-  runtimeObject = "/tmp/.qlang-runtime-aarch64-O" + optLevel + "-" + runtimeContentHash(runtimeSource) + ".o";
+  runtimeObject = "/tmp/.qlang-runtime-aarch64-O" + optLevel + "-" + runtimeContentHash(runtimeSource, root + "aot/toolchain/aarch64-android24.cfg") + ".o";
   let existing = std.Bytes.read(runtimeObject);
   let valid = false;
   if !isError(existing) && std.Bytes.length(existing) > 64 {
@@ -159,10 +161,17 @@ if linked.status != 0 {
 // 校验:链接产物里的静态字符串必须和 IR 一致。校验不过就不发布(保留旧产物)。
 // 库字符串只认对象旁的 strings.tsv;没给就自动找,找不到就显式失败 —— 不能静默 0 条报绿。
 let dirOf = (path) -> {
-  let parts = std.String.split(path)("/"); let out = ""; let i = 0;
-  while i < parts.length - 1 { out = if out == "" { parts[i]; } else { out + "/" + parts[i]; }; i = i + 1; };
+  let parts = std.String.split(path)("/");
+  if parts.length <= 1 { return "."; };
+  let out = ""; let i = 0;
+  while i < parts.length - 1 {
+    // Preserve the leading empty component of an absolute path ("/root/x").
+    if i == 0 { out = parts[i]; } else { out = out + "/" + parts[i]; };
+    i = i + 1;
+  };
   out;
 };
+let explicitStdlibIr = stdlibIr != "";
 let verifyStrings = stdlibIr;
 if verifyStrings == "" && stdlibObject != "" {
   let candidate = dirOf(stdlibObject) + "/strings.tsv";
@@ -170,7 +179,10 @@ if verifyStrings == "" && stdlibObject != "" {
   if !isError(probe) { verifyStrings = candidate; };
 };
 if endsWith(verifyStrings, ".ll") || endsWith(verifyStrings, ".bc") { verifyStrings = ""; };
-if !skipVerify && !sharedMode && stdlibObject != "" && verifyStrings == "" {
+// An explicit --stdlib-ir that is IR/bitcode cannot serve as the TSV string list;
+// verify still checks the user IR, so do not hard-fail in that case. A bare
+// object with no list at all is the silent-skip case and still fails.
+if !skipVerify && !sharedMode && stdlibObject != "" && verifyStrings == "" && !explicitStdlibIr {
   fail("stdlib object has no strings.tsv; refusing to skip library string verification (use --no-verify to override)");
 };
 if !skipVerify && !sharedMode {
@@ -183,6 +195,10 @@ if !skipVerify && !sharedMode {
   };
 };
 
+// `mv` moves a file *into* an existing directory and returns success, so an
+// output path that is a directory would look like a successful link. Reject it.
+let outIsDir = std.process.run(["test", "-d", output]);
+if outIsDir.status == 0 { clean([bitcode, object, staged]); fail("output path is a directory: " + output); };
 let published = std.process.run(["mv", staged, output]);
 clean([bitcode, object]);
 if published.status != 0 { fail("cannot publish " + output + "\n" + published.stderr); };

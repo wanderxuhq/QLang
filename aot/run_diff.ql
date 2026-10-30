@@ -58,7 +58,8 @@ let drain = (all) -> {
       else if relSt != dbgSt { fail = fail + 1; failed = failed + " " + name + "(exit)"; }
       else {
         let expected = std.fs.readFileText("aot/tests/" + name + ".expected");
-        if isError(expected) { pass = pass + 1; }   // smoke case: both grades agree + same exit code
+        // smoke case: both grades agree, and a crash (status > 1) is not a pass.
+        if isError(expected) { if relSt == "0\n" && dbgSt == "0\n" { pass = pass + 1; } else { fail = fail + 1; failed = failed + " " + name + "(exit)"; }; }
         else if rel == expected { pass = pass + 1; }
         else { fail = fail + 1; failed = failed + " " + name + "(expect)"; };
       };
