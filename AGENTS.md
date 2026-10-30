@@ -141,6 +141,11 @@ python3 aot/run_semantic_diagnostic_tests.py --compiler target/selfhost/stage2
 cargo test --offline          # 14 tests;钉住 Rust 宿主行为,不等于 QLang 前端行为
 ```
 
+- **Unicode 参照实现(不依赖 Python)**:`aot/unicode_oracle.ql` 读
+  `third_party/ucd/15.1.0/case-common.txt`(从 **UCD 原文**用 awk 派生的 2450 行主流子集),
+  与运行时逐码点比对;当前 **upper 1205 / lower 1249 → 0 处不一致**。
+  UCD 原文与派生命令在同目录 README 里记着;冷门项(SpecialCasing 的完整映射、辅助平面、
+  White_Space)暂未覆盖。见 probes §118–§119。
 - **String 套件是唯一"故意保留 Python"的**:它的第二条腿是**独立 Unicode 预言机**
   (Python `unicodedata` 15.1.0),价值在于不复用 `stdlib/unicode_data.ql`;改写成 QLang 会变成
   循环论证。夹具腿(t30)已经在 `aot/run_tests.ql` 与 `--interpreter` 里跑。见 probes §117。

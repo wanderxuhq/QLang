@@ -3342,3 +3342,27 @@ run_extension <tmp-dir> --root <repo> [--compiler <c>]
 SHA-256 记在子集的头部注释里 —— 这样权威性仍然追溯到 UCD 原文,而运行时只做小文件解析。
 
 半成品已删除;数据与本节保留。
+
+## 119. Unicode 参照实现跑通了:2450 条主流映射 0 处不一致(2026-10-30)
+
+按"先做主要的"收敛之后,参照实现成立了:
+
+- 数据:`third_party/ucd/15.1.0/case-common.txt`(2450 行,U+0020..U+2FFF 里有大小写映射的码点),
+  由 §118 入库的 UCD 原文用 **POSIX awk** 派生(命令写在同目录 README 里,**不用 Python**);
+- 参照:QLang 程序直接读这个子集,与运行时(`unicode_data.ql` 表)逐码点比对;
+- 结果:**upper 1205 / lower 1249 → 0 处不一致**。
+
+### 踩到的两个 API 事实
+
+1. `std.String.codePointAt(s, i)` 在这条路径上返回 `?Error`(签名/语义与直觉不符)⇒
+   解析十六进制改用 `std.String.at` 查表。这也解释了 §118 的"段错误/无输出"很可能不是崩溃,
+   而是同一处调用链拿到了错误值后走了别的分支。
+2. `std.String.toLowerCase("İ")`(U+0130)给 `i + U+0307`,而 `UnicodeData` 的**简单**映射是 `i` ——
+   因为 QLang 实现的是**完整大小写映射**(`SpecialCasing.txt` 的口径)。所以参照实现要先排除
+   `SpecialCasing` 里出现过的 112 个码点;否则会把"我们做对了"报成"不一致"。
+
+### 还缺什么(冷门,先不做)
+
+- `SpecialCasing` 的完整/上下文映射(尾 sigma、`ß→SS`、土耳其语)没有独立参照;
+- 辅助平面(>U+FFFF)与代理区未覆盖;
+- `White_Space`/`trim` 的参照没并入这一版(PropList 已入库,随时可加)。

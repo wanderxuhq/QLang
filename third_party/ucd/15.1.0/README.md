@@ -22,3 +22,21 @@ https://www.unicode.org/Public/15.1.0/ucd/PropList.txt
 
 更新版本时:换目录名(如 `16.0.0/`)、重算上表、并同步 `stdlib/generate_unicode_tables.py`
 的输入版本 —— 两处版本不一致会让派生表与参照实现打架。
+
+## 派生数据:`case-common.txt`
+
+`case-common.txt` 是从上面的原文**派生**的参照输入(2450 行),生成命令(POSIX `awk`,不用 Python):
+
+```sh
+# 1) 取 U+0020..U+2FFF 里有简单大小写映射的行(码点;大写;小写)
+awk -F';' 'NF>=14 && $1>="0020" && $1<="2FFF" && ($13!=""||$14!="") {print $1";"$13";"$14}' \
+  UnicodeData.txt > case-common.txt
+
+# 2) 去掉 SpecialCasing.txt 里出现过的码点(它们有"完整映射",例如 U+0130 → i + 组合点,
+#    与 UnicodeData 的简单映射不同;这些冷门情形先不做)
+awk -F';' '$1!~/^#/ && $1!="" {print $1}' SpecialCasing.txt | sort -u > /tmp/special.txt
+awk -F';' 'NR==FNR{skip[$1]=1; next} !($1 in skip)' /tmp/special.txt case-common.txt > /tmp/cc.txt
+mv /tmp/cc.txt case-common.txt
+```
+
+为什么不在运行时现读 `UnicodeData.txt`:见 `docs/unboxed-values-probes.md` §118.1(太慢)。
