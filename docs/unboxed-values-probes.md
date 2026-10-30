@@ -2789,3 +2789,28 @@ release 不踩是因为它把这些调用直接内联/直调掉了。
 
 **结论**:debug 档目前不可用(结果错 + 段错误),但症状被缩到一条路径上,下轮修这一条即可。
 代码回滚到 `cbcd3f8`(release 完全不受影响)。
+
+### 102.3 `println(1 + 2)` 为什么变成 0:debug 走了"跨帧读取"那条慢路
+
+同一份 `println(1 + 2)`,两档的 IR 在最外层语句上就分叉了:
+
+```llvm
+; release:直接从帧槽取实参
+%t254 = getelementptr i8, ptr %t206, i64 16
+%t255 = load %ql_value, ptr %t254
+
+; debug:先取父帧,再对绑定指针做 absent(== null) 检查,分两支
+%t254 = load ptr, ptr %t206
+%t255 = getelementptr i8, ptr %t254, i64 208
+%t256 = icmp eq ptr %t255, null
+br i1 %t256, label %bb2, label %bb3
+```
+
+也就是说保守档把被调者/实参的读取从"同体直取"退化成"跨帧 + 缺失检查"的通用路径
+(`emitIdentifier` 的 `!sameBody` 分支),而那条路在没有闭包/没有捕获的场景下取到的不是同一个槽。
+release 不走它是因为调用被直调/内联掉了。
+
+**下一步(修法方向)**:保守档不该改变*读取路径*的选择 —— 它只该决定"值怎么表示、调用怎么分派"。
+即 `emitIdentifier` / `emitCallRegs` 里 `sameBody`/`depth` 这些"取哪个槽"的判断必须与 `conservativeMode`
+无关;正在分派的那一层(直调 vs `__call`)才该受档位影响。这一条改完,`println(1 + 2)` 与 100M 循环
+都应该恢复正确。
