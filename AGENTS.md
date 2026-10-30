@@ -80,7 +80,9 @@ python3 aot/native_link.py /tmp/p.ll -o /tmp/p
   **两档(debug / release)**:`--debug` 给编译器时走**保守发射** —— 不直调/不内联/不 raw ABI、
   不 unbox 裸槽、不省略"可证不会失败"的检查、不删死函数,所有值走通用路径(闭包/`__call`);
   给 `tools/link` 时跳过 `opt`、让 `llc -O1` 直接吃 IR。两档**分析照跑**,诊断必须一致;
-  release 默认且产物不变。差分套件:`python3 aot/run_debug_diff_tests.py --compiler <c>`
+  release 默认且产物不变。release 还会删掉**没有任何引用**的入口程序顶层函数
+  (`; deadfns: dropped=N`;判据见 probes §100:名字在整个 AST(含 Import 子树)里不出现、
+  非 moduleBody、无 let/形参注解、未被赋值/重声明/导出/import)。差分套件:`python3 aot/run_debug_diff_tests.py --compiler <c>`
   (判据是两档输出逐字节相同)。测量见 probes §95/§96。
 - **快路径(2026-10 起)**:标准库可以只编一次再链接。
   `aot/stdlib_split.py <compiler>` 产出 `target/stdlib/<hash>/{stdlib.o,symbols.tsv,mod.ql,interface.txt}`;
