@@ -3449,3 +3449,5 @@ python3 aot/run_runtime_diagnostic_tests.py    → Runtime diagnostic suite: ALL
 runtime_diag/module/debug-diff/String 套件全绿;QLang 驱动 `run_tests` 59/0;`bundle --check` 通过;
 stage2→stage3 IR 逐字节相同(1,020,735 行)。新增 `t64_array_types`(三张清单);
 `t13`/`t14` 的静态已知不匹配改用动态值/允许 exit 1(运行期检查的覆盖不变)。
+`run_selfhost_tests.py --self` 现在优先复用已有 stage2 作 stage1,并真正比较
+「stage2 发的 IR」与「stage3 发的 IR」;实测 ALL PASS。

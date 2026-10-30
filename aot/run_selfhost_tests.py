@@ -308,10 +308,18 @@ def main():
         check_assert_fatal(stage1, work)
         check_return_scope_rejections(stage1, work)
         if options.self:
-            second = work / 'stage2.ll'; third = work / 'stage3.ll'; stage2 = work / 'stage2'
-            emit(stage1, COMPILER, second)
-            link(second, stage2)
-            emit(stage2, COMPILER, third)
+            # stage1 may be an older compiler (the Rust host cannot parse current
+            # sources), so the first emission is only the bootstrap step. The fixed
+            # point compares the IR emitted by a compiler built from this source
+            # (stage2) with the IR emitted by the compiler built from *that* IR
+            # (stage3): stage2 and stage3 must agree.
+            first = work / 'bootstrap.ll'; second = work / 'stage2.ll'; third = work / 'stage3.ll'
+            stage2 = work / 'stage2'; stage3 = work / 'stage3'
+            emit(stage1, COMPILER, first)
+            link(first, stage2)
+            emit(stage2, COMPILER, second)
+            link(second, stage3)
+            emit(stage3, COMPILER, third)
             assert second.read_bytes() == third.read_bytes(), 'stage 2/3 LLVM IR differs'
             print('PASS self-compilation: stage 2/3 LLVM IR identical', flush=True)
             check_program(stage2, source, expected, work, 'stage2-functions')

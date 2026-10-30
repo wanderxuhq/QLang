@@ -120,6 +120,9 @@ python3 aot/native_link.py /tmp/p.ll -o /tmp/p
   默认 verify 工具)按 root 解析 ⇒ **从任意 cwd 都能链接**,QLang 驱动不必再 `cd` 到仓库根。
   默认空 = 原行为。
 - 改 `aot/qlangc.ql` 之后必须重建编译器。编译器、源码、测试用例必须**同源**(同一版本)。
+- 从零引导:`--self` 优先用已有的 `target/selfhost/stage2` 作 stage1(自举 → stage2/stage3 固定点);
+  保留的 Rust 宿主解析不了当前源码里行首 `&&`(`docs/retained-rust-issues.md`)。
+  固定点比较的是「stage2 发的 IR」与「由该 IR 建出的 stage3 发的 IR」,stage1 只需要能引导。
 
 ### 2.3 Native 解释器
 
