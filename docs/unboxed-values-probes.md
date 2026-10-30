@@ -2629,3 +2629,17 @@ check(annotationCase() == Number, "annotation slot propagates return")?;
 本轮给该判据加上了"有形参注解就不删",但在 `collectDeadFunctions` 里没有生效(仍删了 `identity`),
 原因待查(疑似 `fn.parameters` 在该节点上是 Error,导致检查被静默跳过)。**代码回滚到 `cbcd3f8`**,
 四条证据留在 §99–§99.4。
+
+### 99.5 第 5 次:extension 宿主段错误 —— 仍是"编译器按名字直连"这一类(2026-10-30)
+
+按名字计数 + 排除带形参注解后,`t53/t62/t59/t23` 四个夹具全部通过(`dropped=0`,输出正确),
+差分套件 41 个夹具全绿,selfhost(含固定点)、interpreter、assignment、gc、semantic 全绿;
+但 **extension 套件段错误**(`host-O0` returncode=-11)。
+
+与 §98 的库函数那次同源:extension 宿主里也有**编译器自己按固定名字直连**的东西(扩展桥
+`__extension_bridge_*`、`__native` 注册回调等),那些边不在 AST 里,名字计数看不见。
+所以判据还得再收一层:**排除编译器/运行时按名字使用的接口名**(或者干脆只在没有 extension 的
+普通程序上启用,但这等于给优化加白名单,不是好规则)。
+
+代码回滚到 `cbcd3f8`。五条证据(§97、99、99.1–99.5)已经足够说明:这条路要么做成"发射期使用表",
+要么就必须把"编译器按名字直连的名字"完整列出来 —— 后者是白名单思路,和仓库"反对特判"的规矩冲突。
