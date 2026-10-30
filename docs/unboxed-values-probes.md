@@ -3309,3 +3309,22 @@ run_extension <tmp-dir> --root <repo> [--compiler <c>]
 (比如另一份 UCD 快照、或 ICU 的产物),那才保持独立性。
 
 结论:不要"顺手把它也 QLang 化"。要动就动数据来源,不动驱动语言。
+
+## 118. Unicode 权威数据已入库;QLang 参照实现首次尝试段错误(2026-10-30)
+
+作者的要求:**参照实现不许依赖一点 Python**。golden file 与"Python 生成的表"都达不到这条线,
+所以只有一条路 —— 读 **UCD 原始文本**(由 Unicode Consortium 发布的一手数据)。
+
+已入库 `third_party/ucd/15.1.0/{UnicodeData,SpecialCasing,PropList}.txt`(共 2.0 MB),
+`README.md` 记了官方 URL、版本、下载日期与三个 SHA-256。这是**权威数据**,不是我们的记录。
+
+随后写了 `aot/unicode_oracle.ql`(读 UCD → 与运行时的表驱动实现逐码点比对),
+编译通过,但**首次运行即段错误**(exit 139,无输出)。当前怀疑点:
+
+- `std.String.fromCodePoint` 在边界值上的行为(代理区 `0xD800..0xDFFF`、或 0/越界);
+- `std.String.codePointAt` 的索引语义(它按码点还是按字节?)用在 ASCII 十六进制串上时;
+
+排查方式(下一轮):把语料切成"前 N 行"二分,先定位是**哪一条 UCD 记录**触发崩溃,
+再判断是 `fromCodePoint` 的 bug 还是我用错了 API —— 两种都要记进本文件。
+
+半成品已删除(不留未验证代码);数据与本文保留。
