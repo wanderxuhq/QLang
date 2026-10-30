@@ -78,12 +78,12 @@ python3 aot/native_link.py /tmp/p.ll -o /tmp/p
   或再加 `--stdlib-ir <key>/strings.tsv --lto`(发布:库走 bitcode + LTO,运行与单模块持平)。
   `--timing` 打印 `; phase: parse/lib/analyze/emit` 四段耗时(默认关,固定点不受影响)。
   `--check` 只报诊断、不产出(走完整路径但 `emitLine` 短路,诊断与真编译一致);成功时写
-  `<src>.qcheck`(源码 sha256 + stdlib 目录名),再次 check 命中即返回。t30:build 4575ms /
-  check 993ms / 命中 176ms。见 probes §106。
+  `<src>.qcheck`(v2:入口 + runtime + 每个 import 模块 + symbols/mod + 选项),再次 check 命中即返回。
+  t30:build 4575ms / check 993ms / 命中 176ms。见 probes §106。
   **两档(debug / release)**:两档语义一致、产物只差优化(`run_debug_diff_tests.py` 是常规门)。
   `--debug` 给编译器时走**保守发射** —— 不直调/不内联/不 raw ABI、
   不 unbox 裸槽、不省略"可证不会失败"的检查、不删死函数,所有值走通用路径(闭包/`__call`);
-  给 `tools/link` 时跳过 `opt`、让 `llc -O1` 直接吃 IR。两档**分析照跑**,诊断必须一致;
+  给 `tools/link` 时跳过 `opt`、让 `llc` 按 `--opt`(默认 2)直接吃 IR。两档**分析照跑**,诊断必须一致;
   release 默认且产物不变。**不做编译期删除**(作者决定,理由与尝试记录见 probes §97–§101)。
   差分测试套件:`python3 aot/run_debug_diff_tests.py --compiler <c>`
   (判据是两档输出逐字节相同)。测量见 probes §95/§96。

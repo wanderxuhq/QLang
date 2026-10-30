@@ -860,7 +860,7 @@ There is no global `Type` alias — the annotation form is `std.Type`:
 
 ### Array types and the `Object(x)` constructor
 
-**Array family — one name per type** (2016-10 rename; `Array` itself is only a
+**Array family — one name per type** (2026-10 rename; `Array` itself is only a
 placeholder, so `Array(3)` / `Array(Number)` are errors, not types):
 
 | Constructor | Semantics | `check` |

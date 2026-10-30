@@ -3451,3 +3451,37 @@ stage2→stage3 IR 逐字节相同(1,020,735 行)。新增 `t64_array_types`(三
 `t13`/`t14` 的静态已知不匹配改用动态值/允许 exit 1(运行期检查的覆盖不变)。
 `run_selfhost_tests.py --self` 现在优先复用已有 stage2 作 stage1,并真正比较
 「stage2 发的 IR」与「stage3 发的 IR」;实测 ALL PASS。
+
+## 123. 第二轮审查:修复本身引入/遗漏的问题(2026-10-31)
+
+对 §122 那批修复再做一轮审查,发现并修掉:
+
+- **Critical**:收窄事实按 bindId 改成每程序一张表后,函数体内建立的收窄会泄漏到之后分析的
+  另一个函数(`let x=1/z; let f=()->{if !Number.check(x){return;} ...}; let g=()->{println(x+1)};`
+  native 打印 `1`,boot `?Error`)。现在事实按**深度**分层 + 函数 floor:函数体只看到体内事实,
+  `typePop` 丢弃,写入清所有深度。两条双引擎回归(Number.check / isError 守卫)。
+- **High**:`maybeEmpty` 在 `emitStoreByName` 的清标记把 `if false { x=1; }` / `while false {...}`
+  后的读又变回段错误(块不 push 编译期 scope,depth 仍是 0)。现在 `let x;` 的读永久保留
+  `ql_empty` 检查(代价只在极少数无初始化绑定上)。
+- **High**:std 污点按名字判定,参数与同名 let 碰撞可逃逸(`let p=0; (p)->{p.abs=...}; f(std.Math)`)
+  → native 5 / boot 99。现在写扫描同时看参数表,参数名一律按可能写 std 处理。
+- **Medium**:缓存命中后 `.qir` 正文被替换的测试证明带 import 永远 miss;**现在读时只校验
+  header 里记录的 deps**(entry hash 覆盖 import 集合),实测二次 check 不再重写 sidecar,
+  改 import/transitive 依赖/选项都会正确失效。sha256sum 按 50 个路径分批(ql_spawn <64 argv)。
+- **Medium**:sha256 失败时会把 Error 文本写进 header。现在任一 hash 缺失就不写缓存文件
+  (`PATH=/nonexistent` 实测不产生 `.qir`)。
+- **Medium**:两列 symbols.tsv 仍会声明 233 个签名错误的 `_f`(0 参);现在只对 `fastArity >= 0` 声明。
+- **Low**:`std.process.run([])`/≥64 参数把机制码当退出码;现在负状态映射为 `IOError`。
+- **Low**:GC 阈值 `live` 加 64MB 上限(峰值堆 ~1.5× live,避免紧内存设备 OOM)。
+- **Low**:`tools/link -o <已有目录>` 曾被 `mv` 当成"把文件移进目录"而成功;现在显式拒绝。
+- smoke 用例的可执行性收紧:`run_tests` 按 `aot/tests/smoke_status.txt` 要求退出码
+  (默认 0,t14/t15 为 1);`run_diff`/`run_bench` 拒绝崩溃(>1)被当通过。
+- `run_module_tests` 的陈旧解释器判据补 `runtime.c`/`value_abi.ql`/编译器本身;
+  QLang `run_selfhost.ql` 的固定点改为与 Python 版相同的 stage2/stage3 三次发射。
+
+已核实非问题:t14 的 `includes("Uninitialized")` 实际为 true(插值把 Uninitialized 渲染成
+`kind: message`);t13 的尾部在旧版也因 `nullable = 1` 提前退出,不是本批回归。
+
+**头条变化**:第二轮修复后 t20 单模块 IR **189 275** / 机器 **146 238**
+(第一轮 188 630 / 145 187;修复前 187 736 / 142 367)。+645/+1 051 来自收窄事实不再跨函数、
+`let x;` 永久保留 empty 检查:`located-error elided` 111 → 102;**正确性代价**,不是优化回退。
