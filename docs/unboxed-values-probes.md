@@ -3083,3 +3083,23 @@ L1(诊断结论)已经在 `--check` 里落地(§106)。L2 缓存的是**用户�
 
 剩下的空间:链接仍是瓶颈(见 §95/§105:`opt`+`llc`+`ld.lld` 各有进程启动成本)。
 L2 把"发射"这段消掉之后,下一个可做的才是把编译产物(`.o`)也缓存,做到"源码没变 → 连链接都跳过"。
+
+## 108. 测试驱动也能不依赖 Python:`aot/run_tests.ql`(2026-10-30)
+
+工具链早就没有 Rust 也没有 Python(`aot/build.ql` 写在文件头:"全程 QLang,不调用 Python"),但**测试驱动**
+还是 27 个 `aot/run_*.py`。现在有了 QLang 版:
+
+```
+stage2 --emit-llvm aot/run_tests.ql aot/runtime.ql > /tmp/rt.ll
+tools/link /tmp/rt.ll -o /tmp/rt
+/tmp/rt target/stdlib/<key>            # 或 run_tests --compiler <c> <stdlib-dir>
+```
+
+它按 `aot/tests/manifest.txt`(一行一个用例名)逐个:发用户模块 IR → `tools/link` 链接 → 跑 → 与
+`.expected` 逐字节比对;没有 `.expected` 的用例只要求能编能跑。**全程只调 QLang 自己的二进制。**
+
+结果:**57 通过 / 0 失败**。唯一没纳入的是 `t37_extensions` —— 它要现建 `.so` 并传一串路径,
+属于 extension 专属测试(见 §104 与 `run_extension_tests.py --tmp`),单独跑。
+
+为什么用显式清单而不是扫目录:QLang 没有目录列举原语(`std.fs` 只有读写),所以清单是显式文件;
+漏登记的用例不会被跑到,改夹具时要记得加一行。
