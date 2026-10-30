@@ -106,6 +106,9 @@ python3 aot/native_link.py /tmp/p.ll -o /tmp/p
 - **自举测试也可以 QLang 跑**:`aot/run_selfhost.ql` —— `run_selfhost <stdlib-dir> [--jobs N]`,
   并行跑 `aot/tests/split.txt`(55 个)并验证 stage2/stage3 的 IR 逐字节相同;
   `--jobs 6` 约 8 分钟。新增宿主叶子后必须先重建标准库对象,否则新 API 在旧对象里不存在。
+- **基准也可以 QLang 跑**:`aot/run_bench.ql` —— `run_bench <stdlib-dir> [--runs N]`,
+  按 `aot/bench/benches.txt` 测单模块/标准库对象两档的构建与运行耗时并比对输出
+  (计时靠 `date +%s%N`;本机 `/proc/uptime` 冻结、`/proc/self/stat` 只算本进程 CPU)。
 - **差分测试也可以 QLang 跑**:`aot/run_diff.ql` —— `run_diff <stdlib-dir> [--jobs N]`,
   每个用例两档各编一次并比对输出,`--jobs 6` 55 通过 / 0 失败(约 1.5 分钟)。
   Python 版 `run_debug_diff_tests.py` 仍在,两者判据相同(两档逐字节相同)。
