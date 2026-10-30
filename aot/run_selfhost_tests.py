@@ -243,7 +243,15 @@ def main():
         work = Path(tmp)
         stage1 = options.compiler.resolve() if options.compiler else work / 'stage1'
         if not options.compiler:
-            bootstrap(work / 'stage1.ll', stage1)
+            # The retained Rust host cannot parse current sources (newline-leading
+            # `&&` is a parse error there), so a fresh bootstrap uses an existing
+            # stage2 when present and only falls back to the Rust host otherwise.
+            existing = ROOT / 'target' / 'selfhost' / 'stage2'
+            if existing.exists():
+                stage1 = existing
+                print('note: bootstrapping from existing target/selfhost/stage2', flush=True)
+            else:
+                bootstrap(work / 'stage1.ll', stage1)
         _use_stdlib_object(stage1)
         check_rejections(stage1, work)
         source = ROOT / 'aot/tests/t16_functions.ql'

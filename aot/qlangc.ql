@@ -1678,8 +1678,7 @@ let emitIdentifier = (node) -> {
   // emission with the empty slot (kind 0 / null pointer) and, without the ql_empty
   // check, is used as a heap pointer (segfault). Bindings declared without an
   // initializer therefore keep the checked path until the first store.
-  let maybeEmpty = !isError(hit.scope.maybeEmpty) && !isError(hit.scope.maybeEmpty[node.name])
-    && hit.scope.maybeEmpty[node.name] == true;
+  let maybeEmpty = !isError(hit.scope.maybeEmpty) && !isError(hit.scope.maybeEmpty[node.name]) && hit.scope.maybeEmpty[node.name] == true;
   let sameBody = hit.depth == 0 && !maybeEmpty && (isError(hit.scope.optional) || isError(hit.scope.optional[node.name]));
   if sameBody { let direct = temp(); line("  " + direct + " = load %ql_value, ptr " + off); return direct; };
   let absent = temp(); let missing = lbl(); let found = lbl(); let done = lbl();

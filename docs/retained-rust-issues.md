@@ -162,3 +162,14 @@ These are additive parity for approved mechanisms, not repairs of a
 discrepancy. The host's `Number.toString` still renders `-0` as `0` (see the
 negative-zero section above), so on the host the library's only oracle for a
 negative zero is that text; AOT rendering — the product path — is correct.
+
+## 2026-10-31: Rust 宿主无法解析当前编译器源码（新行首 `&&`）
+
+`aot/qlangc.ql` 等文件里有 40+ 处「换行后以 `&&` 继续」的条件（QLang 自己的解析器支持）。
+保留的 Rust 宿主按行结束语句，遇到行首 `&&` 直接报
+`Not implemented: UnexpectedToken(And)`。因此从 Rust 宿主引导编译器这条路径在 HEAD 上不可用。
+
+- 现行自举:`aot/run_selfhost_tests.py --self` 优先用已有的 `target/selfhost/stage2`
+  作为 stage1(自举编译 → stage2/stage3 固定点);只有没有 stage2 时才回退 Rust 宿主。
+- 处理方式:record,不修 Rust 宿主。需要从零引导时,用一个能解析行首 `&&` 的旧编译器,
+  或先把这些条件改写成单行/嵌套 if。
