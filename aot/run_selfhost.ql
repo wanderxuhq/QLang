@@ -27,7 +27,7 @@ std.process.run(["rm", "-rf", base]);
 std.process.run(["mkdir", "-p", base]);
 // 自举用清单:比原生清单少三个"多文件 import"用例(t13/t14/t15)——它们在 split 模式下
 // 需要模块图,不属于自举要验证的东西(那些由 module 测试覆盖)。
-let manifest = std.fs.readFileText("aot/tests/selfhost.txt")?;
+let manifest = std.fs.readFileText("aot/tests/split.txt")?;
 let names = std.String.split(manifest)("\n");
 let pass = 0; let fail = 0; let failed = "";
 

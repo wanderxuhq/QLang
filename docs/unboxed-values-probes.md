@@ -3198,3 +3198,23 @@ run_selfhost <stdlib-dir> [--compiler <c>] [--jobs <n>] [--no-fixed-point]
 
 注意:它用的是 `stdlib-dir` 里的对象,所以**新增宿主叶子后要先重建标准库对象**
 (否则新 API 在旧对象里不存在,用例会在 `(cmd)` 上失败 —— t63 就是这么被抓到的)。
+
+## 113. debug/release 差分驱动也 QLang 化了(2026-10-30)
+
+`aot/run_diff.ql`:
+
+```
+run_diff <stdlib-dir> [--compiler <c>] [--jobs <n>]
+```
+
+每个用例由 `sh -c` 子进程编两档(release / `--debug`)并各跑一次,驱动用 `spawn/wait` 调度、
+比对两份输出(有 `.expected` 时再比一次)。判据仍是"两档逐字节相同"。
+
+清单统一成 `aot/tests/split.txt`(55 个):比原生清单少 t13/t14/t15 三个**多文件 import** 用例 ——
+它们在 split 模式下需要模块图,不是这两套测试要验的东西(由 module 测试覆盖)。原来自举用的
+`selfhost.txt` 并进这个文件,两个驱动共用一个清单。
+
+实测 `--jobs 6`:55 通过 / 0 失败;`--jobs 4` 时 79 秒(110 次编译 + 110 次链接)。
+
+坑:`tools/link` 的 `-o` 若指向一个**已存在的目录**(我的探针里 `/tmp/rd` 正好是个目录),
+会在 shell 里报 `Permission denied` 而不是"输出路径非法"。换名字即可。

@@ -104,10 +104,11 @@ python3 aot/native_link.py /tmp/p.ll -o /tmp/p
   构建/链接本身也早就有 QLang 版:`aot/build.ql`。清单是显式文件(QLang 没有目录列举原语),
   加用例时要同时加一行。
 - **自举测试也可以 QLang 跑**:`aot/run_selfhost.ql` —— `run_selfhost <stdlib-dir> [--jobs N]`,
-  并行跑 `aot/tests/selfhost.txt`(55 个)并验证 stage2/stage3 的 IR 逐字节相同;
+  并行跑 `aot/tests/split.txt`(55 个)并验证 stage2/stage3 的 IR 逐字节相同;
   `--jobs 6` 约 8 分钟。新增宿主叶子后必须先重建标准库对象,否则新 API 在旧对象里不存在。
-- `python3 aot/run_debug_diff_tests.py --compiler target/selfhost/stage2` 跑 debug/release 差分
-  (每个测试用例两档各编一次,两档输出必须逐字节相同)。
+- **差分测试也可以 QLang 跑**:`aot/run_diff.ql` —— `run_diff <stdlib-dir> [--jobs N]`,
+  每个用例两档各编一次并比对输出,`--jobs 6` 55 通过 / 0 失败(约 1.5 分钟)。
+  Python 版 `run_debug_diff_tests.py` 仍在,两者判据相同(两档逐字节相同)。
 - `native_link.py` 用单线程 LLD,并校验每个静态字符串的 ELF 重定位/字节;不要绕过它直接 clang 链接。
 - 改 `aot/qlangc.ql` 之后必须重建编译器。编译器、源码、测试用例必须**同源**(同一版本)。
 
