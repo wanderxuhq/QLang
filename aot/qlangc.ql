@@ -3626,6 +3626,9 @@ let main = (args) -> {
   let staticScan = false;
   // `--timing` 打印各阶段耗时(写在 IR 注释里;默认关闭,固定点比较不受影响)。
   let timingOn = false;
+  // `--check`:走完整的 parse/分析/发射,但**不产出**(不写 IR、不链接),只报诊断。
+  // 之所以不"停在分析之后":用户诊断有一部分是发射期产生的(addCompileError),两条路会分叉。
+  let checkMode = false;
   let keptArgs = [];
   let stdlibDir = "";
   let membersOutPath = "";
@@ -3634,6 +3637,7 @@ let main = (args) -> {
     if args[argIndex] == "--fold" { foldEnabled = true; }
     else if args[argIndex] == "--static-scan" { staticScan = true; }
     else if args[argIndex] == "--timing" { timingOn = true; }
+    else if args[argIndex] == "--check" { checkMode = true; }
     else if args[argIndex] == "--debug" { conservativeMode = true; }
     else if args[argIndex] == "--stdlib-object" { stdlibDir = args[argIndex + 1]; argIndex = argIndex + 1; }
     else if args[argIndex] == "--members-out" { membersOutPath = args[argIndex + 1]; argIndex = argIndex + 1; }
@@ -3651,6 +3655,20 @@ let main = (args) -> {
   if timingOn { tStart = nowUs(); };
   let interfaceDump = args.length == 2 && args[0] == "--emit-stdlib-interface";
   splitStdlibMode = args.length == 5 && args[0] == "--emit-llvm-split";
+  // --check 快路径:源码与工具链都没变 ⇒ 直接复用上次的"无诊断"结论(连 parse 都不做)。
+  if checkMode && args.length == 5 {
+    let stamp = std.fs.readFileText(args[1] + ".qcheck");
+    if !isError(stamp) {
+      let sum = std.process.run(["sha256sum", args[1]]);
+      let dir = std.fs.canonicalPath(args[4]);
+      let envName = "-";
+      if !isError(dir) { let bits = std.String.split(dir)("/"); envName = bits[bits.length - 2]; };
+      if sum.status == 0 {
+        let hex = std.String.split(sum.stdout)(" ");
+        if stamp == "v1\nsource=" + hex[0] + "\nenv=" + envName + "\nverdict=ok\n" { return null; };
+      };
+    };
+  };
   if args.length != 3 && !splitStdlibMode && !interfaceDump { return std.Error.raise("CompileError", "usage: qlangc --emit-llvm|--emit-module source.ql runtime.ql", null); };
   let source = args[0]; let sourcePath = args[1]; let runtimeSource = args[2];
   extensionMode = args[0] == "--emit-module";
@@ -4087,6 +4105,7 @@ let main = (args) -> {
     };
   };
   let emitLine = (s) -> {
+    if checkMode { return null; };
     chunkLines[chunkLines.length] = s;
     if chunkLines.length >= 4096 { flushLines(); };
   };
@@ -4117,6 +4136,20 @@ let main = (args) -> {
     si = si + 1;
   };
   flushLines();
+  // --check 的产物:一份"结论"sidecar(只缓存 ok;有错不写,错误每次都要重报)。
+  // env = stdlib 目录名 —— 它本身就是 (编译器字节 + runtime + bundle) 的哈希,和库缓存同源,
+  // 因此换编译器/换库都会自动失效。
+  if checkMode && args.length == 5 {
+    let dir = std.fs.canonicalPath(args[4]);
+    let bits = std.String.split(dir)("/");
+    let envName = if isError(dir) { "" } else { bits[bits.length - 2]; };
+    let sum = std.process.run(["sha256sum", args[1]]);
+    if sum.status == 0 {
+      let hex = std.String.split(sum.stdout)(" ");
+      std.fs.writeText(args[1] + ".qcheck",
+        "v1\nsource=" + hex[0] + "\nenv=" + envName + "\nverdict=ok\n");
+    };
+  };
 };
 
 // The compiler CLI reports input-source diagnostics already carried by its
