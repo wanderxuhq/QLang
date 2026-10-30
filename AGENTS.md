@@ -94,9 +94,12 @@ python3 aot/native_link.py /tmp/p.ll -o /tmp/p
   「从源码分析」的对照路径);`native_link.py --stdlib-object`
   或环境变量 `QLANG_STDLIB_OBJECT` 链接对象。单测试用例构建 ~22s → ~1.7s。
   两套主测试会自动构建并启用它。测量见 `docs/unboxed-values-probes.md` §22-§29。
-- **不依赖 Python 的测试驱动**:`aot/run_tests.ql`(QLang)——按 `aot/tests/manifest.txt` 逐个
-  发 IR → `tools/link` → 跑 → 比对 `.expected`;`t37_extensions` 不在此列(要现建 `.so`,
-  归 extension 测试)。构建/链接本身也早就有 QLang 版:`aot/build.ql`。
+- **不依赖 Python 的测试驱动**:`aot/run_tests.ql`(QLang)——
+  `run_tests <stdlib-dir>` 跑原生用例(按 `aot/tests/manifest.txt`,57 个);
+  `run_tests <stdlib-dir> --interpreter` 跑解释器用例(按 `aot/tests/interpreter.txt`,40 个,
+  缺解释器时会自己编)。`t37_extensions` 不在此列(要现建 `.so`,归 extension 测试)。
+  构建/链接本身也早就有 QLang 版:`aot/build.ql`。清单是显式文件(QLang 没有目录列举原语),
+  加用例时要同时加一行。
 - `python3 aot/run_debug_diff_tests.py --compiler target/selfhost/stage2` 跑 debug/release 差分
   (每个测试用例两档各编一次,两档输出必须逐字节相同)。
 - `native_link.py` 用单线程 LLD,并校验每个静态字符串的 ELF 重定位/字节;不要绕过它直接 clang 链接。

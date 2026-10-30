@@ -3127,3 +3127,22 @@ tools/link /tmp/bb.ll -o /tmp/bb
 
 **结论**:工具链、标准库对象、bundle 重建、原生测试用例,现在全部可以只用 QLang 二进制完成;
 Rust 只剩"初始 bootstrap"(第一次把编译器带上路)这一件事。
+
+## 110. QLang 测试驱动现在也能跑解释器套件(2026-10-30)
+
+`aot/run_tests.ql` 加了 `--interpreter`:
+
+```
+/tmp/rt2 <stdlib-dir>              # 原生用例:发 IR → 链接 → 跑 → 比对   57 通过 / 0 失败
+/tmp/rt2 <stdlib-dir> --interpreter # 解释器用例:编 boot → 跑 → 比对     40 通过 / 0 失败
+```
+
+解释器模式先确保 `target/native-interpreter/interpreter` 存在(缺则 `stage2` 编
+`bootstrapped/run_file.ql` + `tools/link`),然后按 `aot/tests/interpreter.txt` 逐个跑,
+把输出剥掉 `Interpreting...` / `Execution complete.` 外壳再与 `.expected` 比对。
+
+用例清单仍是显式文件(QLang 没有目录列举原语):`aot/tests/manifest.txt`(原生 57 个)、
+`aot/tests/interpreter.txt`(解释器 40 个),都从原 Python 驱动的列表导出。
+
+至此原生与解释器两类主测试都能只靠 QLang 二进制跑;剩下仍要 Python 的是 selfhost(固定点 +
+并行)、extension(现建 `.so`)、module(多文件)、String(Unicode 预言机)、bench 与时序探针。

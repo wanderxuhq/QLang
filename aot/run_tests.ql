@@ -1,6 +1,10 @@
 // QLang 测试驱动:跑 aot/tests 里的原生测试用例。**全程 QLang,不调用 Python。**
 //
-//   run_tests <stdlib-dir> [--compiler <path>]
+//   run_tests <stdlib-dir> [--compiler <path>] [--interpreter]
+//
+// 带 `--interpreter` 时改跑解释器套件:确保 native 解释器存在(编 bootstrapped/run_file.ql),
+// 按 aot/tests/interpreter.txt 逐个跑,剥掉 "Interpreting..."/"Execution complete." 外壳后
+// 与 `.expected` 比对。
 //
 // 每个用例:
 //   1) 编译器发用户模块 IR(`--emit-llvm-split`);
@@ -12,22 +16,37 @@
 let compiler = "target/selfhost/stage2";
 let linkTool = "target/tools/link";
 let stdlibDir = "target/stdlib/" + "";
+let interpreterMode = false;
 let rest = [];
 let i = 0;
 while i < args.length {
   let a = args[i];
   if a == "--compiler" { i = i + 1; compiler = args[i]; }
+  else if a == "--interpreter" { interpreterMode = true; }
   else { rest[rest.length] = a; };
   i = i + 1;
 };
 if rest.length > 0 { stdlibDir = rest[0]; };
 if stdlibDir == "" { assert(false, "usage: run_tests <stdlib-dir> [--compiler <path>]"); 1; };
-let manifest = std.fs.readFileText("aot/tests/manifest.txt")?;
+let manifestPath = if interpreterMode { "aot/tests/interpreter.txt"; } else { "aot/tests/manifest.txt"; };
+let manifest = std.fs.readFileText(manifestPath)?;
 let names = std.String.split(manifest)("\n");
 let base = "/tmp/qlang-qltests";
 std.process.run(["mkdir", "-p", base]);
 std.process.run(["rm", "-rf", base + "/out"]);
 std.process.run(["mkdir", "-p", base + "/out"]);
+let interp = "target/native-interpreter/interpreter";
+if interpreterMode {
+  let probe = std.fs.readFileText(interp);
+  if isError(probe) {
+    std.process.run(["mkdir", "-p", "target/native-interpreter"]);
+    let e2 = std.process.run([compiler, "--emit-llvm", "bootstrapped/run_file.ql", "aot/runtime.ql"]);
+    if e2.status != 0 { assert(false, "cannot build interpreter"); 1; };
+    std.fs.writeText(base + "/interpreter.ll", e2.stdout);
+    let l2 = std.process.run([linkTool, base + "/interpreter.ll", "-o", interp]);
+    if l2.status != 0 { assert(false, "cannot link interpreter"); 1; };
+  };
+};
 let pass = 0; let fail = 0; let failed = "";
 let k = 0;
 while k < names.length {
@@ -36,20 +55,31 @@ while k < names.length {
     let src = "aot/tests/" + name + ".ql";
     let ir = base + "/" + name + ".ll";
     let bin = base + "/" + name;
-    let emit = std.process.run([compiler, "--emit-llvm-split", src, "aot/runtime.ql",
-                                stdlibDir + "/symbols.tsv", stdlibDir + "/mod.ql"]);
-    if emit.status != 0 { fail = fail + 1; failed = failed + " " + name + "(emit)"; }
+    if interpreterMode {
+      let run0 = std.process.run([interp, src, "aot/runtime.ql"]);
+      let body = std.String.split(run0.stdout)("Interpreting...\n");
+      let out0 = if body.length > 1 { std.String.split(body[1])("Execution complete.")[0]; } else { ""; };
+      let exp0 = std.fs.readFileText("aot/tests/" + name + ".expected");
+      if isError(exp0) { pass = pass + 1; }
+      else if out0 == exp0 { pass = pass + 1; }
+      else { fail = fail + 1; failed = failed + " " + name; };
+    }
     else {
-      std.fs.writeText(ir, emit.stdout);
-      let linked = std.process.run([linkTool, ir, "-o", bin, "--stdlib-object", stdlibDir + "/stdlib.o"]);
-      if linked.status != 0 { fail = fail + 1; failed = failed + " " + name + "(link)"; }
+      let emit = std.process.run([compiler, "--emit-llvm-split", src, "aot/runtime.ql",
+                                  stdlibDir + "/symbols.tsv", stdlibDir + "/mod.ql"]);
+      if emit.status != 0 { fail = fail + 1; failed = failed + " " + name + "(emit)"; }
       else {
-        let expected = std.fs.readFileText("aot/tests/" + name + ".expected");
-        if isError(expected) { pass = pass + 1; }   // 没有 .expected 的用例:只要求能编能跑
+        std.fs.writeText(ir, emit.stdout);
+        let linked = std.process.run([linkTool, ir, "-o", bin, "--stdlib-object", stdlibDir + "/stdlib.o"]);
+        if linked.status != 0 { fail = fail + 1; failed = failed + " " + name + "(link)"; }
         else {
-          let run = std.process.run([bin]);
-          if run.stdout == expected { pass = pass + 1; }
-          else { fail = fail + 1; failed = failed + " " + name; };
+          let expected = std.fs.readFileText("aot/tests/" + name + ".expected");
+          if isError(expected) { pass = pass + 1; }   // 没有 .expected 的用例:只要求能编能跑
+          else {
+            let run = std.process.run([bin]);
+            if run.stdout == expected { pass = pass + 1; }
+            else { fail = fail + 1; failed = failed + " " + name; };
+          };
         };
       };
     };
