@@ -20,6 +20,7 @@ while i < args.length {
 if rest.length > 0 { stdlibDir = rest[0]; };
 if stdlibDir == "" { assert(false, "usage: run_bench <stdlib-dir> [--compiler <c>] [--runs <n>]"); 1; };
 if isError(runs) || runs < 1 || runs % 1 != 0 { runs = 1; };
+let sq = (v) -> "'" + std.String.replace(v)("'")("'\\''") + "'";
 let base = "/tmp/qlang-bench-q";
 std.process.run(["rm", "-rf", base]);
 std.process.run(["mkdir", "-p", base]);
@@ -41,20 +42,20 @@ while k < names.length {
     let t0 = nowMs();
     // One emit per mode: this used to run a full single-module emit and throw the
     // result away, charging that time to the mono build.
-    let lm = std.process.run(["sh", "-c", compiler + " --emit-llvm " + src + " aot/runtime.ql > " + monoIr +
-                              " && " + linkTool + " " + monoIr + " -o " + monoBin]);
+    let lm = std.process.run(["sh", "-c", sq(compiler) + " --emit-llvm " + sq(src) + " aot/runtime.ql > " + sq(monoIr) +
+                              " && " + sq(linkTool) + " " + sq(monoIr) + " -o " + sq(monoBin)]);
     let t1 = nowMs();
-    let ls = std.process.run(["sh", "-c", compiler + " --emit-llvm-split " + src + " aot/runtime.ql " + stdlibDir +
-                              "/symbols.tsv " + stdlibDir + "/mod.ql > " + splitIr + " && " + linkTool + " " + splitIr +
-                              " -o " + splitBin + " --stdlib-object " + stdlibDir + "/stdlib.o"]);
+    let ls = std.process.run(["sh", "-c", sq(compiler) + " --emit-llvm-split " + sq(src) + " aot/runtime.ql " + sq(stdlibDir +
+                              "/symbols.tsv") + " " + sq(stdlibDir + "/mod.ql") + " > " + sq(splitIr) + " && " + sq(linkTool) + " " + sq(splitIr) +
+                              " -o " + sq(splitBin) + " --stdlib-object " + sq(stdlibDir + "/stdlib.o")]);
     let t2 = nowMs();
     let monoRun = 0; let splitRun = 0; let same = "?";
     if lm.status == 0 && ls.status == 0 {
       let loop = std.String.toString(runs);
       let a0 = nowMs();
-      std.process.run(["sh", "-c", "i=0; while [ $i -lt " + loop + " ]; do " + monoBin + " > /dev/null; i=$((i+1)); done"]);
+      std.process.run(["sh", "-c", "i=0; while [ $i -lt " + loop + " ]; do " + sq(monoBin) + " > /dev/null; i=$((i+1)); done"]);
       let a1 = nowMs();
-      std.process.run(["sh", "-c", "i=0; while [ $i -lt " + loop + " ]; do " + splitBin + " > /dev/null; i=$((i+1)); done"]);
+      std.process.run(["sh", "-c", "i=0; while [ $i -lt " + loop + " ]; do " + sq(splitBin) + " > /dev/null; i=$((i+1)); done"]);
       let a2 = nowMs();
       monoRun = (a1 - a0) / runs; splitRun = (a2 - a1) / runs;
       let om = std.process.run([monoBin]); let os = std.process.run([splitBin]);

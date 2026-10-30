@@ -19,6 +19,7 @@ while i < args.length {
 if rest.length > 0 { stdlibDir = rest[0]; };
 if stdlibDir == "" { assert(false, "usage: run_diff <stdlib-dir> [--compiler <c>] [--jobs <n>]"); 1; };
 if jobs < 1 { jobs = 1; };
+let sq = (v) -> "'" + std.String.replace(v)("'")("'\\''") + "'";
 let base = "/tmp/qlang-diff-q";
 std.process.run(["rm", "-rf", base]);
 std.process.run(["mkdir", "-p", base]);
@@ -29,13 +30,13 @@ let caseCmd = (name) -> {
   let sym = stdlibDir + "/symbols.tsv"; let mod = stdlibDir + "/mod.ql";
   let obj = stdlibDir + "/stdlib.o";
   "set -e; " +
-  compiler + " --emit-llvm-split " + src + " aot/runtime.ql " + sym + " " + mod + " > " + base + "/" + name + ".rel.ll; " +
-  linkTool + " " + base + "/" + name + ".rel.ll -o " + base + "/" + name + ".rel --stdlib-object " + obj + "; " +
-  compiler + " --debug --emit-llvm-split " + src + " aot/runtime.ql " + sym + " " + mod + " > " + base + "/" + name + ".dbg.ll; " +
-  linkTool + " " + base + "/" + name + ".dbg.ll -o " + base + "/" + name + ".dbg --stdlib-object " + obj + " --debug; " +
+  sq(compiler) + " --emit-llvm-split " + sq(src) + " aot/runtime.ql " + sq(sym) + " " + sq(mod) + " > " + sq(base + "/" + name + ".rel.ll") + "; " +
+  sq(linkTool) + " " + sq(base + "/" + name + ".rel.ll") + " -o " + sq(base + "/" + name + ".rel") + " --stdlib-object " + sq(obj) + "; " +
+  sq(compiler) + " --debug --emit-llvm-split " + sq(src) + " aot/runtime.ql " + sq(sym) + " " + sq(mod) + " > " + sq(base + "/" + name + ".dbg.ll") + "; " +
+  sq(linkTool) + " " + sq(base + "/" + name + ".dbg.ll") + " -o " + sq(base + "/" + name + ".dbg") + " --stdlib-object " + sq(obj) + " --debug; " +
   // 记录两档的退出码:只比 stdout 会把「打印完期望输出再崩溃」当通过。
-  "set +e; " + base + "/" + name + ".rel > " + base + "/" + name + ".rel.out 2>" + base + "/" + name + ".rel.err; echo $? > " + base + "/" + name + ".rel.st; " +
-  base + "/" + name + ".dbg > " + base + "/" + name + ".dbg.out 2>" + base + "/" + name + ".dbg.err; echo $? > " + base + "/" + name + ".dbg.st; true";
+  "set +e; " + sq(base + "/" + name + ".rel") + " > " + sq(base + "/" + name + ".rel.out") + " 2>" + sq(base + "/" + name + ".rel.err") + "; echo $? > " + sq(base + "/" + name + ".rel.st") + "; " +
+  sq(base + "/" + name + ".dbg") + " > " + sq(base + "/" + name + ".dbg.out") + " 2>" + sq(base + "/" + name + ".dbg.err") + "; echo $? > " + sq(base + "/" + name + ".dbg.st") + "; true";
 };
 let running = []; let runningNames = [];
 let drain = (all) -> {

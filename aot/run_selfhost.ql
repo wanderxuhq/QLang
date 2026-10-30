@@ -22,6 +22,7 @@ while i < args.length {
 if rest.length > 0 { stdlibDir = rest[0]; };
 if stdlibDir == "" { assert(false, "usage: run_selfhost <stdlib-dir> [--compiler <c>] [--jobs <n>]"); 1; };
 if jobs < 1 { jobs = 1; };
+let sq = (v) -> "'" + std.String.replace(v)("'")("'\\''") + "'";
 let base = "/tmp/qlang-selfhost-q";
 std.process.run(["rm", "-rf", base]);
 std.process.run(["mkdir", "-p", base]);
@@ -37,9 +38,9 @@ let caseCmd = (name) -> {
   let ir = base + "/" + name + ".ll";
   let bin = base + "/" + name;
   let out = base + "/" + name + ".out";
-  "set -e; " + compiler + " --emit-llvm-split " + src + " aot/runtime.ql " + stdlibDir +
-  "/symbols.tsv " + stdlibDir + "/mod.ql > " + ir + "; " + linkTool + " " + ir + " -o " + bin +
-  " --stdlib-object " + stdlibDir + "/stdlib.o; " + bin + " > " + out + " 2>" + out + ".err";
+  "set -e; " + sq(compiler) + " --emit-llvm-split " + sq(src) + " aot/runtime.ql " + sq(stdlibDir + "/symbols.tsv") +
+  " " + sq(stdlibDir + "/mod.ql") + " > " + sq(ir) + "; " + sq(linkTool) + " " + sq(ir) + " -o " + sq(bin) +
+  " --stdlib-object " + sq(stdlibDir + "/stdlib.o") + "; " + sq(bin) + " > " + sq(out) + " 2>" + sq(out + ".err");
 };
 let running = []; let runningNames = [];
 let k = 0;
