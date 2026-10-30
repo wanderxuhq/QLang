@@ -2865,3 +2865,23 @@ debug  : ; directreject: nohit=0 notable=0 noinfo=4 assigned=0 ……
 下一轮查:两档的 `curScope` 链在入口程序发射时是否相同(`emitFrame`/`reserveModuleGlobals`/
 `emitModuleStd` 里有没有随 `allowDirectUserCalls` 变化的分支),以及 `lookupSlot` 的
 `publicRuntimeNames` 过滤是否在两档给出不同结果。
+
+### 102.6 `--dump-lookup` 探针:两档都先 depth=1、后 depth=0,但次数不同(2026-10-30)
+
+给 `lookupSlot` 加探针(`--dump-lookup` 打印 `名字 depth=... module=...`)后,`println` 的序列是:
+
+```
+release: depth=1, depth=0, depth=0, depth=0
+debug  : depth=1, depth=0
+```
+
+也就是:两档都在"模块 std 初始化"阶段先命中全局(depth=1),随后**各有 depth=0 的命中**;
+差别是 release 有 3 次、debug 只有 1 次。所以 debug 的调用点并没有完全"落到全局",
+更可能是**调用点之前的某一步**(std 缓存槽的建立/读取)少走了两次模块作用域查询,
+于是调用点读到的帧/槽与 release 不同源。
+
+下一步的探针要能**归属到具体语句**:在 `emitExpr`/`emitCall` 入口打一条 `STMT <行号>:<类型>` 标记,
+再和 `LOOKUP` 交错看,就能确定 debug 那次 `println` 调用读的是哪个槽。这是纯观测,不改语义。
+
+本轮结论:修法仍未落地;确认"两档作用域解析不同"是根因方向,且需要语句级归属的探针才能定位。
+代码回滚到 cbcd3f8(release 不受影响)。
