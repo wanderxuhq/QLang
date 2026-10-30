@@ -103,6 +103,9 @@ python3 aot/native_link.py /tmp/p.ll -o /tmp/p
   缺解释器时会自己编)。`t37_extensions` 不在此列(要现建 `.so`,归 extension 测试)。
   构建/链接本身也早就有 QLang 版:`aot/build.ql`。清单是显式文件(QLang 没有目录列举原语),
   加用例时要同时加一行。
+- **自举测试也可以 QLang 跑**:`aot/run_selfhost.ql` —— `run_selfhost <stdlib-dir> [--jobs N]`,
+  并行跑 `aot/tests/selfhost.txt`(55 个)并验证 stage2/stage3 的 IR 逐字节相同;
+  `--jobs 6` 约 8 分钟。新增宿主叶子后必须先重建标准库对象,否则新 API 在旧对象里不存在。
 - `python3 aot/run_debug_diff_tests.py --compiler target/selfhost/stage2` 跑 debug/release 差分
   (每个测试用例两档各编一次,两档输出必须逐字节相同)。
 - `native_link.py` 用单线程 LLD,并校验每个静态字符串的 ELF 重定位/字节;不要绕过它直接 clang 链接。
