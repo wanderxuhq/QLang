@@ -60,7 +60,14 @@ while k < names.length {
       let body = std.String.split(run0.stdout)("Interpreting...\n");
       let out0 = if body.length > 1 { std.String.split(body[1])("Execution complete.")[0]; } else { ""; };
       let exp0 = std.fs.readFileText("aot/tests/" + name + ".expected");
-      if isError(exp0) { pass = pass + 1; }
+      // A missing golden file is a broken fixture, not a pass: otherwise deleting
+      // the .expected silently removes the check (and the case is never compared).
+      // No golden file = smoke case, but it must still execute and exit 0 (the
+      // old code skipped execution entirely for the native branch).
+      // No golden file = smoke case. 0 or 1 are the language's own exit codes
+      // (1 = unhandled top-level error); anything else is a crash.
+      if isError(exp0) { if run0.status == 0 || run0.status == 1 { pass = pass + 1; } else { fail = fail + 1; failed = failed + " " + name + "(exit)"; }; }
+      else if run0.status != 0 { fail = fail + 1; failed = failed + " " + name + "(exit)"; }
       else if out0 == exp0 { pass = pass + 1; }
       else { fail = fail + 1; failed = failed + " " + name; };
     }
@@ -74,12 +81,14 @@ while k < names.length {
         if linked.status != 0 { fail = fail + 1; failed = failed + " " + name + "(link)"; }
         else {
           let expected = std.fs.readFileText("aot/tests/" + name + ".expected");
-          if isError(expected) { pass = pass + 1; }   // 没有 .expected 的用例:只要求能编能跑
-          else {
-            let run = std.process.run([bin]);
-            if run.stdout == expected { pass = pass + 1; }
-            else { fail = fail + 1; failed = failed + " " + name; };
-          };
+          let run = std.process.run([bin]);
+          if isError(expected) {
+            // smoke case: executed, exit 0 (clean) or 1 (unhandled error)
+            if run.status == 0 || run.status == 1 { pass = pass + 1; } else { fail = fail + 1; failed = failed + " " + name + "(exit)"; };
+          }
+          else if run.status != 0 { fail = fail + 1; failed = failed + " " + name + "(exit)"; }
+          else if run.stdout == expected { pass = pass + 1; }
+          else { fail = fail + 1; failed = failed + " " + name; };
         };
       };
     };

@@ -19,6 +19,7 @@ while i < args.length {
 };
 if rest.length > 0 { stdlibDir = rest[0]; };
 if stdlibDir == "" { assert(false, "usage: run_bench <stdlib-dir> [--compiler <c>] [--runs <n>]"); 1; };
+if isError(runs) || runs < 1 || runs % 1 != 0 { runs = 1; };
 let base = "/tmp/qlang-bench-q";
 std.process.run(["rm", "-rf", base]);
 std.process.run(["mkdir", "-p", base]);
@@ -38,7 +39,8 @@ while k < names.length {
     let monoIr = base + "/" + name + ".mono.ll"; let monoBin = base + "/" + name + ".mono";
     let splitIr = base + "/" + name + ".split.ll"; let splitBin = base + "/" + name + ".split";
     let t0 = nowMs();
-    let em = std.process.run([compiler, "--emit-llvm", src, "aot/runtime.ql"]);
+    // One emit per mode: this used to run a full single-module emit and throw the
+    // result away, charging that time to the mono build.
     let lm = std.process.run(["sh", "-c", compiler + " --emit-llvm " + src + " aot/runtime.ql > " + monoIr +
                               " && " + linkTool + " " + monoIr + " -o " + monoBin]);
     let t1 = nowMs();
@@ -60,9 +62,8 @@ while k < names.length {
     } else { bad = bad + 1; };
     let ms = (v) -> std.Number.toString(std.Math.floor(v));
     println(name + "  " + ms(t1 - t0) + "ms  " + ms(t2 - t1) + "ms  " + ms(monoRun) + "ms  " + ms(splitRun) + "ms  " + same);
-    if em.status != 0 { bad = bad + 1; };
   };
   k = k + 1;
 };
-if bad > 0 { println("注意:" + std.Number.toString(bad) + " 项失败或不一致"); };
+if bad > 0 { assert(false, "bench: " + std.Number.toString(bad) + " 项失败或不一致"); 1; };
 0;

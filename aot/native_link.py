@@ -181,7 +181,7 @@ def qlang_link(ir, binary, stdlib_object, opt=2, shared=False, debug=False):
             return None
     except OSError:
         return None
-    command = [str(tool), str(ir), '-o', str(binary), '--opt', str(opt)]
+    command = [str(tool), str(ir), '-o', str(binary), '--opt', str(opt), '--root', str(ROOT)]
     # debug:一次 llc 直接吃 IR,跳过 opt(快 ~0.3s,运行慢 2 倍;语义不变)。
     if debug:
         command.append('--debug')

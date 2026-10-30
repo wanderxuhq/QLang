@@ -14,7 +14,7 @@
 //
 // 输出最后一行的对象路径给调用方(和 Python 版一致)。
 
-let splitVersion = "8";
+let splitVersion = "9";
 let fail = (message) -> { assert(false, "stdlib_build: " + message); 1; };
 let startsWith = (text, prefix) -> std.String.startsWith(text)(prefix);
 let endsWith = (text, suffix) -> {
@@ -140,8 +140,9 @@ let bundlePath = "stdlib/bundle.ql";
 // 和 Python 版完全同源:sha256(版本字节 + 编译器字节 + runtime 字节 + bundle 字节),取前 16。
 std.process.run(["mkdir", "-p", cacheRoot]);
 let keyTemp = cacheRoot + "/.key";
+let shQuote = (v) -> "'" + std.String.replace(v)("'")("'\\''") + "'";
 let digestResult = std.process.run(["sh", "-c",
-  "printf '%s' " + splitVersion + " > " + keyTemp + "; cat " + compiler + " " + runtimePath + " " + bundlePath + " >> " + keyTemp + "; sha256sum " + keyTemp]);
+  "printf '%s' " + splitVersion + " > " + shQuote(keyTemp) + "; cat " + shQuote(compiler) + " " + shQuote(runtimePath) + " " + shQuote(bundlePath) + " >> " + shQuote(keyTemp) + "; sha256sum " + shQuote(keyTemp)]);
 if digestResult.status != 0 { fail("sha256sum failed:\n" + digestResult.stderr); };
 let digest = std.Bytes.slice(digestResult.stdout, 0, 16);
 std.fs.remove(keyTemp);
@@ -149,10 +150,17 @@ let outDir = cacheRoot + "/" + digest;
 
 let objectPath = outDir + "/stdlib.o";
 let existing = std.Bytes.read(objectPath);
-// 缓存命中要求 mod.ql 也在:接口是产物的一部分,缺了就得重建(否则 split 路径读不到白名单)。
-let cachedMod = std.Bytes.read(outDir + "/mod.ql");
-let modReady = !isError(cachedMod) && std.Bytes.length(cachedMod) > 64;
-if !isError(existing) && std.Bytes.length(existing) > 1024 && modReady {
+// 缓存命中要求整套产物都在:只查 .o+mod.ql 会把「上次中断、strings.tsv/symbols.tsv
+// 没写出来」的目录当命中,split 路径随后静默失去库字符串校验/直调。
+let required = ["mod.ql", "symbols.tsv", "strings.tsv", "interface.txt", "stdlib.ll"];
+let complete = true;
+let rqi = 0;
+while rqi < required.length {
+  let bytes = std.Bytes.read(outDir + "/" + required[rqi]);
+  if isError(bytes) || std.Bytes.length(bytes) < 16 { complete = false; };
+  rqi = rqi + 1;
+};
+if !isError(existing) && std.Bytes.length(existing) > 1024 && complete {
   // 缓存命中也要保证 bitcode 在(--lto 链接要用);缺了就补一份。
   let bcPath = outDir + "/stdlib.bc";
   let bc = std.Bytes.read(bcPath);
@@ -517,12 +525,18 @@ if slotItems.length == 0 { fail("mod.ql: empty slots"); };
 if modItems.length == 0 { fail("mod.ql: empty modules"); };
 if rfnItems.length == 0 { fail("mod.ql: empty runtime"); };
 
-// 8) 目标文件
-let compiled = std.process.run(["llc", "-O2", "-filetype=obj", stdlibPath, "-o", objectPath]);
-if compiled.status != 0 { fail("llc failed:\n" + compiled.stderr); };
+// 8) 目标文件(先写临时名再 rename:中断不会留下半个 .o 被下次当成命中)
+let objTmp = objectPath + ".tmp";
+let compiled = std.process.run(["llc", "-O2", "-filetype=obj", stdlibPath, "-o", objTmp]);
+if compiled.status != 0 { std.process.run(["rm", "-f", objTmp]); fail("llc failed:\n" + compiled.stderr); };
+let objMoved = std.process.run(["mv", objTmp, objectPath]);
+if objMoved.status != 0 { fail("cannot publish " + objectPath + ":\n" + objMoved.stderr); };
 // 同一份 IR 再产一份 bitcode:发布构建用 --lto 做跨模块内联(库仍然只编一次)。
-let bitcodeMade = std.process.run(["clang", "-O1", "-emit-llvm", "-c", stdlibPath, "-o", outDir + "/stdlib.bc"]);
-if bitcodeMade.status != 0 { fail("bitcode failed:\n" + bitcodeMade.stderr); };
+let bcTmp = outDir + "/stdlib.bc.tmp";
+let bitcodeMade = std.process.run(["clang", "-O1", "-emit-llvm", "-c", stdlibPath, "-o", bcTmp]);
+if bitcodeMade.status != 0 { std.process.run(["rm", "-f", bcTmp]); fail("bitcode failed:\n" + bitcodeMade.stderr); };
+let bcMoved = std.process.run(["mv", bcTmp, outDir + "/stdlib.bc"]);
+if bcMoved.status != 0 { fail("cannot publish stdlib.bc:\n" + bcMoved.stderr); };
 std.fs.remove(emptyPath);
 println(objectPath);
 };

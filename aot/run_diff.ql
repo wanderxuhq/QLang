@@ -33,8 +33,9 @@ let caseCmd = (name) -> {
   linkTool + " " + base + "/" + name + ".rel.ll -o " + base + "/" + name + ".rel --stdlib-object " + obj + "; " +
   compiler + " --debug --emit-llvm-split " + src + " aot/runtime.ql " + sym + " " + mod + " > " + base + "/" + name + ".dbg.ll; " +
   linkTool + " " + base + "/" + name + ".dbg.ll -o " + base + "/" + name + ".dbg --stdlib-object " + obj + " --debug; " +
-  base + "/" + name + ".rel > " + base + "/" + name + ".rel.out 2>/dev/null; " +
-  base + "/" + name + ".dbg > " + base + "/" + name + ".dbg.out 2>/dev/null; true";
+  // 记录两档的退出码:只比 stdout 会把「打印完期望输出再崩溃」当通过。
+  "set +e; " + base + "/" + name + ".rel > " + base + "/" + name + ".rel.out 2>" + base + "/" + name + ".rel.err; echo $? > " + base + "/" + name + ".rel.st; " +
+  base + "/" + name + ".dbg > " + base + "/" + name + ".dbg.out 2>" + base + "/" + name + ".dbg.err; echo $? > " + base + "/" + name + ".dbg.st; true";
 };
 let running = []; let runningNames = [];
 let drain = (all) -> {
@@ -48,11 +49,15 @@ let drain = (all) -> {
     else {
       let rel = std.fs.readFileText(base + "/" + name + ".rel.out");
       let dbg = std.fs.readFileText(base + "/" + name + ".dbg.out");
+      let relSt = std.fs.readFileText(base + "/" + name + ".rel.st");
+      let dbgSt = std.fs.readFileText(base + "/" + name + ".dbg.st");
       if isError(rel) || isError(dbg) { fail = fail + 1; failed = failed + " " + name + "(out)"; }
-      else if rel != dbg { fail = fail + 1; failed = failed + " " + name; }
+      else if rel != dbg { fail = fail + 1; failed = failed + " " + name + "(output)"; }
+      else if isError(relSt) || isError(dbgSt) { fail = fail + 1; failed = failed + " " + name + "(status)"; }
+      else if relSt != dbgSt { fail = fail + 1; failed = failed + " " + name + "(exit)"; }
       else {
         let expected = std.fs.readFileText("aot/tests/" + name + ".expected");
-        if isError(expected) { pass = pass + 1; }
+        if isError(expected) { pass = pass + 1; }   // smoke case: both grades agree + same exit code
         else if rel == expected { pass = pass + 1; }
         else { fail = fail + 1; failed = failed + " " + name + "(expect)"; };
       };

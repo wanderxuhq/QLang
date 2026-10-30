@@ -23,8 +23,11 @@ if work == "" || root == "" { assert(false, "usage: run_extension <tmp-dir> --ro
 if !endsWith(root, "/") { root = root + "/"; };
 let runtime = root + "aot/runtime.ql";
 let sh = (cmd) -> std.process.run(["sh", "-c", cmd]);
+// Paths come from the caller: quote them before they enter `sh -c` (spaces would
+// otherwise split arguments; `rm -rf` makes that dangerous).
+let sq = (v) -> "'" + std.String.replace(v)("'")("'\\''") + "'";
 let die = (what, r) -> { println("FAIL: " + what + "\n" + r.stderr); assert(false, what); 1; };
-let prepare = sh("rm -rf " + work + " && mkdir -p " + work + "/source && cp " + root + "aot/tests/extensions/*.ql " + work + "/source/ && cp " + root + "aot/tests/t37_extensions.ql " + work + "/source/host.ql");
+let prepare = sh("rm -rf " + sq(work) + " && mkdir -p " + sq(work + "/source") + " && cp " + sq(root + "aot/tests/extensions") + "/*.ql " + sq(work + "/source/") + " && cp " + sq(root + "aot/tests/t37_extensions.ql") + " " + sq(work + "/source/host.ql"));
 if prepare.status != 0 { die("准备目录", prepare); };
 let emit = (src, mode, out) -> {
   let r = std.process.run([compiler, mode, src, runtime]);
@@ -70,7 +73,7 @@ linkTo(work + "/no-entry.ll", work + "/no-entry.so", "0", true);
 std.fs.writeText(work + "/not-native.so", "println(\"must not execute source\");");
 println("PASS 负例:wrong-abi / no-entry / not-native");
 // 4) 删源码,跑宿主,与 .expected 比对
-let rm = sh("rm -f " + work + "/source/*.ql");
+let rm = sh("rm -f " + sq(work + "/source") + "/*.ql");
 if rm.status != 0 { die("删除源码", rm); };
 let expected = std.fs.readFileText(root + "aot/tests/t37_extensions.expected")?;
 let ok = 0; let bad = 0;
@@ -78,11 +81,11 @@ let r = 0;
 while r < 2 {
   let opt = if r == 0 { "0"; } else { "2"; };
   // cycle 要放在 source/cycle.so 并按那个路径传(宿主用 import(路径) 触发重入,验证 ImportCycle)。
-  let cpCycle = sh("cp " + work + "/cycle-O" + opt + ".so " + work + "/source/cycle.so");
+  let cpCycle = sh("cp " + sq(work + "/cycle-O" + opt + ".so") + " " + sq(work + "/source/cycle.so"));
   if cpCycle.status != 0 { die("拷贝 cycle", cpCycle); };
   let paths = work + "/plugin-O" + opt + ".so " + work + "/second-O" + opt + ".so " + work + "/failure-O" + opt + ".so " +
               work + "/source/cycle.so " + work + "/wrong-abi.so " + work + "/not-native.so " + work + "/no-entry.so";
-  let run = sh(work + "/host-O" + opt + " " + paths + " 2>/dev/null");
+  let run = sh(sq(work + "/host-O" + opt) + " " + paths + " 2>/dev/null");
   if run.stdout == expected { ok = ok + 1; println("PASS 宿主 O" + opt + ": 28 契约"); }
   else { bad = bad + 1; println("FAIL 宿主 O" + opt + " 输出不一致"); };
   r = r + 1;

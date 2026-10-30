@@ -39,7 +39,7 @@ let caseCmd = (name) -> {
   let out = base + "/" + name + ".out";
   "set -e; " + compiler + " --emit-llvm-split " + src + " aot/runtime.ql " + stdlibDir +
   "/symbols.tsv " + stdlibDir + "/mod.ql > " + ir + "; " + linkTool + " " + ir + " -o " + bin +
-  " --stdlib-object " + stdlibDir + "/stdlib.o; " + bin + " > " + out + " 2>/dev/null";
+  " --stdlib-object " + stdlibDir + "/stdlib.o; " + bin + " > " + out + " 2>" + out + ".err";
 };
 let running = []; let runningNames = [];
 let k = 0;
@@ -53,8 +53,13 @@ let drain = (all) -> {
     while j < running.length { kept[kept.length] = running[j]; keptNames[keptNames.length] = runningNames[j]; j = j + 1; };
     running = kept; runningNames = keptNames;
     let expected = std.fs.readFileText("aot/tests/" + name + ".expected");
-    if r.status != 0 { fail = fail + 1; failed = failed + " " + name + "(cmd)"; }
-    else if isError(expected) { pass = pass + 1; }
+    if r.status != 0 {
+      // Stderr is kept per case; a bare "(cmd)" hides the reason (emit/link/run).
+      let diag = std.fs.readFileText(base + "/" + name + ".out.err");
+      let why = if isError(diag) { ""; } else { " " + std.Bytes.slice(diag, 0, if diag.length > 300 { 300; } else { diag.length; }); };
+      fail = fail + 1; failed = failed + " " + name + "(cmd:" + why + ")";
+    }
+    else if isError(expected) { pass = pass + 1; }   // smoke case: executed, exit 0
     else {
       let got = std.fs.readFileText(base + "/" + name + ".out");
       if !isError(got) && got == expected { pass = pass + 1; }

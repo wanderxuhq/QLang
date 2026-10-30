@@ -10,7 +10,11 @@ if args.length < 2 { fail("usage: verify <elf> <strings.tsv> [ir]"); };
 let ir = if args.length > 2 { args[2]; } else { ""; };
 let stringsPath = if args[1] == "-" { ""; } else { args[1]; };
 let relaxed = if args.length > 3 && args[3] == "--lto" { 1; } else { 0; };
+if stringsPath == "" && ir == "" { fail("nothing to verify: pass strings.tsv and/or the IR"); };
 let report = std.Bytes.verifyStrings(args[0], stringsPath, ir, relaxed);
 if isError(report) { fail("verification failed"); };
 if !report.ok { fail(report.message); };
+// A non-empty strings.tsv always has entries; 0 means it was not read as expected
+// (wrong file kind or missing tabs) — reporting success would hide that.
+if report.count == 0 && stringsPath != "" { fail("no static strings verified from " + stringsPath); };
 println("verify: " + std.String.toString(report.count) + " static strings ok");

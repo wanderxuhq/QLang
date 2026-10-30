@@ -48,6 +48,9 @@ def main():
             if not expected.exists() or source.stem in SKIP:
                 continue
             if not _emits(compiler, source):
+                # A fixture listed with a golden file must compile. Silently
+                # skipping hid every emit regression from this differential gate.
+                failures.append((source.name, 'emit 失败'))
                 continue
             outputs = {}
             for mode in ('release', 'debug'):
@@ -57,7 +60,9 @@ def main():
                 link(ir, binary)
                 outputs[mode] = run(binary, work)
             checked += 1
-            if outputs['release'].stdout != outputs['debug'].stdout:
+            if outputs['release'].returncode != outputs['debug'].returncode:
+                failures.append((source.name, 'debug/release 退出码不同'))
+            elif outputs['release'].stdout != outputs['debug'].stdout:
                 failures.append((source.name, 'debug/release 输出不同'))
             elif outputs['release'].stdout != expected.read_bytes():
                 failures.append((source.name, '与 .expected 不同(两档相同)'))

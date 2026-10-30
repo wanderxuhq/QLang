@@ -43,16 +43,33 @@ while ai < args.length {
 if verifyTool == "" { verifyTool = root + "target/tools/verify"; };
 if irPath == "" || output == "" { fail("usage: link <ir> -o <out> [--stdlib-object <obj>] [--runtime-object <obj>]"); };
 
-// runtime.c → runtime.o(一次;键 = 平台)
-if runtimeObject == "" {
-  runtimeObject = "/tmp/.qlang-runtime-aarch64.o";
-  let probe = std.fs.readFileText(runtimeObject);
-  if isError(probe) || probe.length < 64 {
-    let built = std.process.run(["clang", "-O2", "-c", root + "aot/runtime.c", "-o", runtimeObject]);
-    if built.status != 0 { fail("runtime.c compile failed:\n" + built.stderr); };
+// runtime.c → runtime.o。缓存键 = 平台 + 优化级 + 文件内容哈希(改 runtime.c 自动失效);
+// 用 Bytes.read 读 ELF 判存在(按文本读必然 IOError,会导致每次链接都重编)。
+let runtimeContentHash = (path) -> {
+  let bytes = std.Bytes.read(path);
+  if isError(bytes) { return "0"; };
+  let h = 2166136261; let i = 0; let n = std.Bytes.length(bytes);
+  while i < n { h = (h * 131 + std.Bytes.byteAt(bytes, i)) % 4294967296; i = i + 1; };
+  std.Number.toString(h);
+};
+if runtimeObject == "" && !sharedMode {
+  let runtimeSource = root + "aot/runtime.c";
+  runtimeObject = "/tmp/.qlang-runtime-aarch64-O" + optLevel + "-" + runtimeContentHash(runtimeSource) + ".o";
+  let existing = std.Bytes.read(runtimeObject);
+  let valid = false;
+  if !isError(existing) && std.Bytes.length(existing) > 64 {
+    valid = std.Bytes.byteAt(existing, 0) == 127 && std.Bytes.byteAt(existing, 1) == 69
+      && std.Bytes.byteAt(existing, 2) == 76 && std.Bytes.byteAt(existing, 3) == 70;
+  };
+  if !valid {
+    // 唯一临时名 + rename:并发链接不会读到写了一半的 .o。
+    let tmp = runtimeObject + ".tmp" + std.Number.toString(std.Math.random());
+    let built = std.process.run(["clang", "-O" + optLevel, "-c", runtimeSource, "-o", tmp]);
+    if built.status != 0 { std.process.run(["rm", "-f", tmp]); fail("runtime.c compile failed:\n" + built.stderr); };
+    let moved = std.process.run(["mv", tmp, runtimeObject]);
+    if moved.status != 0 { fail("cannot publish " + runtimeObject + "\n" + moved.stderr); };
   };
 };
-
 if sharedMode { runtimeObject = ""; };
 let bitcode = output + ".bc";
 let object = output + ".user.o";
@@ -91,15 +108,15 @@ if ltoMode {
 // debug:让 llc **直接吃 IR**(llc 自己会做代码生成需要的规范化),跳过 opt 这一趟。
 // 少一次进程启动,也少一遍 IR 级优化 —— 代价是运行期(没有内联/合并),产物语义不变。
 // verify 仍然默认开着(它是"不发布错二进制"的门,和优化等级无关)。
-let llcArgs = ["llc", "-O1", "-filetype=obj", irPath, "-o", object];
-if sharedMode { llcArgs = ["llc", "-O1", "-relocation-model=pic", "-filetype=obj", irPath, "-o", object]; };
+let llcArgs = ["llc", "-O" + optLevel, "-filetype=obj", irPath, "-o", object];
+if sharedMode { llcArgs = ["llc", "-O" + optLevel, "-relocation-model=pic", "-filetype=obj", irPath, "-o", object]; };
 let compiled = std.process.run(llcArgs);
 if compiled.status != 0 { fail("llc (debug) failed:\n" + compiled.stderr); };
 } else {
-let optimized = std.process.run(["opt", "-O2", irPath, "-o", bitcode]);
+let optimized = std.process.run(["opt", "-O" + optLevel, irPath, "-o", bitcode]);
 if optimized.status != 0 { fail("opt failed:\n" + optimized.stderr); };
-let llcArgs = ["llc", "-O2", "-filetype=obj", bitcode, "-o", object];
-if sharedMode { llcArgs = ["llc", "-O2", "-relocation-model=pic", "-filetype=obj", bitcode, "-o", object]; };
+let llcArgs = ["llc", "-O" + optLevel, "-filetype=obj", bitcode, "-o", object];
+if sharedMode { llcArgs = ["llc", "-O" + optLevel, "-relocation-model=pic", "-filetype=obj", bitcode, "-o", object]; };
 let compiled = std.process.run(llcArgs);
 if compiled.status != 0 { fail("llc failed:\n" + compiled.stderr); };
 };
@@ -140,8 +157,24 @@ if linked.status != 0 {
 };
 
 // 校验:链接产物里的静态字符串必须和 IR 一致。校验不过就不发布(保留旧产物)。
+// 库字符串只认对象旁的 strings.tsv;没给就自动找,找不到就显式失败 —— 不能静默 0 条报绿。
+let dirOf = (path) -> {
+  let parts = std.String.split(path)("/"); let out = ""; let i = 0;
+  while i < parts.length - 1 { out = if out == "" { parts[i]; } else { out + "/" + parts[i]; }; i = i + 1; };
+  out;
+};
+let verifyStrings = stdlibIr;
+if verifyStrings == "" && stdlibObject != "" {
+  let candidate = dirOf(stdlibObject) + "/strings.tsv";
+  let probe = std.Bytes.read(candidate);
+  if !isError(probe) { verifyStrings = candidate; };
+};
+if endsWith(verifyStrings, ".ll") || endsWith(verifyStrings, ".bc") { verifyStrings = ""; };
+if !skipVerify && !sharedMode && stdlibObject != "" && verifyStrings == "" {
+  fail("stdlib object has no strings.tsv; refusing to skip library string verification (use --no-verify to override)");
+};
 if !skipVerify && !sharedMode {
-  let checkArgs = [verifyTool, staged, if stdlibIr == "" { "-"; } else { stdlibIr; }, irPath];
+  let checkArgs = [verifyTool, staged, if verifyStrings == "" { "-"; } else { verifyStrings; }, irPath];
   if ltoMode { checkArgs[checkArgs.length] = "--lto"; };
   let checked = std.process.run(checkArgs);
   if checked.status != 0 {

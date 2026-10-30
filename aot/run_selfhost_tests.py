@@ -55,8 +55,11 @@ def emit(compiler, source, ir):
         run(args, stdout=output)
 
 def bootstrap(ir, binary):
+    # Pass paths, not the compiler source: qlangc is now larger than
+    # MAX_ARG_STRLEN (128 KiB) and the old form failed with "Argument list too
+    # long" on the Rust-host bootstrap path.
     with ir.open('wb') as output:
-        run([QLANG, COMPILER, COMPILER.read_text(), COMPILER, RUNTIME.read_text()], stdout=output)
+        run([QLANG, COMPILER, '--emit-llvm', COMPILER, RUNTIME], stdout=output)
     link(ir, binary)
 
 def check_program(compiler, source, expected, work, name):
@@ -64,6 +67,7 @@ def check_program(compiler, source, expected, work, name):
     emit(compiler, source, ir)
     link(ir, binary)
     result = run([binary], capture_output=True)
+    assert result.returncode == 0, (name, result.returncode, result.stdout, result.stderr)
     assert result.stdout == expected, (name, result.stdout, result.stderr)
     print('PASS native compiler:', name, flush=True)
 
@@ -151,10 +155,25 @@ def run_program_tasks(compiler, tasks, work, jobs):
             future.result()
 
 
+_TOOL_NAMES = ('stdlib', 'build', 'link', 'verify')
+_TOOL_SOURCES = ('aot/link.ql', 'aot/verify.ql', 'aot/build.ql', 'aot/stdlib_build.ql',
+                 'aot/runtime.ql', 'aot/runtime.c', 'aot/value_abi.ql')
+
+
+def _tools_stale():
+    tools = [ROOT / 'target' / 'tools' / name for name in _TOOL_NAMES]
+    if any(not tool.exists() for tool in tools):
+        return True
+    # Rebuild when any tool source is newer than the oldest built tool. The old
+    # "exists ⇒ skip" check silently tested stale binaries after link.ql edits.
+    newest = max((ROOT / src).stat().st_mtime for src in _TOOL_SOURCES if (ROOT / src).exists())
+    return newest > min(tool.stat().st_mtime for tool in tools)
+
+
 def _bootstrap_tools(compiler):
     """Build target/tools/{stdlib,build,link,verify}（shell + clang，不用 Python）。"""
     script = ROOT / 'aot' / 'bootstrap.sh'
-    if (ROOT / 'target' / 'tools' / 'stdlib').exists():
+    if not _tools_stale():
         return
     mode = '--self' if (ROOT / 'target' / 'tools' / 'link').exists() else '--compiler'
     command = [str(script), mode, str(compiler)] if mode == '--compiler' else [str(script), '--self', '--compiler', str(compiler)]

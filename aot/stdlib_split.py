@@ -31,7 +31,7 @@ import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 CACHE_ROOT = ROOT / 'target' / 'stdlib'
-SPLIT_VERSION = '7'
+SPLIT_VERSION = '9'
 
 DEFINE = re.compile(r'^define\s')
 GLOBAL = re.compile(r'^@([A-Za-z0-9_$.]+)\s*=\s')

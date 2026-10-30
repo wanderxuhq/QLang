@@ -57,7 +57,11 @@ while i < lines.length {
 let wsPath = dirOf(path) + "/whitespace.txt";
 let wsText = std.fs.readFileText(wsPath);
 let ws = 0;
-if !isError(wsText) {
+if isError(wsText) {
+  // Missing dataset used to leave White_Space at 0 and still report success.
+  bad = bad + 1;
+  if firstBad == "" { firstBad = "缺少 " + wsPath; };
+} else {
   let wl = std.String.split(wsText)("\n");
   let wi = 0;
   while wi < wl.length {
@@ -83,6 +87,10 @@ if !isError(wsText) {
   };
   if std.String.trim("a") != "a" { bad = bad + 1; if firstBad == "" { firstBad = "trim 误删字母"; }; };
 };
+// 覆盖率下界:空数据/缺文件时 0 条比对也会得出"0 处不一致"。
+if up < 1205 { bad = bad + 1; if firstBad == "" { firstBad = "upper 覆盖不足:" + std.Number.toString(up); }; };
+if lo < 1249 { bad = bad + 1; if firstBad == "" { firstBad = "lower 覆盖不足:" + std.Number.toString(lo); }; };
+if ws < 25 { bad = bad + 1; if firstBad == "" { firstBad = "White_Space 覆盖不足:" + std.Number.toString(ws); }; };
 println("Unicode 参照(主流子集,U+0020..U+2FFF):upper " + std.Number.toString(up) + " / lower " + std.Number.toString(lo) + " / White_Space " + std.Number.toString(ws) + " → " + std.Number.toString(bad) + " 处不一致");
 if bad > 0 { println("首个不一致:" + firstBad); assert(false, "unicode mismatch"); 1; };
 0;
