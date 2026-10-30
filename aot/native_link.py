@@ -175,7 +175,7 @@ def qlang_link(ir, binary, stdlib_object, opt=2, shared=False, debug=False):
         return None
     # 共享库(扩展)也可以走 QLang 链接器:--shared 用 PIC + 共享库模板。
     # 只接管"已经拆好"的 IR(`--emit-llvm-split`)。单模块 IR 里自带 runtime,
-    # 再叠 runtime.o 会 duplicate symbol(踩过:gc 套件)。这种留给 Python 侧的 split_file。
+    # 再叠 runtime.o 会 duplicate symbol(踩过:gc 测试套件)。这种留给 Python 侧的 split_file。
     try:
         if not shared and '; split-stdlib' not in Path(ir).read_text(errors='ignore')[:200000]:
             return None

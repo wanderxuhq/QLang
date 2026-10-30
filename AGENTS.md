@@ -35,10 +35,10 @@
 | `aot/value_abi.ql` | `alwaysinline` 热机制叶子(`ql_empty`/`ql_tag`/`ql_word`/`ql_truthy` 等)。 |
 | `stdlib/` | 可移植标准库源码(QLang)、`manifest.json`、打包后的 `bundle.ql`。 |
 | `demo/type_gymnastics.ql` | 419 条类型系统断言;两引擎必须输出一致。 |
-| `aot/tests/` | 原生夹具(`t*.ql` + `.expected`)、模块/扩展/诊断子目录。 |
-| `bootstrapped/tests/` | 前端/AST/源码位置/诊断夹具。 |
+| `aot/tests/` | 原生测试用例(`t*.ql` + `.expected`)、模块/扩展/诊断子目录。 |
+| `bootstrapped/tests/` | 前端/AST/源码位置/诊断测试用例。 |
 | `aot/run_*.py`, `aot/run_v1_tests.sh` | 原生/自举/诊断/模块/赋值/链接等测试驱动。 |
-| `stdlib/run_string_tests.py` | String 专用套件 + 独立 Unicode 预言机。 |
+| `stdlib/run_string_tests.py` | String 专用测试套件 + 独立 Unicode 预言机。 |
 | `difftest.py`, `fuzzexpr.py` | 三方差分与随机表达式模糊测试(本机 difftest 不可裁决,见 §2.7)。 |
 | `src/` | Rust 保留实现与 bootstrap CLI;`tests/*.rs` 是 Rust 宿主测试。 |
 | `docs/` | 交接、证据、路线图、语言契约。入口见 §8。 |
@@ -85,19 +85,19 @@ python3 aot/native_link.py /tmp/p.ll -o /tmp/p
   不 unbox 裸槽、不省略"可证不会失败"的检查、不删死函数,所有值走通用路径(闭包/`__call`);
   给 `tools/link` 时跳过 `opt`、让 `llc -O1` 直接吃 IR。两档**分析照跑**,诊断必须一致;
   release 默认且产物不变。**不做编译期删除**(作者决定,理由与尝试记录见 probes §97–§101)。
-  差分套件:`python3 aot/run_debug_diff_tests.py --compiler <c>`
+  差分测试套件:`python3 aot/run_debug_diff_tests.py --compiler <c>`
   (判据是两档输出逐字节相同)。测量见 probes §95/§96。
 - **快路径(2026-10 起)**:标准库可以只编一次再链接。
   `aot/stdlib_split.py <compiler>` 产出 `target/stdlib/<hash>/{stdlib.o,symbols.tsv,mod.ql,interface.txt}`;
   `stage2 --emit-llvm-split <源码> <runtime> <symbols.tsv> <mod.ql>` 只发用户模块
   (第 5 个参数按内容分派:JSON 对象字面量走 mod.ql,行式文本走旧路径;传 `-` 则回落到
   「从源码分析」的对照路径);`native_link.py --stdlib-object`
-  或环境变量 `QLANG_STDLIB_OBJECT` 链接对象。单夹具构建 ~22s → ~1.7s。
-  两套主门禁会自动构建并启用它。测量见 `docs/unboxed-values-probes.md` §22-§29。
+  或环境变量 `QLANG_STDLIB_OBJECT` 链接对象。单测试用例构建 ~22s → ~1.7s。
+  两套主测试会自动构建并启用它。测量见 `docs/unboxed-values-probes.md` §22-§29。
 - `python3 aot/run_debug_diff_tests.py --compiler target/selfhost/stage2` 跑 debug/release 差分
-  (每个夹具两档各编一次,两档输出必须逐字节相同)。
+  (每个测试用例两档各编一次,两档输出必须逐字节相同)。
 - `native_link.py` 用单线程 LLD,并校验每个静态字符串的 ELF 重定位/字节;不要绕过它直接 clang 链接。
-- 改 `aot/qlangc.ql` 之后必须重建编译器。编译器、源码、夹具必须**同源**(同一版本)。
+- 改 `aot/qlangc.ql` 之后必须重建编译器。编译器、源码、测试用例必须**同源**(同一版本)。
 
 ### 2.3 Native 解释器
 
@@ -109,7 +109,7 @@ target/native-interpreter/interpreter prog.ql
 它把 `bootstrapped/run_file.ql` 编成独立可执行;正常输出被 `Interpreting...` 和
 `Execution complete.` 包裹。
 
-### 2.4 门禁
+### 2.4 测试
 
 ```sh
 python3 aot/run_selfhost_tests.py --compiler target/selfhost/stage2
@@ -119,13 +119,13 @@ python3 aot/run_semantic_diagnostic_tests.py --compiler target/selfhost/stage2
 cargo test --offline          # 14 tests;钉住 Rust 宿主行为,不等于 QLang 前端行为
 ```
 
-- 全量基线 = handoff §3.4 列出的套件(约 23 个 python runner + `run_v1_tests.sh`)
+- 全量基线 = handoff §3.4 列出的测试套件(约 23 个 python runner + `run_v1_tests.sh`)
   外加 `stdlib/run_string_tests.py`、`cargo test`;清单、耗时、环境缺口以那节为准。
-- **验收 = 全量基线 + 本次改动相关套件**。只跑 `interpreter` + `selfhost` 会漏红:
+- **验收 = 全量基线 + 本次改动相关测试套件**。只跑 `interpreter` + `selfhost` 会漏红:
   `probes §11.1` 的两处漂移红恰好被这两套漏掉。
-- 基线必须**同源**:同一 commit 的源码 + 编译器 + boot + 夹具。混源只会制造假失败。
-- 长套件(interpreter ~731s、selfhost ~1573s)用可跟踪的后台任务跑,不要 `&`/`disown`。
-- `run_selfhost_tests.py` / `run_interpreter_tests.py` 支持 `--jobs N` 并行跑独立夹具
+- 基线必须**同源**:同一 commit 的源码 + 编译器 + boot + 测试用例。混源只会制造假失败。
+- 长测试套件(interpreter ~731s、selfhost ~1573s)用可跟踪的后台任务跑,不要 `&`/`disown`。
+- `run_selfhost_tests.py` / `run_interpreter_tests.py` 支持 `--jobs N` 并行跑独立测试用例
   (默认 1)。配合标准库对象,selfhost 全套 ~3 min、interpreter ~6 min;内存是上限
   (单个 `clang -O2` 吃 GB 级),别把 N 开太大。
 
@@ -288,24 +288,24 @@ source.ql
 - `/tmp/wt_head` 是 `394e473` 的 worktree;用完 `git worktree remove`。
 - 最近两笔:
   - `77b806a` 错误模型:契约违反(运行期绑定缺失)⇒ 致命 —— 机制 + 两引擎实测。
-  - `5d0f4e8` 夹具漂移修复 + handoff/probes 文档(含两处 HEAD 上的真红)。
+  - `5d0f4e8` 测试用例漂移修复 + handoff/probes 文档(含两处 HEAD 上的真红)。
 - 账:见 handoff §3.1;头条 IR/机器数 + 输出 `20`。子片 A 落地 **IR −839 / 机器 +6**(已解释:
   `std.__panic` 让 `__panic` 的闭包盒变为可达)。
 - 待办(完整定义见 handoff §4;按依赖排序):
-  - **A(优先)**:子片 A 收尾 —— ①关键套件重跑绿 ②提交/push(已做)③补"运行期缺失绑定 ⇒ 致命"
+  - **A(优先)**:子片 A 收尾 —— ①关键测试套件重跑绿 ②提交/push(已做)③补"运行期缺失绑定 ⇒ 致命"
     的拒绝用例(现有 interpreter harness 是单文件用例,这条需要模块,先看能否加多文件支持)。
   - **B**:统一"判不了的运行期路径"判据 —— 有值形态的答案 ⇒ Error 值(总函数化);
     没有值形态 ⇒ 致命;能静态判定的 ⇒ 编译错误。
     - B1 `StackOverflow` ⇒ 致命(3 站点:`runtime.ql:2040`、`interpreter.ql:1141-1143`、`src/interpreter.rs:765-768`;
-      夹具 `t24` + `difftest` e21/r28;文档 `README:1045/1072/1100`)。半径最小,建议先做。
+      测试用例 `t24` + `difftest` e21/r28;文档 `README:1045/1072/1100`)。半径最小,建议先做。
     - B2 缺失字段/索引 ⇒ `Null`(站点 `runtime.ql:128/202/344/349`、`:287/304`;
-      boot `interpreter.ql:505/832`;夹具 t20/t21/t28/t29/t30/t32/t37/t38/t39/t49/t51 等)。
+      boot `interpreter.ql:505/832`;测试用例 t20/t21/t28/t29/t30/t32/t37/t38/t39/t49/t51 等)。
     - B3 运行期 arity ⇒ 致命(仅"经变量/原生函数调用"时触发;字面量超参已是编译错误,
       参数不足是合法部分应用)。站点 `runtime.ql:1941`;`interpreter.ql:1046/1097/1120`。
     - B4 `/0` 保持 `DivisionByZero` Error 值 —— 改成 IEEE 的候选已评估,要动三方差分预言机与双引擎断言,
       代价不抵,**已定不动**(不要重开)。
   - **C**:用户级 `assert` **已落地**(runtime 定义、`__native` 注册、boot 装同一实现;
-    夹具 `t57_assert` + 两驱动 fatal 用例)。`expect` 仍未做,与 Result/Option 辅助函数一起设计。
+    测试用例 `t57_assert` + 两驱动 fatal 用例)。`expect` 仍未做,与 Result/Option 辅助函数一起设计。
     见 `docs/rust-error-model.md` §3.6。
   - **D**:cause 链 provenance 真 bug(probes §12):`chained.cause.line` 给读取所在的绑定行,
     而不是来源行。先逐语句 bisect 证实/证伪,再修 **`runtime.ql:97-120`** 的守卫。
@@ -325,7 +325,7 @@ source.ql
   - **L**:未验证隔离区(不许当结论用)。
 - 已知红(最后一次记录;重跑确认):`runtime_diag` 的 cause-provenance(`t38:38`)是真 bug;
   `module` 是环境缺口(需 debug 宿主;宿主跑 boot 太慢/超时);`extension` 在 HEAD 上也红。
-  `assignment`/`runtime_diag` 的夹具漂移已在 `5d0f4e8` 修(assignment 应绿;runtime_diag 仍因 D 红)。
+  `assignment`/`runtime_diag` 的测试用例漂移已在 `5d0f4e8` 修(assignment 应绿;runtime_diag 仍因 D 红)。
 
 ## 6. 工作纪律(硬规则)
 
@@ -337,7 +337,7 @@ source.ql
 6. **不动你没读过的代码**;改语义前先问作者。
 7. 每步先报**命中数**,再报行数/指令数;**无收益不背复杂度**(回滚并记录)。
 8. **探针必须带对照组**;观测手段不能是会改变语义的操作。
-9. **验收 = 全量基线 + 相关套件**;**基线必须同源**。
+9. **验收 = 全量基线 + 相关测试套件**;**基线必须同源**。
 10. 不凭表面语法评判类型系统能力;先查 `README.md` 类型系统一节与 `tests/type_system.rs`。
 11. 不确定就不下结论,写进 probes §10 隔离区;下结论前先查 probes。
 12. 长任务必须可跟踪(后台任务,不 `&`/`disown`);不隐藏 stderr;网关输出不 `| tail`。
@@ -353,13 +353,13 @@ source.ql
 ## 7. 陷阱(按血泪排序)
 
 1. **`staticType` ≠ 运行期类型**:`&&`/`||` 被盖章 Boolean 却返回**操作数**;会失败的调用可能返回 Error。
-   信任 `staticType` 的优化必须带 `cannotBeError` 护栏;凡触碰值语义必须跑差分套件。
-   ⑩-3(直读 Boolean payload)已整笔回滚 —— 数字好看但打红差分套件。
+   信任 `staticType` 的优化必须带 `cannotBeError` 护栏;凡触碰值语义必须跑差分测试套件。
+   ⑩-3(直读 Boolean payload)已整笔回滚 —— 数字好看但打红差分测试套件。
 2. **`?Error` 有三种来源**:打印 Error 值(渲染)、对普通值取不存在的域、异类相加的错误被打印。
    **它不是"类型缺失"。**
-3. **混源基线** = 假失败:拿 A 版编译器跑 B 版源码/夹具。
+3. **混源基线** = 假失败:拿 A 版编译器跑 B 版源码/测试用例。
 4. **验收过窄**:只跑 `interpreter`+`selfhost` 会漏红;它们恰好对 `probes §11.1` 的漂移红都绿。
-5. **行号敏感夹具**:`t38` 等按行号断言;改动必须等量替换(2 行换 2 行)。
+5. **行号敏感测试用例**:`t38` 等按行号断言;改动必须等量替换(2 行换 2 行)。
 6. **`check(true, ...)` / 可证真条件会被省略**:计数会下降,不是丢覆盖。
 7. **探针污染**:`"x" + 数字` 在 QLang 里是 `TypeMismatch`;别拿它观测。
 8. **运行期 `std` 过滤**:boot 把 `std.__*` 从用户面滤掉;新宿主通道照此办理。
@@ -385,7 +385,7 @@ source.ql
 | 代码发射 | `aot/qlangc.ql`;直接调用/raw ABI/纯 Number 内联见 `docs/direct-call-optimization.md` |
 | 热机制/ABI 叶子 | `aot/value_abi.ql`;`aot/runtime.c` |
 | stdlib 算法 | `stdlib/*.ql` + `manifest.json` + 重建 `bundle.ql` |
-| 夹具/金文件 | `aot/tests/*.ql` / `.expected`;`bootstrapped/tests/*` |
+| 测试用例/金文件 | `aot/tests/*.ql` / `.expected`;`bootstrapped/tests/*` |
 | 测试驱动 | `aot/run_*.py`;`stdlib/run_string_tests.py`;`difftest.py`;`fuzzexpr.py` |
 | 语言规范/类型系统 | `README.md`(类型系统在 767–970 行左右) |
 | 模块语义 | `docs/module-semantics.md` |
@@ -419,7 +419,7 @@ target/selfhost/stage2 --emit-llvm aot/tests/t20_native_bridge.ql aot/runtime.ql
 python3 aot/native_link.py /tmp/x.ll -o /tmp/x && /tmp/x
 diff <(/tmp/x) aot/tests/t20_native_bridge.expected
 
-# 门禁
+# 测试
 python3 aot/run_selfhost_tests.py --compiler target/selfhost/stage2
 python3 aot/run_interpreter_tests.py --compiler target/selfhost/stage2 --interpreter target/native-interpreter/interpreter
 python3 aot/run_assignment_tests.py --compiler target/selfhost/stage2 --interpreter target/native-interpreter/interpreter

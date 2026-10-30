@@ -94,7 +94,7 @@ boot `bootstrapped/interpreter.ql:1046/1097/1120`。
   否则进菱形 ⇒ `:838` `__err("UndefinedVariable")`、`:846` `ql_empty` ⇒ `Uninitialized`。
   ⇒ 实测判据(§1.5/§1.6/§1.7)与代码里的 `sameBody` + 前端定值检查**一一对应**。
 - **静态未绑定名已是编译错误**:`aot/qlangc.ql:824`(`undeclared name`)、`:941`
-  (`assignment to undeclared name`);专门套件 `aot/run_semantic_diagnostic_tests.py:19-21`
+  (`assignment to undeclared name`);专门测试套件 `aot/run_semantic_diagnostic_tests.py:19-21`
   (断言到行列);`aot/README.md:235`。
 
 ## 5. 已实测:工具链与工程事实
@@ -113,7 +113,7 @@ boot `bootstrapped/interpreter.ql:1046/1097/1120`。
    不是「按 251/320 去赚」。旧记 `retfuel=170` 已过时(实测 188)。
 2. **`difftest` 在本机不可作裁决**:`cargo build` 已热(0.12s)而
    `cargo run --quiet -- _df_boot.ql` **120 秒超时** ⇒ 卡的不是构建,是
-   「Rust 宿主解释执行 boot、boot 再跑套件」。替代:用 native 编译的 boot(`/tmp/bp_head`)。
+   「Rust 宿主解释执行 boot、boot 再跑测试套件」。替代:用 native 编译的 boot(`/tmp/bp_head`)。
    difftest 会在仓库根留下 `_df_boot.ql`(需清理)。
 3. **工作树的 boot 编不出来**:`CompileError: …: undeclared name: __panic`
    (`bootstrapped/environment.ql:74`)⇒ 子片 A 的机制尚未落地。
@@ -157,9 +157,9 @@ boot `bootstrapped/interpreter.ql:1046/1097/1120`。
 | `Uninitialized` | `qlangc.ql:846`(运行期那条);`environment.ql:49`;`parser.ql:141`(静态那条);`src/environment.rs:34` |
 | `IndexOutOfBounds` | `runtime.ql:287,304`;`interpreter.ql:505,832` |
 
-## 7. 夹具/预言机清单(改动会波及谁)
+## 7. 测试用例/预言机清单(改动会波及谁)
 
-| kind | 夹具 / 金文件 / 预言机 |
+| kind | 测试用例 / 金文件 / 预言机 |
 |---|---|
 | `DivisionByZero` | `aot/tests/{t14_interpolation,t25_numeric,t36_lazy_modules}.ql`;**`aot/run_module_tests.py:53,58`(native 与 boot 都断言 rc=1 + stderr)**;**`fuzzexpr.py:14-17,44-45`(三方预言机)** |
 | `UndefinedField` | `t20_native_bridge.expected`,`t21_assignments.expected`,`t28`,`t37`,`t38`,`t39`,`t49`,`t51`;`bootstrapped/tests/native_source_bridge.ql`;`stdlib/object.ql`,`stdlib/bundle.ql` |
@@ -196,7 +196,7 @@ boot `bootstrapped/interpreter.ql:1046/1097/1120`。
    (`README.md:809`,`:867-872`);缺的只是**值层签名的类型参数推断/实例化**
    (`aot/types.ql:987` `typeParamsUnknown` 是其保守回退)。
 8. ~~「`?` 的形态没定」~~ —— 后缀 `?` 早已实现(§4)。
-9. ~~「静态可判 ⇒ 编译错误还没做」~~ —— 未绑定名已做且有专门套件(§4)。
+9. ~~「静态可判 ⇒ 编译错误还没做」~~ —— 未绑定名已做且有专门测试套件(§4)。
 10. ~~「仓库根的 `_b.ql` 是项目文件」~~ —— 是 difftest 之类工具留下的临时文件(§5.2)。
 
 ## 10. 明确未验证(隔离区,不许当结论用)
@@ -219,10 +219,10 @@ git worktree add -f /tmp/wt_head HEAD
 cd /tmp/wt_head && python3 aot/run_<suite>.py --compiler /tmp/o_head --interpreter /tmp/bp_head
 ```
 
-日志 `/tmp/sweep3/`。**注**:第一遍(`/tmp/sweep2`)把 HEAD 编译器与**工作树**夹具混着跑,
+日志 `/tmp/sweep3/`。**注**:第一遍(`/tmp/sweep2`)把 HEAD 编译器与**工作树**测试用例混着跑,
 产生的失败全部是假的(`/tmp/o_head` 编不动工作树里带 `__panic` 的 boot)⇒ **混源会造假失败**。
 
-| 套件 | rc | 耗时 | 套件 | rc | 耗时 |
+| 测试套件 | rc | 耗时 | 测试套件 | rc | 耗时 |
 |---|---|---|---|---|---|
 | array | 0 | 107s | module | **1** | 1s(缺 Rust 二进制) |
 | assignment | **1** | 41s | numeric | 0 | 226s |
@@ -241,17 +241,17 @@ cd /tmp/wt_head && python3 aot/run_<suite>.py --compiler /tmp/o_head --interpret
 ### 11.1 两处在 HEAD 上真实变红(不是环境)
 
 - `assignment`:`CompileError: …/exits.ql:1:46: reading uninitialized variable: x`
-  —— 套件**生成的**夹具仍按「未初始化是运行期值」写,而编译器已**静态拒绝**(§1.5、§4)。
+  —— 测试套件**生成的**测试用例仍按「未初始化是运行期值」写,而编译器已**静态拒绝**(§1.5、§4)。
 - `runtime_diag`:`CompileError: aot/tests/t38_runtime_diagnostics.ql:22:30: type mismatch:
   value of type String does not match the annotated type Number`
-  —— 夹具停留在「注解不强制」的时代,而编译器已强制。
+  —— 测试用例停留在「注解不强制」的时代,而编译器已强制。
 
-⇒ 二者与 §9 的「漂移的断言」同源:**编译器变严了,夹具没跟上**。长期未暴露,是因为常规门禁
+⇒ 二者与 §9 的「漂移的断言」同源:**编译器变严了,测试用例没跟上**。长期未暴露,是因为常规测试
 只有 `interpreter` + `selfhost`(两者都绿)⇒ **验收口径过窄**。
 
 ### 11.2 两条口径(由本节产生)
 
-1. **验收 = 全量基线 + 与该改动相关的套件**;只跑两套会漏掉 §11.1 这类红。
+1. **验收 = 全量基线 + 与该改动相关的测试套件**;只跑两套会漏掉 §11.1 这类红。
 2. **基线必须同源**(编译器与源码同一版本);跨版本混跑只会制造假失败(sweep2 的教训)。
 
 ## 12. 已实测:**cause 链的位置不持久**(与 runtime 自己的注释矛盾)
@@ -287,7 +287,7 @@ location** or previous call paths. Only failure edges allocate.」—— 而 `:9
 `check(first.line == 7 && chained.cause.line == 3, "provenance survives allocations")`
 在 :21 通过、在 :38(其后有多次造错与 3 万次分配)**失败** ⇒ 这就是 §11.1 里
 `runtime_diag` 修掉注解编译错误后露出的**第二层红** —— 它不是本次改动造成的,
-而是被第一次真正执行到。**它属于错误模型本体**(provenance 语义),不是夹具笔误。
+而是被第一次真正执行到。**它属于错误模型本体**(provenance 语义),不是测试用例笔误。
 
 ## 13. 子片 A(契约违反 ⇒ 致命)的机制与实测数字
 
@@ -311,7 +311,7 @@ location** or previous call paths. Only failure edges allocate.」—— 而 `:9
 |---|---|
 | 编译器自举 | rc=0 ✓ |
 | 工作树 boot | **首次编得出**(此前是 `CompileError: undeclared name: __panic`)✓ |
-| 判别夹具(模块条件导出 ⇒ 运行期缺失赋值) | native:rc=1 + `UndefinedVariable: Undefined variable: absent` ✓;boot:rc=1 + 带源位置的同一消息 ✓ |
+| 判别测试用例(模块条件导出 ⇒ 运行期缺失赋值) | native:rc=1 + `UndefinedVariable: Undefined variable: absent` ✓;boot:rc=1 + 带源位置的同一消息 ✓ |
 | t20 四步 | 探针 528/92 ✓、`clang` 0 error ✓、输出 `20` ✓、动态除数 `DivisionByZero` ✓ |
 | 数字 | IR 188 577 → **187 738(−839)**;机器 125 473 → **125 479(+6)** |
 
@@ -334,7 +334,7 @@ println(isError(fail()));                                        // true
 ```
 
 ⇒ `Any`/`Result(Number)` 存原 Error;`Number` 仍失败(在函数内是可观察的 `TypeCheck` 值;
-顶层绑定失败则按顶层未处理错误 exit 1)。夹具 `t56_result_annotations` 逐行匹配两引擎。
+顶层绑定失败则按顶层未处理错误 exit 1)。测试用例 `t56_result_annotations` 逐行匹配两引擎。
 
 ### 14.2 Option 的类型与 `?`
 
@@ -347,7 +347,7 @@ println(none());                          // null
 ```
 
 ⇒ `None` = `null`;Option 函数里的 `?` 传播 `null`;Error 不是 Option(交返回边报 `TypeCheck`)。
-夹具 `t56` 的 None/Some/Error 三态在 native/boot 上一致。
+测试用例 `t56` 的 None/Some/Error 三态在 native/boot 上一致。
 
 ### 14.3 `?` 上下文约束
 
@@ -373,12 +373,12 @@ println("after");
 | boot | rc=1,stdout 到 `before` 为止,stderr=`AssertionFailed: boom` |
 
 成功侧:`assert(true, "ok")` 返回 `null`;字符串/数组 truthy、对象消息均可用
-(夹具 `t57_assert`)。实现是 runtime 的 `assert`,通过 `__native(assert, "assert", false)`
+(测试用例 `t57_assert`)。实现是 runtime 的 `assert`,通过 `__native(assert, "assert", false)`
 让 boot 直接调用同一份实现;`assert` 已进 `moduleGlobalNames`,导入模块/函数内可见。
 
 ## 15. 已实测:直接调用与纯 Number 内联(2026-10-26)
 
-同源 `target/selfhost/stage2` 形态;判别夹具 `t58_direct_calls` / `t59_inline_pure`。
+同源 `target/selfhost/stage2` 形态;判别测试用例 `t58_direct_calls` / `t59_inline_pure`。
 
 ```qlang
 // direct: 不可变 leaf,无参数注解,实参均 cannotBeError
@@ -402,7 +402,7 @@ while j < 5 { t = pure(j, 1); j = j + 1; };
 
 ⇒ 直接调用静态 **−19**,但循环体不再进入 771 条静态指令的通用分派体;纯 Number
 内联 **−195**,函数体/闭包被删掉,循环体成为 raw `fadd`。20M 次微基准本机用户态:
-内联约 **0.05–0.08s**,通用分派约 **36s**(后台套件争用,仅量级参考)。
+内联约 **0.05–0.08s**,通用分派约 **36s**(后台测试套件争用,仅量级参考)。
 
 **失效条件(已加判别)**:赋值、重声明、export、value use(别名)、参数注解、
 参数不足/超参、实参可能为 Error、body 有调用、body 有自由变量、非 Number 运算。
@@ -413,7 +413,7 @@ call/array/object/numeric/assignment/diagnostic ALL CHECKS PASS。
 
 ## 16. 已实测:多调用点 raw 直接函数(P1,2026-10-26)
 
-判别夹具 `t60_raw_direct`。形状:注解 `Number` 参数、无参数写入、leaf、绑定无 value
+判别测试用例 `t60_raw_direct`。形状:注解 `Number` 参数、无参数写入、leaf、绑定无 value
 use/重声明/赋值/export,且**每个**调用点 arity 精确、每个实参 `staticType == Number`
 且 `cannotBeError == true`。
 
@@ -449,7 +449,7 @@ value use、部分应用、参数写、循环内定义、零参、递归、Error
 
 ## 17. 已实测:裸返回与 known-safe 传播(P2,2026-10-26)
 
-夹具 `t61_known_safe`。核心形状:
+测试用例 `t61_known_safe`。核心形状:
 
 ```qlang
 let add = (a: Number, b: Number): Number -> a + b;
@@ -478,13 +478,13 @@ while i < 5000000 { s = add(s, i); i = i + 1; };
 
 ## 18. 已实测:放宽 leaf(P3,2026-10-26)
 
-夹具 `t62_leaf_calls`。规则:自调用/后定义函数排除;body 内局部函数、源序在前的
+测试用例 `t62_leaf_calls`。规则:自调用/后定义函数排除;body 内局部函数、源序在前的
 函数允许;`Import` 仍禁止。
 
 | 形状 | 机器指令 | 用户态 |
 |---|---:|---:|
-| `compose` 夹具(含自别名/互递归;P2) | 128,016 | — |
-| 同上(P3;最终夹具) | **127,881** | — |
+| `compose` 测试用例(含自别名/互递归;P2) | 128,016 | — |
+| 同上(P3;最终测试用例) | **127,881** | — |
 | 5M 次 `s = s + compose(1,i)` 旧 | 125,951 | 9.074s |
 | 同上(P3) | **125,762** | **0.039s** |
 
@@ -551,7 +551,7 @@ tag/长度判断,把循环不变部分提出去,并省掉调用与实参缓冲�
 自举前端(编译 `aot/qlangc.ql`,lexer/parser 为主):**46.62s → 42.97s CPU(−7.8%)**。
 计数器:`; index-fast: N`(空程序 31 —— 全是 stdlib 的取元素点;自举时更多)。
 
-代价:每个启用点约 +20 条 IR(含冷回落块),整程序净 +200 条指令;夹具输出不变,
+代价:每个启用点约 +20 条 IR(含冷回落块),整程序净 +200 条指令;测试用例输出不变,
 `stage2/stage3` IR 固定点成立。
 
 
@@ -565,7 +565,7 @@ tag/长度判断,把循环不变部分提出去,并省掉调用与实参缓冲�
 | 逐行 println | 9.97s |
 | 分块写出 | **9.75s(−2.2%)** |
 
-输出**逐字节相同**(空程序 + t20/t19/t30/t61/t62 五个夹具全 `cmp` 通过)⇒ 产物
+输出**逐字节相同**(空程序 + t20/t19/t30/t61/t62 五个测试用例全 `cmp` 通过)⇒ 产物
 完全不变,只是 syscall 数量变了。
 
 **预编译 stdlib 前缀(S-3)可行性**:比较 `define i32 @main(` 之前的全部代码,
@@ -647,7 +647,7 @@ tag/长度判断,把循环不变部分提出去,并省掉调用与实参缓冲�
    表现为 `internal: proven-safe call is not directly dispatched`。
 
 
-## 26. 标准库对象化:一次编译,按哈希缓存,逐夹具链接(2026-10-27)
+## 26. 标准库对象化:一次编译,按哈希缓存,逐测试用例链接(2026-10-27)
 
 前两节把 runtime/stdlib 的文本变成了与程序无关的固定前缀;这一节把它**编译一次**:
 
@@ -656,7 +656,7 @@ tag/长度判断,把循环不变部分提出去,并省掉调用与实参缓冲�
   + `runtime.ql` + `stdlib/bundle.ql` 的哈希),并落一份 `symbols.json`(声明文本);
 - `aot/native_link.py`:新增 `--stdlib-object` / `QLANG_STDLIB_OBJECT`。开启时把用户 IR
   里属于 stdlib 的 `define`/全局删掉、只给被引用的补 `declare`,然后和 `stdlib.o` 一起链接;
-- 两套门禁自动构建并启用它(带缓存,失败则自动回落到单模块链接)。
+- 两套测试自动构建并启用它(带缓存,失败则自动回落到单模块链接)。
 
 关键取舍:**`internal alwaysinline` 的 value-ABI 叶子(`ql_tag`/`ql_empty`/`ql_word`/
 `ql_byte`/`ql_truthy`)两个模块各留一份**。它们不跨对象边界,调用点仍然内联;否则每个
@@ -664,13 +664,13 @@ tag 检查都会变成一次真调用(+1,038 条指令/程序)。
 
 | 度量 | 单模块 | 拆开 + 链接 |
 |---|---:|---:|
-| 单夹具链接(clang -O2 + lld) | 12.3s | **1.5s** |
+| 单测试用例链接(clang -O2 + lld) | 12.3s | **1.5s** |
 | t20 二进制机器指令数 | 126,635 | **126,599**(−36) |
 | selfhost 全套(`--jobs 3`) | ~20 min | **6.3 min** |
 | interpreter 全套(`--jobs 3`) | ~8 min | **6.2 min** |
 | stdlib 对象 | — | 280 函数 + 1,573 全局 |
 
-夹具输出逐条不变(6 个夹具逐字节比对 + 两套门禁全绿)。IR 仍是逐字节相同的单模块文本
+测试用例输出逐条不变(6 个测试用例逐字节比对 + 两套测试全绿)。IR 仍是逐字节相同的单模块文本
 ——编译器一行没改,只有链接路径变了,所以自举固定点不受影响。
 
 
@@ -691,17 +691,17 @@ tag 检查都会变成一次真调用(+1,038 条指令/程序)。
 
 | 度量 | 单模块 | 前端也拆 |
 |---|---:|---:|
-| 单夹具前端 | 9.7s CPU / 188k 行 IR | **5.7s / 1.7k 行** |
-| 单夹具总构建(前端+链接) | ~22s | **~7s** |
+| 单测试用例前端 | 9.7s CPU / 188k 行 IR | **5.7s / 1.7k 行** |
+| 单测试用例总构建(前端+链接) | ~22s | **~7s** |
 | t20 二进制机器指令 | 126,635 | 126,599 |
 | selfhost 全套(`--jobs 3`) | 6.3 min | 6.5 min |
 | interpreter 全套(`--jobs 3`) | 6.2 min | 8.2 min |
 
-两套门禁全绿;自举固定点在 split 模式下逐字节成立(用 native 编译器手工验证:
+两套测试全绿;自举固定点在 split 模式下逐字节成立(用 native 编译器手工验证:
 `stage2 → IR_a → link → stage3 → IR_b`,`IR_a == IR_b`)。
 
 **注**:对「用户代码本身就很大」的程序(例如编译器自己,830k 行),拆分不减小 IR —— 库的
-那部分本来就不是大头;收益主要体现在小程序与套件迭代上。
+那部分本来就不是大头;收益主要体现在小程序与测试套件迭代上。
 
 
 ## 28. 分析接口缓存:连 parse/分析也不做了(2026-10-27)
@@ -720,13 +720,13 @@ tag 检查都会变成一次真调用(+1,038 条指令/程序)。
 
 | 度量 | 单模块 | 对象 + 接口 |
 |---|---:|---:|
-| 单夹具前端(t20) | 9.7s | **0.45s(17×)** |
-| 单夹具整条构建(前端+链接) | ~22s | **~1.7s(13×)** |
+| 单测试用例前端(t20) | 9.7s | **0.45s(17×)** |
+| 单测试用例整条构建(前端+链接) | ~22s | **~1.7s(13×)** |
 | selfhost 全套(`--jobs 3`) | 2h(串行)/ 6.3min | **2.3min** |
 | interpreter 全套(`--jobs 3`) | — | **5.6min** |
 
 **等价性验证**:同一编译器、同一输入,`-`(从源码分析)与接口缓存两条路径发出的代码,
-把局部名字(`%tN`/`bbN`/`ql_fnN`/`.strN`)归一化之后**逐行相同**;两套门禁全绿;
+把局部名字(`%tN`/`bbN`/`ql_fnN`/`.strN`)归一化之后**逐行相同**;两套测试全绿;
 自举固定点在缓存模式下逐字节成立。
 
 
@@ -746,7 +746,7 @@ tag 检查都会变成一次真调用(+1,038 条指令/程序)。
 | 共享盒 + `__get_index` 读表 | 3.030s(**更慢,已否决**) |
 | 共享盒 + 叶子读表 | **1.800s(−17%)** |
 
-t20 二进制机器指令数不变(126,713);selfhost / interpreter 两套门禁全绿;固定点成立。
+t20 二进制机器指令数不变(126,713);selfhost / interpreter 两套测试全绿;固定点成立。
 判别基准 `aot/bench/b_strat.ql`。
 
 
@@ -775,7 +775,7 @@ t20 二进制机器指令数不变(126,713);selfhost / interpreter 两套门禁�
 必须链接**同一个** stdlib 对象,否则量的是库的差异。
 
 代价:每个符合条件的函数多一个包装入口(用户函数多的程序 IR 会涨,编译器自身 +7%);
-产物机器指令净 −0.5%。门禁:selfhost / interpreter 全绿(各 ~10min / ~8min,当轮宿主较慢),
+产物机器指令净 −0.5%。测试:selfhost / interpreter 全绿(各 ~10min / ~8min,当轮宿主较慢),
 自举固定点逐字节成立。
 
 
@@ -794,7 +794,7 @@ t20 二进制机器指令数不变(126,713);selfhost / interpreter 两套门禁�
 | 只加 `ql_alloc noalias` | 124,528(−513) |
 | 再加内存效果 | **124,505(−536,−0.43%)** |
 
-b_chars 用户模块不变(126,015,用户代码不直接调这些 C 叶子);selfhost / interpreter 两套门禁
+b_chars 用户模块不变(126,015,用户代码不直接调这些 C 叶子);selfhost / interpreter 两套测试
 全绿;固定点成立。
 
 **结论**:小但免费(两处声明、零 IR 增长),留下。但"重复 env load 提出循环"的期待不成立 ——
@@ -817,9 +817,9 @@ LLVM 的 BasicAA 本来就能用同帧固定偏移区分不同绑定,SROA 也把
 | 静态调用点 | 481 | 892 |
 | 动态调用点 | 24,079 | 24,431 |
 | 动态占比 | 98.0% | 96.5% |
-| 12 个夹具机器指令合计 | 1,610,839 | 1,610,809(−30) |
+| 12 个测试用例机器指令合计 | 1,610,839 | 1,610,809(−30) |
 
-**结论:无收益,已回滚。** 机器指令只在噪声范围里动,输出逐字节一致(13 个夹具 A/B)。
+**结论:无收益,已回滚。** 机器指令只在噪声范围里动,输出逐字节一致(13 个测试用例 A/B)。
 
 **真正的诊断(这是这一节的收获)**:`directCallTarget` 的拒绝分布(放宽 leaf 后):
 
@@ -852,8 +852,8 @@ noinfo=2776  args=1492  notable=180  成功 direct=529
 | 自举(编译 qlangc.ql) | 64,024 / 64,202 ms | **62,130 / 59,557 ms** |
 | 中位数 | 64.1s | 60.8s(−5.2%) |
 
-验收:自举固定点逐字节成立;scoped_module / lazy_module 两套门禁全绿;7 个带 `.expected`
-的夹具输出一致。
+验收:自举固定点逐字节成立;scoped_module / lazy_module 两套测试全绿;7 个带 `.expected`
+的测试用例输出一致。
 
 下一笔同性质的合并:`collectAssignedNames`(赋值/导出/重声明)与 `collectImportedNames`
 (import 绑定的名字)也是对同一棵树的两趟,可以并成一次。
@@ -868,7 +868,7 @@ noinfo=2776  args=1492  notable=180  成功 direct=529
 **合并时踩到的坑(值得记)**:`buildInlineCandidates` 开头有一句 `importedNames = {};`
 再自己扫一遍。删掉扫描后,这句清空把 `main` 里刚扫好的表清掉了,于是"import 覆盖同名槽"
 的判据丢失 —— `t60_raw_direct` 的 `shadow` 被错当成 raw 目标,输出从 102 变成 3。
-自举门禁抓到;修法是删掉那句清空并注释原因。
+自举测试抓到;修法是删掉那句清空并注释原因。
 
 | 度量 | 结果 |
 |---|---|
@@ -899,7 +899,7 @@ noinfo=2776  args=1492  notable=180  成功 direct=529
 |---|---|
 | 结构 | 3 个 walker → 1 个;干净函数体 4 遍 → 1 遍,dirty 2 遍 → 1 遍 |
 | 墙钟/CPU | 本机噪声 ±30%(同一二进制两次量到 30.7s / 39.5s),**测不出差异** |
-| 验收 | 自举固定点逐字节成立;selfhost 绿;t58/t59/t60/t61/t62 等 10 个夹具输出一致 |
+| 验收 | 自举固定点逐字节成立;selfhost 绿;t58/t59/t60/t61/t62 等 10 个测试用例输出一致 |
 
 教训:遍历合并必须保留原来的**提前退出位置**;把"少走一趟"换成"每趟走得更全"是负收益。
 
@@ -970,7 +970,7 @@ known-safe 证明,返回值拿到 `String` 静态类型也消不掉调用点的 
 同一输入重复跑,数字完全相同;改动遍历后应看到它下降。
 
 - 自举(编译 qlangc.ql,含 15 个 import 模块):**1,418,787**
-- 小夹具(t20):6,936 量级
+- 小测试用例(t20):6,936 量级
 
 分析侧(types.ql)也加了同样的计数器,但它在多模块程序上统计不稳(同一程序时而为 0),
 所以**没有**打进报告行,只在 `typeVisitReport()` 里留着;要用的话先查清为什么。
@@ -1011,7 +1011,7 @@ Block 自己处理),所以试着收窄成"只扫语句层 + 下探 Let/Export �
 
 顺带:第一版收窄太狠,漏了 `let imported = import ./modules/extrema.ql;`(import 作为
 Let 的**值**),`t26_extrema` 直接抓红 —— 这类"看起来是语句、其实也能是表达式"的构造,
-在收窄前必须先查夹具里有没有反例。
+在收窄前必须先查测试用例里有没有反例。
 
 
 ## 41. `reserveModuleBindings` 收窄到语句层(2026-10-27,已落地)
@@ -1034,9 +1034,9 @@ Let 的**值**),`t26_extrema` 直接抓红 —— 这类"看起来是语句、�
    (运行时帧多一个槽、偏移 +64、169 个函数变化);我把这当成"原因不明"回滚了一次。真正
    定位靠的是**登记名字轨迹**对照:多出来的三个名字正是新源码自己的 `kind`/`stmt`/
    `reserveBindingsInValue`。编译器编译自己时,"源码变了 ⇒ 产物变"是必然的。
-2. 收窄前先扫夹具反例:`let x = import "p";` 这类"语句位置看起来、其实是表达式"的构造。
+2. 收窄前先扫测试用例反例:`let x = import "p";` 这类"语句位置看起来、其实是表达式"的构造。
 
-验收:42 个夹具里 41 个输出一致,`t37_extensions` 输出与改动前**逐字相同**(Android dlopen
+验收:42 个测试用例里 41 个输出一致,`t37_extensions` 输出与改动前**逐字相同**(Android dlopen
 环境缺口,非本次引入);selfhost / interpreter 全绿;自举固定点逐字节成立。
 
 
@@ -1141,21 +1141,21 @@ selfhost 全绿;自举固定点逐字节成立。
 | 链接器 | `aot/link.ql`,QLang 驱动 opt/llc/ld.lld;clang 只用于一次性编译 runtime.c(缓存) |
 | 校验器 | `aot/verify.ql`,纯 QLang 解析 ELF;失败则不发布(保留旧产物) |
 | 工具构建 | `aot/toolchain_build.py`(Python,**只做引导**:用当前编译器 + native_link.py 产出 `target/tools/*`) |
-| 门禁 | `run_selfhost_tests.py` 在标准库对象存在时优先用 `target/tools/link` |
+| 测试 | `run_selfhost_tests.py` 在标准库对象存在时优先用 `target/tools/link` |
 
 | 度量 | Python 链接 | QLang 链接 + 校验 |
 |---|---:|---:|
 | 单次链接(小 IR) | ~1.1s | ~2.4s |
-| **selfhost 门禁全套(40+ 夹具,--jobs 3)** | 212–616s(随机器负载) | **295s** |
+| **selfhost 测试全套(40+ 测试用例,--jobs 3)** | 212–616s(随机器负载) | **295s** |
 
 **代价与取舍**:校验器每次链接要重新解析 ELF(符号表 + 重定位,约 0.5s)+ 逐条比对,
-所以单次构建从 ~1.0s 变成 ~2.4s。但**它把 Python 从构建路径里彻底移除**,而且门禁总耗时仍
+所以单次构建从 ~1.0s 变成 ~2.4s。但**它把 Python 从构建路径里彻底移除**,而且测试总耗时仍
 在合理区间(295s)。如果以后要恢复单次速度,方向是:校验按需(CI 默认开、本地 `--no-verify`),
 或者把符号/重定位解析做成 C 叶子。
 
 踩到的坑:校验器最初读对象的 `stdlib.ll`(7.3MB)来取期望值 —— 每次链接多花十几秒
-(门禁 1245s)。现在对象构建时顺手写一份 `strings.tsv`(`.strboxN<TAB>hex`),校验器读它,
-门禁回到 295s。
+(测试 1245s)。现在对象构建时顺手写一份 `strings.tsv`(`.strboxN<TAB>hex`),校验器读它,
+测试回到 295s。
 
 ### 45.1 让所有 runner 都走 QLang 链接器(2026-10-27)
 
@@ -1163,7 +1163,7 @@ selfhost 全绿;自举固定点逐字节成立。
 并且 IR 带 `; split-stdlib` 标记,就用 QLang 链路;否则回落到 Python(单模块 IR 需要
 `split_file`,那是 Python 侧的职责)。
 
-踩到的坑:第一版没有检查 split 标记,gc 套件用的是**单模块 IR**(自带 runtime),再叠
+踩到的坑:第一版没有检查 split 标记,gc 测试套件用的是**单模块 IR**(自带 runtime),再叠
 `runtime.o` 就 `duplicate symbol: __panic_exit / __cold_located_error / .strbox7`。
 加上标记检查后 gc/array/object 全绿(各 ~20s)。
 
@@ -1232,8 +1232,8 @@ strings 表、分析接口、目标文件,全部 QLang(shell 只用 `sha256sum`/
 | 标准库对象构建 | `target/tools/stdlib --compiler … --cache-root …` | 67s,四个产物与 Python 版**逐字节相同** |
 | t20 构建 | `target/tools/build aot/tests/t20_native_bridge.ql -o …` | 输出与 `.expected` 一致 |
 | **重建编译器** | `target/tools/build aot/qlangc.ql -o /tmp/stage2_pure …` | **3m53s**,产物可用(能正常发 IR) |
-| selfhost 门禁(用 QLang 对象) | `run_selfhost_tests.py --jobs 3` | **206s 全绿** |
-| interpreter 门禁(用 QLang 对象) | `run_interpreter_tests.py --jobs 3` | 全绿(该轮机器很吵:1698s) |
+| selfhost 测试(用 QLang 对象) | `run_selfhost_tests.py --jobs 3` | **206s 全绿** |
+| interpreter 测试(用 QLang 对象) | `run_interpreter_tests.py --jobs 3` | 全绿(该轮机器很吵:1698s) |
 | 自举固定点 | stage2 → tools/link → stage3 | **IR 逐字节相同** |
 
 **仍然用 Python 的地方**(都是"引导/回落",不是工具链路径):`toolchain_build.py` 首次构建
@@ -1277,12 +1277,12 @@ nm -D plugin-O2.so | grep qlang_extension
   0000000000011f10 T qlang_extension_init_v1
 ```
 
-扩展套件的**构建段全过**:`PASS compiled hosts before extensions existed`、
+扩展测试套件的**构建段全过**:`PASS compiled hosts before extensions existed`、
 `PASS independent extension: plugin / second / failure / cycle`(含故意坏 ABI、缺入口的变体)。
 
 **运行**:在本机必然失败 —— Android linker namespace 不允许 `dlopen` `/tmp/*.so`
 (`library ".../plugin-O0.so" ... is not accessible for the namespace`)。这是环境限制,
-与构建无关;套件里那 6 条 FAIL 全是 dlopen 失败导致的。
+与构建无关;测试套件里那 6 条 FAIL 全是 dlopen 失败导致的。
 
 **配置文件的教训(第二次)**:模板选择必须显式。现在 cfg 用 `exe ` / `shared ` 前缀区分,
 `link.ql` 按前缀取,不再依赖"最后一条非注释行"——上一版就是因为多了一条共享库模板,
@@ -1327,21 +1327,21 @@ Python 的 `struct.unpack` 同一件事只要 0.5 毫秒。
 **实现**:`aot/known_values.ql`,开关 `--static-scan`(默认关)。两遍遍历:第一遍收绑定形状、
 写入、逃逸;第二遍给每个调用点定性。本切片只统计,不改发射。
 
-**A/B**:同一夹具开关两版 IR 逐字节相同(只多一行 `; staticcall:`);扫描开销 10.48s → 10.62s(+1.4%);
+**A/B**:同一测试用例开关两版 IR 逐字节相同(只多一行 `; staticcall:`);扫描开销 10.48s → 10.62s(+1.4%);
 stage2/stage3 固定点成立。
 
 **命中数**(HEAD 的 stage2 就是旧源产物,先按「旧编译器 + 去掉新叶子的临时 runtime」两段式重建):
 
 | 程序 | 调用点 | 可静态(绑定) | 可静态(对象字段) | 拒绝 |
 |---|---|---|---|---|
-| 夹具 t28_objects | 129 | 13 | 0 | chain=49 shape=67 |
-| 夹具 t49_raw_object_index | 32 | 15 | 0 | chain=6 shape=8 notfn=3 |
-| 夹具 t16_functions | 31 | 11 | 0 | shape=17 notfn=2 partial=1 |
+| 测试用例 t28_objects | 129 | 13 | 0 | chain=49 shape=67 |
+| 测试用例 t49_raw_object_index | 32 | 15 | 0 | chain=6 shape=8 notfn=3 |
+| 测试用例 t16_functions | 31 | 11 | 0 | shape=17 notfn=2 partial=1 |
 | stdlib 库自身 | 393 | **285** | 0 | shape=48 chain=35 notobj=12 notfn=10 escaped=3 |
 
 **结论**:库里 285/393(73%)的调用点是「同程序不可变函数绑定」,而今天的直调只对**用户程序**开着
 (`qlangc.ql:3248` 的 `allowDirectUserCalls` 只在用户程序发射期间为真)—— 库内直调今天一个都没有。
-用户侧的收益主要不在对象字面量(夹具里 field=0),而在 `std.X.Y` 链(chain)和绑定直调。
+用户侧的收益主要不在对象字面量(测试用例里 field=0),而在 `std.X.Y` 链(chain)和绑定直调。
 
 **坑/注意**:`knownScan` 对空 statements 直接返回(对象化模式下库程序是空壳,否则会打印
 `sites=0` 的假条目);计数按 label 累加,跨程序保留,绑定表每个程序开头清空。
@@ -1366,7 +1366,7 @@ stage2/stage3 固定点成立。
 arity/部分应用;这与 "hosting runtime 的派发器拥有 arity 与 Error 策略" 的既有约定一致。
 
 **验收**:`demo/type_gymnastics.ql` 在两个引擎都是 **419/419**(迁移约 20 处类型拼写);
-`stage2/stage3` IR 固定点成立;selfhost 套件 ALL PASS。`TypedArray(Number)` /
+`stage2/stage3` IR 固定点成立;selfhost 测试套件 ALL PASS。`TypedArray(Number)` /
 `SizedArray(3)` / `TypedSizedArray(3, Number)` / `Tuple([Number, String])` 的正反例在两引擎一致。
 
 **顺带发现(先于本切片,未修)**:`run_interpreter_tests.py` 在 HEAD 上因链接重复符号失败
@@ -1388,7 +1388,7 @@ arity/部分应用;这与 "hosting runtime 的派发器拥有 arity 与 Error �
 | 库对象 IR 字节 | 7,964,680 | 7,934,189 |
 | `clang -O2` 后 AArch64 指令 | 131,889 | **131,084(−805,−0.6%)** |
 
-验收:stage2/stage3 固定点成立;demo/type_gymnastics 419/419;selfhost 套件 ALL PASS。
+验收:stage2/stage3 固定点成立;demo/type_gymnastics 419/419;selfhost 测试套件 ALL PASS。
 
 **剩下 ~265 个点需要新的发射形态**:已知绑定 ⇒ 直接调它的**装箱入口**(省掉 `__call` 的
 元数与部分应用分派、闭包解盒),而不是复用 raw/inline 候选那套判据。这是下一片。
@@ -1412,20 +1412,20 @@ arity/部分应用;这与 "hosting runtime 的派发器拥有 arity 与 Error �
 **语义注意**:直调绕过 `__call` 的递归深度守卫(与既有 raw/direct 路径一致);形参注解检查因为
 目标无注解而不存在;元数与 Error 实参由静态条件保证。
 
-验收:stage2/stage3 固定点成立;demo/type_gymnastics 419/419;selfhost 套件 ALL PASS。
+验收:stage2/stage3 固定点成立;demo/type_gymnastics 419/419;selfhost 测试套件 ALL PASS。
 
-## 56. interpreter 套件的「重复定义」是接线 bug,不是代码生成问题(2026-10-28)
+## 56. interpreter 测试套件的「重复定义」是接线 bug,不是代码生成问题(2026-10-28)
 
 §53 记录的红:链接 `interpreter.ll` 时报 `duplicate symbol: __panic_exit / __cold_located_error /
 .strbox7`。根因不在发射器:**`run_interpreter_tests._use_stdlib_object` 只导出了
 `QLANG_STDLIB_OBJECT`,没导出 `QLANG_STDLIB_SYMBOLS` / `QLANG_STDLIB_INTERFACE`**,
 于是 `emit()` 退回 `--emit-llvm`(单模块、含整个 runtime+库),再和 `stdlib.o` 一起链接 ——
-两边的符号当然重复。`run_selfhost_tests` 的同名函数导出三个变量,所以夹具一直是绿的。
+两边的符号当然重复。`run_selfhost_tests` 的同名函数导出三个变量,所以测试用例一直是绿的。
 
 修法:补齐三个环境变量(和 selfhost 驱动一致),发射器走 `--emit-llvm-split`。
 
 **验收**:`run_interpreter_tests.py --compiler <新编译器> --jobs 2` → **ALL CHECKS PASS**
-(含 419 条类型断言的 type_gymnastics、argument 套件、解释器夹具)。
+(含 419 条类型断言的 type_gymnastics、argument 测试套件、解释器测试用例)。
 
 教训:对象化(split)模式有两个前提 —— 链接给对象,**编译也要给接口**;只给一半,症状会伪装成
 「代码生成发出了重复符号」。
@@ -1449,8 +1449,8 @@ arity/部分应用;这与 "hosting runtime 的派发器拥有 arity 与 Error �
 |---|---|---|
 | `t41_math_library` 机器指令 | 138,002 | **136,925(−1,077,−0.78%)** |
 
-验收:demo/type_gymnastics 419/419;stage2/stage3 固定点成立;selfhost 套件 ALL PASS;
-interpreter 套件 ALL CHECKS PASS。
+验收:demo/type_gymnastics 419/419;stage2/stage3 固定点成立;selfhost 测试套件 ALL PASS;
+interpreter 测试套件 ALL CHECKS PASS。
 
 ## 58. 内联 lambda 成员也有符号了,但链的下一道墙是「实参证明」(2026-10-28)
 
@@ -1458,10 +1458,10 @@ interpreter 套件 ALL CHECKS PASS。
 现在发射期递归收「模块对象绑定名 -> 成员 -> ql_fnN/元数」,以及导出表「模块名 -> 对象绑定名」,
 链目标表把这类成员也登记上。
 
-| 夹具 | 之前(v16,仅标识符成员) | 之后(v17) |
+| 测试用例 | 之前(v16,仅标识符成员) | 之后(v17) |
 |---|---|---|
 | t30_strings | 155,483 | **155,363(−120)** |
-| t41_math_library | 136,925 | 136,925(该夹具的 sqrt/pow 本来就命中) |
+| t41_math_library | 136,925 | 136,925(该测试用例的 sqrt/pow 本来就命中) |
 
 **为什么只有 −120**:t30 的计数是 `hits=8 nokey=1 args=62` —— 71 个链调用点里 62 个被
 「实参可能是 Error」挡住,只有 8 个拿到直调。也就是说链的收益已经撞上同一堵墙:
@@ -1485,7 +1485,7 @@ roadmap 的「库调用图的 known-safe 证明」(handoff 待办 M)。
 | 裸返回候选 | 18 | 60 |
 | t41 / t30 / t43 机器指令 | 136,925 / 155,363 / 139,623 | 136,920 / 155,358 / 139,618(−5) |
 
-三个夹具各 −5 条,等于没有。原因也很清楚:**装箱直调要求「形参没有注解」**(分派器负责的检查
+三个测试用例各 −5 条,等于没有。原因也很清楚:**装箱直调要求「形参没有注解」**(分派器负责的检查
 不能跳),所以补注解把 46 个目标从「可直调」推到 `noinfo`,换来的只是裸返回候选;
 而裸返回这条路径今天没接上收益。
 
@@ -1637,7 +1637,7 @@ tag==5 才解引用 `payload+8` 取数据指针)。
 | `b_index` | 5.53s | **1.09s(5.1×)** |
 | 单次 `chars[i]` 循环(18.3M 次) | 1.83s | **0.156s(11.7×)** |
 
-验收:输出逐字节相同;demo 419/419;固定点成立;selfhost 与 interpreter 套件全过。
+验收:输出逐字节相同;demo 419/419;固定点成立;selfhost 与 interpreter 测试套件全过。
 
 **教训**:优化「已落地」不等于「已生效」。这条快路径有 32 个发射点、计数器也在涨,
 但守卫恒假,运行期一次都没走到 —— 只有把「命中数」和「运行期真的走了哪条路」分开量,
@@ -1660,7 +1660,7 @@ tag==5 才解引用 `payload+8` 取数据指针)。
 | b_index 运行 | 1.066s | 0.994s |
 
 体积 +0.4% 换运行 −22%,这个取舍取运行(体积仍在 131.8k,噪声量级)。
-验收:输出逐字节相同;demo 419/419;固定点成立;两个套件全过。
+验收:输出逐字节相同;demo 419/419;固定点成立;两个测试套件全过。
 
 **下一步**:剩下的每字符成本是「QLang 小函数的调用帧开销」本身(每次调用 memset 局部区 +
 绑定槽)。要么把小热函数(如 `__str_eq`)在 IR 层做成 `alwaysinline` 的叶子形态,要么给
@@ -1680,10 +1680,10 @@ tag==5 才解引用 `payload+8` 取数据指针)。
 | b_chars 运行 | 0.701s | **0.663s(−5%)** |
 | b_chars 机器指令 | 131,819 | **131,745(−74)** |
 
-验收:输出一致;demo 419/419;固定点成立;selfhost 与 interpreter 套件全过。
+验收:输出一致;demo 419/419;固定点成立;selfhost 与 interpreter 测试套件全过。
 收益不大,但它是纯减法(体积也降),而且清掉的是每次调用都付的固定成本。
 
-## 67. 门禁的标准库对象改用 QLang 构建器(2026-10-29)
+## 67. 测试的标准库对象改用 QLang 构建器(2026-10-29)
 
 `run_selfhost_tests._use_stdlib_object` 原来直接 `from stdlib_split import build_stdlib`
 (Python)。现在:
@@ -1694,7 +1694,7 @@ tag==5 才解引用 `payload+8` 取数据指针)。
 3. 工具不可用时才回落 Python 的 `build_stdlib`(保留,供没有工具链的检出)。
 
 `run_interpreter_tests` 里那份重复的 `_use_stdlib_object` 删掉,直接从 `run_selfhost_tests` 导入。
-验收:selfhost 与 interpreter 套件都 ALL PASS;`QLANG_STDLIB_OBJECT/SYMBOLS/INTERFACE` 指向
+验收:selfhost 与 interpreter 测试套件都 ALL PASS;`QLANG_STDLIB_OBJECT/SYMBOLS/INTERFACE` 指向
 `target/stdlib/<key>/`。至此**构建路径上不再有 Python**,Python 只剩测试驱动与两个回落分支。
 
 ## 68. t38「provenance survives allocations」= staticType 被当成运行期类型(已修)(2026-10-29)
@@ -1774,7 +1774,7 @@ tools/link <ir> -o <bin> --opt {0,1,2,3} --stdlib-object stdlib.o --stdlib-ir st
 rm -rf target/tools && aot/bootstrap.sh --compiler target/selfhost/stage2
 ```
 
-1m49s 产出 `target/tools/{build,link,stdlib,verify}` 四个可执行;随后 selfhost 套件用这套
+1m49s 产出 `target/tools/{build,link,stdlib,verify}` 四个可执行;随后 selfhost 测试套件用这套
 新工具跑 **ALL REQUESTED CHECKS PASS**。
 
 **③ 安全分析扩到运行时/库:仍然没有新事实**。把 `typeSetCallSafety(true)` 包在
@@ -1817,7 +1817,7 @@ Number **并且**加上调用点检查,但函数体内真正发菱形的地方�
    (`__str_eq` 等)在单模块时会被 clang 内联进用户循环,split 后变成**外部调用**,
    每次迭代多一次真调用。
 
-所以门禁用 split 是对的(只验行为,不验速度),但**发布构建不应该用 split**——除非把库对象
+所以测试用 split 是对的(只验行为,不验速度),但**发布构建不应该用 split**——除非把库对象
 做成 **LLVM bitcode + LTO 链接**:编译仍然只做一次(对象缓存),链接时再做跨模块内联。
 这是下一步(item 2b),判据就是 b_chars 的 CPU 时间能不能回到 0.6s 量级。
 
@@ -1839,7 +1839,7 @@ Number **并且**加上调用点检查,但函数体内真正发菱形的地方�
 | 输入 | parse | lib | analyze | emit |
 |---|---|---|---|---|
 | 空程序 | 0ms | 6290ms | 0ms | 3150ms |
-| 夹具 t30(91 行) | 150ms | **7320ms** | 120ms | 3700ms |
+| 测试用例 t30(91 行) | 150ms | **7320ms** | 120ms | 3700ms |
 | 编译器自身(6.4k 行) | 12740ms | 8710ms | 3360ms | **19340ms** |
 
 小程序的编译时间约 65% 在**重新解析运行库 + 标准库**:这正是 §72「库只编一次」要消掉的部分。
@@ -1860,7 +1860,7 @@ b_chars、同编译器:
 
 - 编译总时间:23.6s → **~9.8s(2.4×)**;
 - 运行时间:**回到单模块水平**(甚至略快);
-- 所以三条路各有用途:门禁/行为验证用 `.o`(0.45s/夹具),发布用 `--lto`(2.4× 更快、运行持平),
+- 所以三条路各有用途:测试/行为验证用 `.o`(0.45s/测试用例),发布用 `--lto`(2.4× 更快、运行持平),
   单模块留作基准与 A/B。
 
 **LTO 下字符串校验要放宽**:LTO 会做常量合并与 GC,ELF 里的字符串符号不再与 IR 1:1。
@@ -1882,14 +1882,14 @@ stage2 --emit-llvm --stdlib-object target/stdlib/<key> prog.ql runtime.ql > prog
 
 | 输入 | 单模块 | `--stdlib-object` |
 |---|---|---|
-| 夹具 t30 前端 | 11.2s | **0.81s** |
+| 测试用例 t30 前端 | 11.2s | **0.81s** |
 | 产物 IR 行数 | ~180k | 25,901(仅用户模块) |
 
 配合 `native_link.py --lto`(ThinLTO)已能端到端:b_chars 前端 0.8s + 链接 15.1s(默认 `--opt 2`)
 ≈ **15.9s**,单模块 23.6s;运行 CPU 0.764s vs 0.596s。
 
 **注意**:手动用 `-O1 -flto=thin` 时链接只有 9.6s、CPU 0.556s —— 对这个 bench 而言 `-O1` LTO
-比 `-O2` LTO **又快又稳**。下一轮把 LTO 的默认优化级别定为 O1(`--lto` 时),再用 bench 套件复测。
+比 `-O2` LTO **又快又稳**。下一轮把 LTO 的默认优化级别定为 O1(`--lto` 时),再用 bench 测试套件复测。
 
 ## 76. LTO 默认优化级别定为 O1(2026-10-29)
 
@@ -1900,7 +1900,7 @@ stage2 --emit-llvm --stdlib-object target/stdlib/<key> prog.ql runtime.ql > prog
 | `-O2 -flto=thin` | 15.1s | 0.764s |
 | **`-O1 -flto=thin`(新默认)** | **10.6s** | **0.653s** |
 
-整条 bench 套件在 `--split --lto` 下的前端时间:**0.14–0.44s/个**(单模块是 8–16s),
+整条 bench 测试套件在 `--split --lto` 下的前端时间:**0.14–0.44s/个**(单模块是 8–16s),
 运行 CPU 与单模块持平(b_chars 0.588–0.653 vs 0.596–0.634)。
 
 注意:bench 表里的 `clang(s)` 列是**指令计数**用的 `clang -O2 -S`(只扫用户模块),
@@ -1917,9 +1917,9 @@ stage2 --emit-llvm --stdlib-object target/stdlib/<key> prog.ql runtime.ql > prog
 |---|---|---|---|
 | `clang -O1 -flto=thin`(Python 路径,已验收) | 10.6s | **10,487,500** ✓ | 0.653s |
 | `llvm-link + opt -O1 + llc + ld.lld` | 6.9s | **10,515,500** ✗ | 0.503s |
-| 同上,t16 夹具 | — | 3 3 8 ✓ | — |
+| 同上,t16 测试用例 | — | 3 3 8 ✓ | — |
 
-简单夹具(t16)是对的,b_chars 差 **28,000**(多算了空格) —— 说明这条管线**不等价**于
+简单测试用例(t16)是对的,b_chars 差 **28,000**(多算了空格) —— 说明这条管线**不等价**于
 clang 的 LTO 驱动(它在 internal 化/字符串全局/目标文件组织上有额外处理),不能拿去发布。
 
 **结论当时写错了,§78 更正**:差异来自 b_chars 读取的 `aot/runtime.ql` 在两次测量之间被我编辑过
@@ -1972,7 +1972,7 @@ clang 的 LTO 驱动(它在 internal 化/字符串全局/目标文件组织上�
 ## 80. 工具链:bench 也走 QLang 链接器;`--shared` 链接验证(2026-10-29)
 
 - `aot/bench/run_bench.py --split` 现在优先用 `target/tools/link`(带 `--lto` 时也一样),
-  工具不存在才回落 Python 的 `native_link.py`。也就是说**度量与门禁的构建路径都不再依赖 Python**。
+  工具不存在才回落 Python 的 `native_link.py`。也就是说**度量与测试的构建路径都不再依赖 Python**。
 - `--shared`(native 扩展)链接验证:`stage2 --emit-module` 出 IR →
   `tools/link <ir> -o ext.so --shared` 成功,产物是 ELF 共享对象(导出 `__cold_located_error`/
   `__panic_exit`,未定义 `memcpy`)。本机无法 dlopen 运行扩展(环境缺口),这里只验到链接层。
@@ -1981,7 +1981,7 @@ clang 的 LTO 驱动(它在 internal 化/字符串全局/目标文件组织上�
 ## 81. 错误模型第 5 项收口:E 已验证;B1/B3 按口径暂不改(2026-10-29)
 
 - **E(类型面)**:`std.Result(T) ≡ T|Error`、`std.Option(T) ≡ T|Null` 已在 `stdlib/result.ql` 实现,
-  `?` 只在 `Result(...)`/`Option(...)` 注解函数里允许。用库对象路径复跑两个判别夹具:
+  `?` 只在 `Result(...)`/`Option(...)` 注解函数里允许。用库对象路径复跑两个判别测试用例:
   `t53_return_boundaries`、`t56_result_annotations` 输出与 `.expected` 逐字节一致。
 - **B1(StackOverflow)/B3(运行期 arity)**:以 `docs/rust-error-model.md` 为准 ——
   **「暂不改;panic 边界先不动,避免一次改太多」**。所以这两项不是待办,是**作者已决定的延后**,
@@ -2000,13 +2000,13 @@ difftest 遗留文件(`_df_boot.ql`、`_df_host.ql`,10-15 的产物,本来也在
 建临时目录、按模式拼编译器命令行、clang 链接、跑二进制、和 `.expected` 比对、报告 fatal 用例。
 这些是测试基础设施,不是语言运行时——AGENTS §2.7 明确「Python 只是测试/链接/数据生成工具」。
 真正有意义的那一半(**构建路径**不依赖 Python)已经在第 2/4 项做完:
-门禁与 bench 的标准库对象走 `target/tools/stdlib`,链接走 `target/tools/link`,
+测试与 bench 的标准库对象走 `target/tools/stdlib`,链接走 `target/tools/link`,
 Python 只剩「没有工具链时的回落」和测试编排。
 
 **结论:不做驱动 QLang 化。** 移植 22 个 runner 会把「测试怎么跑」从成熟工具链搬到自研进程
-编排上,收益是零(用户跑不到这些脚本),风险是门禁不稳。这一项到此关闭,记在这里避免以后重开。
+编排上,收益是零(用户跑不到这些脚本),风险是测试不稳。这一项到此关闭,记在这里避免以后重开。
 
-## 83. 全套件对照:`.o` / QLang-LTO / clang-LTO 的运行代价(2026-10-29)
+## 83. 全测试套件对照:`.o` / QLang-LTO / clang-LTO 的运行代价(2026-10-29)
 
 同源(/tmp/vf 由当前源码构建)、同机、顺序跑(避免争抢)。harness 对每个 bench 取 5 次最小值。
 
@@ -2030,12 +2030,12 @@ Python 只剩「没有工具链时的回落」和测试编排。
 | b_strat | 1.957 | 1.992 |
 
 结论:
-1. **`.o` 路径只配给门禁**:热路径慢 5×(2.309 vs 0.461)。
+1. **`.o` 路径只配给测试**:热路径慢 5×(2.309 vs 0.461)。
 2. **QLang 链接器的 `--lto` 稳定偏慢(+6%…+71%)**:`llvm-link` 不做 clang LTO 的
    internalize/globaldce,跨模块优化不如 clang 的驱动。**发布构建暂时别用它**。
 3. **clang 驱动的 LTO 与单模块大致持平**(−23%…+22%,机器噪声主导,方向不一致)。要发布又想省
    编译时间,走 `native_link.py --lto`。
-4. 之前的「`--lto` 运行与单模块持平」只在 b_chars 上测过、且是不同负载下的数;全套件不支持
+4. 之前的「`--lto` 运行与单模块持平」只在 b_chars 上测过、且是不同负载下的数;全测试套件不支持
    「QLang 链接器路径持平」这个说法,已在 README 更正。
 
 ## 84. 把 QLang 链接器的 LTO 修成 clang 同款管线:运行回到 ±12%(2026-10-29)
@@ -2091,7 +2091,7 @@ llc -O2 -filetype=obj
 - **编译器/大程序**:单模块仍然最快(clang 的 -O2 比我们的 LTO 管线便宜),不要换成 LTO。
 - **库对象只建一次**(89s),所有后续小程序共享。
 
-## 86. 三条路径的全套件运行代价,以及「可内联库体」能收回多少(2026-10-29)
+## 86. 三条路径的全测试套件运行代价,以及「可内联库体」能收回多少(2026-10-29)
 
 同源、顺序跑、harness 5 次最小值(CPU 秒):
 
@@ -2258,7 +2258,7 @@ dump 时要**发射一遍库**(或由构建器从它自己的发射过程里导�
 Python 手工从 `interface.txt` 生成了一份 mod.ql 与旧路径对比:**计数完全一致**
 (`stdchain hits=66 cached=5`、`directreject` 相同)。
 
-**但接线后 selfhost 套件红了**:某个夹具链接失败(`numeric.ll`),原因是手工生成的 mod.ql
+**但接线后 selfhost 测试套件红了**:某个测试用例链接失败(`numeric.ll`),原因是手工生成的 mod.ql
 漏了函数条目 —— 白名单一旦不全,生成代码引用的符号就链接不上。所以 mod.ql **必须由发射那一趟
 的事实生成**(和 `SYM` 同源),不能手工维护;这也是下一步要做的:构建器在写对象时一并产出
 mod.ql,并把"白名单完整性"作为验收(与 `MAX`/符号表交叉核对)。
@@ -2325,7 +2325,7 @@ mod.ql 用**共享词法器**(`Lexer(text).tokenize()`)读,再按字面量文法
 - 校验 version / slots / functions / runtime / modules 缺失,缺就报错,不静默。
 
 **为什么不用完整 parser**:第一版用 `parseModule` + AST 遍历,读接口比 `interface.txt` 慢
-0.14–0.31s(同一夹具多次取最小值:t20 `0.34` vs `0.20`,t30 `1.45` vs `1.14`)。探针把成本
+0.14–0.31s(同一测试用例多次取最小值:t20 `0.34` vs `0.20`,t30 `1.45` vs `1.14`)。探针把成本
 分到两段(10 次,整程序计时):
 
 ```
@@ -2353,11 +2353,11 @@ same=69  diff=0  fail=4
 
 四个 `fail` 是 `t8_comp / t8_leaf / t8_obj / t9_error` —— 它们直接引用运行期内部名
 (`allocBox`/`ql_alloc`/`__obj_new`/`__err`),本来就只能走单模块路径;**两条路径的报错完全相同**,
-不是本次改动引入的。`t58_direct_calls`、`t30_strings`、`t61_known_safe` 等代表夹具逐字节相同。
+不是本次改动引入的。`t58_direct_calls`、`t30_strings`、`t61_known_safe` 等代表测试用例逐字节相同。
 
 ### 94.4 顺带修掉:SYM 成员的符号没有声明 → `opt: use of undefined value`
 
-整套门禁第一次跑,`t25_numeric` 链接失败:
+整套测试第一次跑,`t25_numeric` 链接失败:
 
 ```
 opt: numeric.ll:13373:27: error: use of undefined value '@ql_fn250'
@@ -2368,9 +2368,9 @@ opt: numeric.ll:13373:27: error: use of undefined value '@ql_fn250'
 的键是**绑定名**(`absolute` → 另一个符号),所以 split 模式的声明循环(只遍历 symbols.tsv)
 永远不会声明它。
 
-**这不是本次改动引入的**:用 HEAD 的编译器(`git show HEAD:aot/qlangc.ql` 重建)跑同一夹具,
+**这不是本次改动引入的**:用 HEAD 的编译器(`git show HEAD:aot/qlangc.ql` 重建)跑同一测试用例,
 同样产生 1 处 `call @ql_fn250` / 0 处 `declare`。是 §91/§92 加 SYM 直调时留下的缺口 —— 那之后
-没有再跑过全量套件。修法:split 模式声明完符号表后,再遍历 `stdChainTargets`,把不在表里的
+没有再跑过全量测试套件。修法:split 模式声明完符号表后,再遍历 `stdChainTargets`,把不在表里的
 符号补一条通用入口声明(36 条 SYM 里只有被真正用到的会进 IR,其余由 `opt` 清掉)。
 
 补声明按**字节序**排(不能用成员表的书写顺序:mod.ql 的模块成员顺序来自对象,行式文本来自
@@ -2403,7 +2403,7 @@ tools/link <ir> -o <out> --stdlib-object <o> --debug   # llc 直接吃 IR(-O1),�
 debug 剩下的 1.1s 基本是地板:`llc` 0.28 + `ld.lld` 0.26 + 校验 0.13 + QLang 链接器自身 0.09
 + 若干子进程;要再往下只能减少进程数或换实现语言(见 §94.2 同类分析)。
 
-正确性对照:6 个夹具(`t20/t30/t43/t54/t58/t61`)两种档位的输出与 `.expected` 逐字节相同。
+正确性对照:6 个测试用例(`t20/t30/t43/t54/t58/t61`)两种档位的输出与 `.expected` 逐字节相同。
 `--no-verify` 仍可叠加(再省 0.13s),但默认开着——它是"不发布错二进制"的门,与优化等级无关。
 
 ## 96. debug / release 两档:debug 不消费分析的优化结论(2026-10-30)
@@ -2428,12 +2428,12 @@ conservativeMode（--debug）:
 ```
 
 最后一条是**踩到的真问题**:那条 internal 不变量原本假定"分析证明不可能出错的调用一定已被
-内联/直调",debug 下必然触发,`t55/t59/t61` 三个夹具直接编译失败。它说明"分析结论"曾被
+内联/直调",debug 下必然触发,`t55/t59/t61` 三个测试用例直接编译失败。它说明"分析结论"曾被
 当成"发射器不变量"——分档正好把这类隐性耦合暴露出来。
 
-**差分套件** `aot/run_debug_diff_tests.py`:每个夹具两档各编一次,判据是**两档输出逐字节相同**
+**差分测试套件** `aot/run_debug_diff_tests.py`:每个测试用例两档各编一次,判据是**两档输出逐字节相同**
 (顺带与 `.expected` 比)。它有两个用途:①优化不健全会表现为"debug 对、release 错";②语言调试
-时所有值都走通用路径,没有裸槽/直调/闭包省略这些特例。实测 42 个夹具:41 个两档一致且正确,
+时所有值都走通用路径,没有裸槽/直调/闭包省略这些特例。实测 42 个测试用例:41 个两档一致且正确,
 `t37_extensions` 两档**同样**红(需要 extension 宿主,与档位无关,已列入 SKIP)。
 
 不变量与体积(同源):
@@ -2503,13 +2503,13 @@ debug 档(`--debug`)不跑这条(保守路线保留一切)。
 一个正规的"空值语句"出口**,让块/汇点记账与语句产出解耦 —— 那之后这 16,940 行才会消失,
 前端和链接也才会再降一个量级。
 
-## 99. 死函数删除:判据看着对,但引用计数漏边 —— 门禁判死(2026-10-30)
+## 99. 死函数删除:判据看着对,但引用计数漏边 —— 测试判死(2026-10-30)
 
-§98 的实现(只跳过函数体与闭包)能跑通 2000 函数程序的度量,但**全量门禁否掉了它**:
+§98 的实现(只跳过函数体与闭包)能跑通 2000 函数程序的度量,但**全量测试否掉了它**:
 
-| 门禁 | 结果 |
+| 测试 | 结果 |
 |---|---|
-| debug/release 差分 | **5 个夹具两档输出不同**(含 `t62_leaf_calls`) |
+| debug/release 差分 | **5 个测试用例两档输出不同**(含 `t62_leaf_calls`) |
 | selfhost | `inline-values` **段错误**(exit -11) |
 | interpreter | 未跑完(自举先红) |
 
@@ -2541,7 +2541,7 @@ AST 里除自己的 Let 外没有任何出现**"(把 `callee` 也算出现,不�
 
 给判据加上"删了就打印名字"的探针后,直接看到它误删了**仍在使用的**函数:
 
-| 夹具 | 误删 | 实际情况 |
+| 测试用例 | 误删 | 实际情况 |
 |---|---|---|
 | `t23_inline_values` | `id` | `id` 被放进数组字面量 `[..., id, ...]` 后调用 |
 | `t62_leaf_calls` | `late`、`b` | `late` 被**前面**定义的 `early` 调用;`b` 与 `a` 互递归 |
@@ -2565,7 +2565,7 @@ bindId**(多半是 -1 或另一个 id)——计数再严格也数不到边。
 互递归"这些位置还没有正确解析**。要用 AST 做引用分析,得先把绑定解析做成一个独立、完整的一趟
 (给每个 Identifier 盖上唯一的 bindId),而不是依赖发射期按需解析。
 
-在做到那一步之前,死函数删除不落地(连续三次尝试都被门禁否掉)。当前 HEAD 的编译器与 `cbcd3f8`
+在做到那一步之前,死函数删除不落地(连续三次尝试都被测试否掉)。当前 HEAD 的编译器与 `cbcd3f8`
 逐字相同(`git diff cbcd3f8 HEAD -- aot/qlangc.ql` 为空)。
 
 ### 99.3 证据:前向引用在分析期就是 `bindId = -1`(2026-10-30)
@@ -2598,11 +2598,11 @@ DUMP Identifier println bid=-1
 再把所有 `Identifier` 解析到唯一 id,盖在**新字段**(例如 `refId`)上,不要动现有 `bindId` ——
 后者被表示分析/unbox 依赖,改动会波及全部分析结论)。
 
-在这之前,死函数删除不落地(三次尝试都被门禁否掉,证据 §99/99.1/99.2/99.3)。
+在这之前,死函数删除不落地(三次尝试都被测试否掉,证据 §99/99.1/99.2/99.3)。
 
 ### 99.4 语义陷阱:形参注解在**闭包创建时**求值,所以"没人引用的函数"也可能有可观察行为(2026-10-30)
 
-改用"按名字数模块级引用"(过近似,参数/局部同名也算)后,夹具扫描 40/42 通过,只剩
+改用"按名字数模块级引用"(过近似,参数/局部同名也算)后,测试用例扫描 40/42 通过,只剩
 `t37_extensions`(环境缺口)和 **`t53_return_boundaries`**。t53 的失败点是:
 
 ```
@@ -2632,9 +2632,9 @@ check(annotationCase() == Number, "annotation slot propagates return")?;
 
 ### 99.5 第 5 次:extension 宿主段错误 —— 仍是"编译器按名字直连"这一类(2026-10-30)
 
-按名字计数 + 排除带形参注解后,`t53/t62/t59/t23` 四个夹具全部通过(`dropped=0`,输出正确),
-差分套件 41 个夹具全绿,selfhost(含固定点)、interpreter、assignment、gc、semantic 全绿;
-但 **extension 套件段错误**(`host-O0` returncode=-11)。
+按名字计数 + 排除带形参注解后,`t53/t62/t59/t23` 四个测试用例全部通过(`dropped=0`,输出正确),
+差分测试套件 41 个测试用例全绿,selfhost(含固定点)、interpreter、assignment、gc、semantic 全绿;
+但 **extension 测试套件段错误**(`host-O0` returncode=-11)。
 
 与 §98 的库函数那次同源:extension 宿主里也有**编译器自己按固定名字直连**的东西(扩展桥
 `__extension_bridge_*`、`__native` 注册回调等),那些边不在 AST 里,名字计数看不见。
@@ -2686,7 +2686,7 @@ let p = import (path());          // 动态 import:路径表达式里调用 path
 
 `countModuleRefs` 沿用了 `collectDirectRefs` 的 `if type == "Import" return null` —— **整棵 Import
 子树被跳过**,于是动态 import 的路径表达式里的引用一条都数不到。去掉这条跳过后:
-宿主 `dropped=0`(path 被正确保活),extension 套件 **ALL PASS**。
+宿主 `dropped=0`(path 被正确保活),extension 测试套件 **ALL PASS**。
 
 判据最终形态(只对入口程序):
 
@@ -2725,7 +2725,7 @@ debug 档(`--debug`)不跑这条(保守路线保留一切)。
 1. **发射期使用表**(谁被读过/被调用,由发射器自己记录,而不是 AST 计数);
 2. 模块级名字解析(`refId`,独立一趟,不动 `bindId`);
 3. 明确的"接口清单"(扩展桥、`__native` 注册这类按名字直连的边);
-4. 差分套件 + 全量门禁作为常规门(`run_debug_diff_tests.py` 已经在基线上)。
+4. 差分测试套件 + 全量测试作为常规门(`run_debug_diff_tests.py` 已经在基线上)。
 
 在此之前,`--debug`(保守发射)与 `release`(静态优化)两档的分工保持不变;编译速度的收益走
 `mod.ql` 接口、标准库对象、`link --debug` 这些**不改变语义**的路子。
@@ -2959,7 +2959,7 @@ not a type value`,因为那等于"用一个 null 类型值去做检查"。)
 ### 103.1 验收(全部同源)
 
 - `println(1 + 2)` → **3**;t20 → **20**;t30 → `string checks: 193`;100M f64 累加 → `4999999950000000`
-- `run_debug_diff_tests.py`:**41 个夹具两档输出逐字节相同**
+- `run_debug_diff_tests.py`:**41 个测试用例两档输出逐字节相同**
 - selfhost(含 stage2/stage3 IR 固定点)、interpreter:**ALL PASS**
 - release 不回退:t20 的 `--emit-llvm` IR 与基线**逐字节相同**;IR 行数 release 184,842 / debug 186,523(+0.9%)
 
@@ -2975,11 +2975,11 @@ not a type value`,因为那等于"用一个 null 类型值去做检查"。)
 debug ≈ C 的 2.1×、Rust 的 3.9×**。debug 只快 10%(省的是 `opt` 那一趟 + 少量发射),
 因为它**只关掉优化、不省前端**;运行慢 71%,因为直调/装箱/检查全是通用路径。
 
-## 104. module 套件脱离 Rust:改用 stage2 + tools/link + native 解释器(2026-10-30)
+## 104. module 测试套件脱离 Rust:改用 stage2 + tools/link + native 解释器(2026-10-30)
 
 `aot/run_module_tests.py` 原本两条腿都依赖 Rust 宿主(`target/debug/qlang`):
 `--compile` 编程序、跑 `bootstrapped/run_file.ql` 当 boot 参照。而 AGENTS §2.1 记录"Rust 宿主跑 boot
-会挂",这套件因此在基线上一直是**环境缺口**(180s 超时)。
+会挂",这测试套件因此在基线上一直是**环境缺口**(180s 超时)。
 
 改成纯 QLang 工具链:
 
@@ -2996,7 +2996,7 @@ debug ≈ C 的 2.1×、Rust 的 3.9×**。debug 只快 10%(省的是 `opt` 那�
 2. native 腿同样放宽到 `(0,1)`,但输出必须与解释器逐字节相同。
 
 **结果:`Module suite: ALL PASS`**(BOOT/NATIVE、输入删除后执行、3 类 cycle、6 类拒绝用例)。
-这套件现在只依赖 QLang 自己的编译器/链接器/解释器,不再需要 Rust。
+这测试套件现在只依赖 QLang 自己的编译器/链接器/解释器,不再需要 Rust。
 
 ## 105. LTO 档的实测:在这类代码上不划算(2026-10-30)
 
@@ -3066,9 +3066,9 @@ L1(诊断结论)已经在 `--check` 里落地(§106)。L2 缓存的是**用户�
 
 ### 为什么必须 opt-in
 
-固定点门禁里 stage2 与 stage3 **共用同一个 stdlib 目录**(它按 stage1 字节做键),所以 env 相同;
+固定点测试里 stage2 与 stage3 **共用同一个 stdlib 目录**(它按 stage1 字节做键),所以 env 相同;
 如果默认开缓存,stage3 就会直接回放 stage2 的 IR —— 固定点断言会变成空断言。所以默认关,
-只有显式 `--ir-cache` 才启用;门禁与固定点永远不传这个开关。
+只有显式 `--ir-cache` 才启用;测试与固定点永远不传这个开关。
 
 ### 实测(t30,机器当时负载偏高,看比值)
 

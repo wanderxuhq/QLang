@@ -3630,7 +3630,7 @@ let main = (args) -> {
   // 之所以不"停在分析之后":用户诊断有一部分是发射期产生的(addCompileError),两条路会分叉。
   let checkMode = false;
   // `--ir-cache`:把发出的用户模块 IR 缓存到 `<src>.qir`(头里有 source/env 哈希),命中就直接回放。
-  // **opt-in**:固定点/门禁默认不开 —— 否则 stage3 会命中 stage2 的缓存,把"固定点"变成空断言。
+  // **opt-in**:固定点/测试默认不开 —— 否则 stage3 会命中 stage2 的缓存,把"固定点"变成空断言。
   let irCacheOn = false;
   let irCacheBody = [];
   let keptArgs = [];

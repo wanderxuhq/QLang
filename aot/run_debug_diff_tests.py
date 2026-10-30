@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""debug / release 差分套件:每个夹具两种档位各编一次,输出必须逐字节相同。
+"""debug / release 差分测试套件:每个测试用例两种档位各编一次,输出必须逐字节相同。
 
 debug 档(`--debug`)是**保守发射**:发射器不消费分析的优化结论 —— 不直调/不内联/不 raw ABI、
 不 unbox 裸槽、不省略"可证不会失败"的检查、不删死函数。它存在的意义有两条:
 
-  1. 让"优化不健全"变成可观测的:哪个夹具 debug 对、release 错,就定位到具体优化;
+  1. 让"优化不健全"变成可观测的:哪个测试用例 debug 对、release 错,就定位到具体优化;
   2. 语言调试:所有值都走通用路径,没有裸槽/直调/闭包省略这些特例。
 
-所以本套件的判据是**两档一致**,而不是"只有 release 对"。
+所以本测试套件的判据是**两档一致**,而不是"只有 release 对"。
 """
 import argparse
 import os
@@ -21,7 +21,7 @@ sys.path.insert(0, str(ROOT / 'aot'))
 from run_selfhost_tests import emit, link, _use_stdlib_object  # noqa: E402
 
 TIMEOUT = 600
-# 需要 extension 宿主/模块链接的夹具:本套件只做"编译器档位差分",不建 extension,
+# 需要 extension 宿主/模块链接的测试用例:本测试套件只做"编译器档位差分",不建 extension,
 # 它们的红与档位无关(两档同样红)。真正的 extension 覆盖在 run_selfhost/interpreter 里。
 SKIP = {'t37_extensions'}
 
@@ -64,9 +64,9 @@ def main():
         for name, why in failures:
             print(f'FAIL debug-diff: {name}: {why}', flush=True)
         if failures:
-            print(f'debug/release 差分套件: {len(failures)} 个失败 / {checked} 个夹具', flush=True)
+            print(f'debug/release 差分测试套件: {len(failures)} 个失败 / {checked} 个测试用例', flush=True)
             return 1
-        print(f'debug/release 差分套件: ALL PASS({checked} 个夹具,两档输出逐字节相同)', flush=True)
+        print(f'debug/release 差分测试套件: ALL PASS({checked} 个测试用例,两档输出逐字节相同)', flush=True)
         return 0
 
 

@@ -75,8 +75,8 @@ python3 aot/native_link.py /tmp/example.ll -o /tmp/example
 
 `--lto` 的优化级别用 `--lto-opt`(默认 2;链接 ~11s)。`tools/link` 的 LTO 现在走
 `internalize + globaldce + lto<O>` 三者(`llvm-link` 合并 → `opt` → `llc`,与 clang 的 LTO 同款),
-全套件实测运行与单模块差 **−3%…+12%**(b_chars +3%、b_index +12%,其余 ±3%),6 个 bench 输出一致。
-纯 `.o` 路径热循环慢 5×(跨模块不能内联),只配给门禁。
+全测试套件实测运行与单模块差 **−3%…+12%**(b_chars +3%、b_index +12%,其余 ±3%),6 个 bench 输出一致。
+纯 `.o` 路径热循环慢 5×(跨模块不能内联),只配给测试。
 想看编译器各阶段耗时,加 `--timing`(输出 `; phase: parse=… lib=… analyze=… emit=…`,默认关闭)。
 
 Build the native interpreter using that compiler, then run QLang files:

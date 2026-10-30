@@ -1,6 +1,6 @@
 # 直接调用与纯 Number 内联(2026-10-26)
 
-这是 P0/P1 切片(编译器优化,不改语言语义)的落地口径。判别夹具:
+这是 P0/P1 切片(编译器优化,不改语言语义)的落地口径。判别测试用例:
 `aot/tests/t58_direct_calls.ql`、`aot/tests/t59_inline_pure.ql`、`aot/tests/t60_raw_direct.ql`。
 
 ## 1. 三种形状
@@ -59,7 +59,7 @@
 通用分派原本负责的四件事被静态消掉:arity、参数 Error 策略、
 内建 `Number` 注解检查、栈深度(leaf 无递归)。这是 P1 能直接调 raw 入口的前提。
 
-## 2. 判别数字(同源编译器;下表是判别程序,不是夹具全文)
+## 2. 判别数字(同源编译器;下表是判别程序,不是测试用例全文)
 
 | 程序 | 机器指令 |
 |---|---:|
@@ -78,7 +78,7 @@
 - 纯 Number 内联:静态 **−195**,函数体/闭包被删掉,循环体成为 raw `fadd`;
 - raw 直接函数:静态收益来自删掉闭包盒/annotations 数组/boxed 入口,
   并把每个实参从 16 字节缓冲改成寄存器 double;函数体只发一份,调用点越多越划算。
-- 20M 次微基准(本机、受后台套件争用影响,只作量级参考):
+- 20M 次微基准(本机、受后台测试套件争用影响,只作量级参考):
   inline 用户态约 **0.05–0.08s**,通用分派路径约 **36s**。
 - 5M 次 `max2(i, i+1)`(同源 `target/selfhost/stage2`;raw 直接调用 vs
   `let f = max2` 强制通用路径):用户态 **0.059s vs 8.473s**,输出相同;
@@ -108,7 +108,7 @@
 - C 仍要求 leaf、无 value use、所有调用点实参已证 Number 且非 Error。
   参数 prone(例如累加器来自可能失败的调用)时不能 raw;同名 import 会覆盖绑定槽,
   也一律回退;返回仍是 boxed `%ql_value`(裸返回/裸多返回值是下一片)。
-- 判别套件:`run_selfhost_tests.py` + `run_interpreter_tests.py`(
+- 判别测试套件:`run_selfhost_tests.py` + `run_interpreter_tests.py`(
   `t58_direct_calls` / `t59_inline_pure` / `t60_raw_direct`);两者 native/boot
   输出必须一致。
 - 静态指令数不是动态指令数;本机没有 perf/valgrind,20M 微基准只用于量级判断。
@@ -206,7 +206,7 @@ Number」生效;编译器的热路径是 AST 遍历、IR 文本拼接和字符�
 | 同上(known-safe ⇒ 现有 inline 路径) | **125,757** | **0.011s** |
 
 这不是「把编译期时间转嫁到运行期」:没有新增逐实参检查,反而删掉了调用点的
-错误检查;证明失败就维持原路径(不优化也不补检查)。判别夹具 `t61_known_safe`。
+错误检查;证明失败就维持原路径(不优化也不补检查)。判别测试用例 `t61_known_safe`。
 
 ### C. 顺带修掉的重复分析
 

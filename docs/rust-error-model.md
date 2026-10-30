@@ -103,7 +103,7 @@ let bad = (): Number -> { let z = 0; let v = (1 / z)?; v; };              // Com
 let legacy = () -> { let z = 0; let v = (1 / z)?; v; };                   // 迁移期允许
 ```
 
-### 3.4 夹具与套件
+### 3.4 测试用例与测试套件
 
 - 新增 `aot/tests/t56_result_annotations.ql` + `.expected`:
   - `Any` / `Result(Number)` 存储 Error;
@@ -114,7 +114,7 @@ let legacy = () -> { let z = 0; let v = (1 / z)?; v; };                   // 迁
   - `: Number` 函数里用 `?`;
   - `: String` 函数里用 `?`;
   - 合法对照:`: Result(Number)` / `: Option(Number)`。
-- 跑同源门禁:`semantic` + `interpreter` + `selfhost`;全量基线在切片 1 合并前再跑。
+- 跑同源测试:`semantic` + `interpreter` + `selfhost`;全量基线在切片 1 合并前再跑。
 
 ## 3.5 切片 1 落地状态(2026-10-25)
 
@@ -150,7 +150,7 @@ native 传 Null(tag 4),boot 用现有 Return completion 返回 Null。`isPropaga
 原样(只认 Error)。
 
 **已评估、已回滚(2026-10-25)**:让 `types.ql` 识别 `Result(T)`/`Option(T)` 并把
-`?` 的结果静态收窄成 payload。判别夹具 IR 188025 → 188013(−12),`clang -O2` 机器指令
+`?` 的结果静态收窄成 payload。判别测试用例 IR 188025 → 188013(−12),`clang -O2` 机器指令
 **±0**;按“无收益不背复杂度”回滚。等 Result/Option 的调用点返回类型也能被跟踪时再做。
 
 当前数字(同源 native 编译器 `target/selfhost/stage2`,含切片 1/2 与 `assert`):
@@ -170,7 +170,7 @@ native 传 Null(tag 4),boot 用现有 Return completion 返回 Null。`isPropaga
 - `run_semantic_diagnostic_tests.py`:10/10(新增 `propagate-number` / `propagate-string`);
 - `t56_result_annotations`:native 与 boot 都逐行匹配 `.expected`
   (含 `Option` 的 None/Some/Error 三态);
-- `run_selfhost_tests.py --compiler /tmp/o_new7`:48 PASS(切片 1 的完整自举套件);
+- `run_selfhost_tests.py --compiler /tmp/o_new7`:48 PASS(切片 1 的完整自举测试套件);
 - `run_interpreter_tests.py --compiler /tmp/o_new7 --interpreter /tmp/bp_new2`:57 PASS(切片 1);
 - 切片 2(Option `?`):
   - `run_semantic_diagnostic_tests.py`:10/10;
@@ -217,7 +217,7 @@ native 传 Null(tag 4),boot 用现有 Return completion 返回 Null。`isPropaga
 `run_selfhost_tests.py --self` 的 **stage2/stage3 IR 逐字节相同**;另外 stage3c/stage4c
 也逐字节相同。boot 由同一编译器构建(`target/native-interpreter/interpreter`)。
 
-| 套件 | 结果 |
+| 测试套件 | 结果 |
 |---|---|
 | `run_semantic_diagnostic_tests.py` | 10/10 |
 | `run_interpreter_tests.py` | **ALL CHECKS PASS**,57 PASS(含 t56/t57、assert fatal、419 demo) |

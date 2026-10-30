@@ -76,7 +76,7 @@
 
 ## 验证
 
-- 现有套件，尤其是**位置/trace** 相关的那几套（`t38`、`t40`、source-context ✓）——
+- 现有测试套件，尤其是**位置/trace** 相关的那几套（`t38`、`t40`、source-context ✓）——
   它们对错误诊断最敏感 ✓。
 - **自举不动点**（stage2 与 stage3 的 IR 一致 ✓）以及**两个引擎逐 fixture 行为一致** ✓。
 - 新 fixture：`Result(Number)` 接受 Number 与 Error、拒绝 String ✓；`?` 穿过一次调用 ✓；
