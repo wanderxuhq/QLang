@@ -1463,7 +1463,63 @@ let collectRawCandidates = (candidates, refs) -> {
     i = i + 1;
   };
 };
-let buildInlineCandidates = (program) -> {
+// 死函数判据:按**名字**数模块级引用(bindId 对前向引用是 -1,见 probes §99.3)。
+// 只对入口程序:编译器会按名字直调库函数,那些边不在 AST 里;库函数只经导出表被用户看到。
+// 按名字计数是过近似(参数/局部同名也算),只会少删。
+let moduleRefs = {};
+let countModuleRefs = (node) -> {
+  if AnyArray.check(node) {
+    let i = 0; while i < node.length { countModuleRefs(node[i]); i = i + 1; };
+  } else if AnyObject.check(node) {
+    let t = node.type;
+    // Import 子树**也要走**:动态 import 的路径表达式可以是任意表达式,`import (path())`
+    // 就是 t37 宿主里唯一调用 `path` 的地方(跳过它就会把仍在被调的函数当死函数删掉)。
+    if !isError(t) && t == "Identifier" && !isError(node.name) {
+      let n = moduleRefs[node.name];
+      if isError(n) { n = 0; };
+      moduleRefs[node.name] = n + 1;
+    };
+    let keys = std.Object.keys(node); let i = 0;
+    while i < keys.length { countModuleRefs(node[keys[i]]); i = i + 1; };
+  };
+  null;
+};
+let deadFunctionCandidates = {};
+let deadCount = 0;
+// 形参注解在**闭包创建时**求值(里面的 return/错误都可见,probes §99.4),所以带注解的函数一律不删。
+let hasParamAnnotation = (fn) -> {
+  let params = fn.parameters;
+  if isError(params) { return true; };
+  let i = 0;
+  while i < params.length {
+    let ann = params[i].annotation;
+    if !isError(ann) && ann != null { return true; };
+    i = i + 1;
+  };
+  false;
+};
+let collectDeadFunctions = (program) -> {
+  moduleRefs = {};
+  countModuleRefs(program);
+  let i = 0;
+  while i < directSlots.length {
+    let sl = directSlots[i];
+    let letNode = sl.letNode; let fn = sl.fnNode;
+    let ok = !isError(letNode) && letNode != null && !isError(fn) && fn != null && !isError(sl.bid);
+    if ok && (isError(sl.letSeq) || sl.letSeq < 0) { ok = false; };
+    if ok && !isError(fn.moduleBody) && fn.moduleBody == true { ok = false; };
+    if ok && letNode.annotation != null && !isError(letNode.annotation) { ok = false; };
+    if ok && !isError(assignedUserNames[letNode.name]) { ok = false; };
+    if ok && !isError(redeclaredUserNames[letNode.name]) { ok = false; };
+    if ok && !isError(exportedUserNames[letNode.name]) { ok = false; };
+    if ok && !isError(importedNames[letNode.name]) { ok = false; };
+    if ok && !isError(moduleRefs[letNode.name]) { ok = false; };
+    if ok && hasParamAnnotation(fn) { ok = false; };
+    if ok { deadFunctionCandidates[sl.bid] = { name: letNode.name, node: letNode }; };
+    i = i + 1;
+  };
+};
+let buildInlineCandidates = (program, allowDead) -> {
   inlineCandidates = {};
   rawDirectCandidates = {};
   directSlots = [];
@@ -1476,6 +1532,8 @@ let buildInlineCandidates = (program) -> {
   collectDirectRefs(program, refs);
   collectInlineCandidates(program, refs, inlineCandidates);
   collectRawCandidates(rawDirectCandidates, refs);
+  deadFunctionCandidates = {};
+  if allowDead { collectDeadFunctions(program); };
 };
 let emitInlineDirect = (info, values) -> {
   let saved = inlineSubst; inlineSubst = {};
@@ -1712,6 +1770,7 @@ let emitLetStmt = (node) -> {
   let value = "null";
   let inline = null;
   let rawInfo = null;
+  let deadInfo = null;
   if allowDirectUserCalls && node.value != null && !isError(node.value.type) && node.value.type == "Function" && !isError(node.bindId) {
     let candidate = inlineCandidates[node.bindId];
     // Bind ids restart for every program (entry/library/each module), so an
@@ -1719,9 +1778,12 @@ let emitLetStmt = (node) -> {
     if !isError(candidate) && candidate != null && candidate.node == node { inline = candidate; };
     let rawCandidate = rawDirectCandidates[node.bindId];
     if !isError(rawCandidate) && rawCandidate != null && rawCandidate.node == node { rawInfo = rawCandidate; };
+    let deadCandidate = deadFunctionCandidates[node.bindId];
+    if !isError(deadCandidate) && deadCandidate != null && deadCandidate.node == node { deadInfo = deadCandidate; };
   };
   if node.value != null {
     if inline != null { value = emitNull(); }
+    else if deadInfo != null { value = "null"; deadCount = deadCount + 1; }
     else if node.value.type == "Function" { value = emitFunction(node.value, node.name, rawInfo != null); }
     else { value = emitExpr(node.value); };
     // A typed binding holds only its type. The check's value still goes through
@@ -3255,7 +3317,7 @@ let emitStdlibInit = (runtimeStmts, libraryStmts) -> {
   // 库内直调:库自己的候选表在这里重建(稍后用户程序的候选表会把它整表覆盖,
   // 两段的 bindId 编号互不干扰)。发射器要求被调函数的定义先于调用点,统计显示
   // 库内 285 个绑定调用点全部满足。
-  if !conservativeMode { buildInlineCandidates(libraryStmts); allowDirectUserCalls = true; };
+  if !conservativeMode { buildInlineCandidates(libraryStmts, false); allowDirectUserCalls = true; };
   let li = 0;
   while li < libraryStmts.length {
     let stmt = libraryStmts[li];
@@ -3978,7 +4040,7 @@ let main = (args) -> {
   let exportsOff = emitBindingPtr({depth: 0, slot: curScope.slots["$exports"]});
   emitBindingStore(exportsOff, moduleExportsReg, "null", "null");
   emitSetModuleLoading(path, true);
-  if !conservativeMode { buildInlineCandidates(userProgram.statements); allowDirectUserCalls = true; };
+  if !conservativeMode { buildInlineCandidates(userProgram.statements, true); allowDirectUserCalls = true; };
   let last = emitBlockStmts(userProgram.statements);
   allowDirectUserCalls = false;
   emitSetModuleLoading(path, false);
@@ -4066,6 +4128,7 @@ let main = (args) -> {
   let staticLine = knownReportLine();
   if staticLine != "" { out[out.length] = "; staticcall: " + staticLine; };
   // ②a 补充:发射序折扣(同样要等主函数体发完 —— 函数体是在 main 发射过程中才发现并发出的)。
+  out[out.length] = "; deadfns: dropped=" + std.String.toString(deadCount);
   out[out.length] = "; rawABI order: usercalls=" + std.String.toString(ordCallsTotal) + " emitted=" + std.String.toString(ordCallsEmitted) + " notyet=" + std.String.toString(ordCallsNotYet) + " retraw=" + std.String.toString(ordCallsRetRaw) + " direct=" + std.String.toString(directCalls) + " inline=" + std.String.toString(inlineUsed) + " rawcalls=" + std.String.toString(rawCalls) + " rawfuncs=" + std.String.toString(rawFuncs) + " rawretcalls=" + std.String.toString(rawDoubleCalls) + " rawretfuncs=" + std.String.toString(rawDoubleReturns);
   // R10-c: out[0..mainAt) = prelude plus the cold helper, then every function body,
   // then main. Function bodies come before their direct callers because this
