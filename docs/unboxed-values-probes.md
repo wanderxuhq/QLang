@@ -2832,3 +2832,36 @@ release 完全不同,拿到的是 0/null。
 **所以修法要改的是 `emitBorrowedCall` 在顶层对"被调者标识符"的求值**(它应该直接按全局槽读,
 和 `emitIdentifier` 对全局名的既有解析一致),而不是去动 `sameBody`/`depth` 这些判断 ——
 §102.3 里"槽定位与档位解耦"的说法要修正为"**通用调用路径对全局被调者的求值**是错的"。
+
+### 102.5 试了"接口直调目标穿透保守档",无效 —— 反证出真正的问题(2026-10-30)
+
+按 §102.4 的推断做了第一个修法:给 `loadStdlibInterfaceMod` 播种的直调目标打 `fromStdlib`,
+让它在 debug 档也生效(理由:那是 split 模式调库函数的**约定**,不是用户代码优化);并把
+"同名声明让旧目标失效"提到档位之外。结果:
+
+| 程序 | debug |
+|---|---|
+| `println(3)` | 3 ✅ |
+| `let a = 1 + 2; println(a)` | 3 ✅ |
+| `println(1 + 2)` | **仍然 0** ❌ |
+
+但这次的**计数器**给了决定性线索:
+
+```
+release: ; directreject: nohit=0 notable=0 noinfo=2 assigned=0 arity=0 args=0 ann=2
+debug  : ; directreject: nohit=0 notable=0 noinfo=4 assigned=0 ……
+```
+
+`noinfo` 表示"表存在、但里面没有这个名字"。也就是说 debug 档查的**不是同一张表**:
+`lookupSlot("println")` 在 debug 下落到**更深的那一层作用域**(全局作用域,深度 1),那层的
+`directFns` 没有库接口的条目 —— 这与 §102.4 的 IR 证据(`load ptr, ptr %frame` 取父帧、
+再读父帧槽 13)完全吻合。
+
+**所以:
+- 顶层 `println` 在 release 下解析到**模块作用域**(深度 0),debug 下解析到**全局作用域**(深度 1);
+- 根因不在"调用分派",而在**同一份程序两档的作用域/槽解析结果不同** —— 也就是 §102.3 的原判断
+  ("取哪个槽的决策不该随档位变化")方向是对的,只是没找到是哪一处让 `lookupSlot` 少了一层。
+
+下一轮查:两档的 `curScope` 链在入口程序发射时是否相同(`emitFrame`/`reserveModuleGlobals`/
+`emitModuleStd` 里有没有随 `allowDirectUserCalls` 变化的分支),以及 `lookupSlot` 的
+`publicRuntimeNames` 过滤是否在两档给出不同结果。
