@@ -233,6 +233,21 @@ selfhost 全套
 热循环改动要看 `aot/bench` 的 **CPU 时间**(`run(s)`/`cpu(s)`,5 次最小值);墙钟在
 本机有 ±15% 抖动。
 
+### 3.13 2026-10-30 本轮收敛(供接手)
+
+- **debug / release 两档落地并可用了**:`--debug`(编译器保守发射 + 链接跳过 opt)与 release 语义一致、
+  产物只差优化;差分套件 `aot/run_debug_diff_tests.py`(41 夹具两档逐字节相同)是常规门。
+  修的关键是"**没有注解 ≠ 检查 null**"(`emitAnnotatedCheck` 的占位串 `"null"`),见 probes §103。
+- **module 套件脱离 Rust 并转绿**:改为 stage2 + `tools/link` + native 解释器,删掉 Rust 对照腿;
+  顺带修正"t15 末句未处理 Error ⇒ exit 1"的断言,见 probes §104。基线里它不再是环境缺口。
+- **extension 套件的假红查清**:Android 的 `/tmp` 不在 dlopen 允许命名空间内,加 `--tmp <dir>` 即可,
+  28 条契约全绿(probes §96 附近 + `run_extension_tests.py --tmp`)。
+- **编译期删除(死函数/闭包盒)已评估并否决**(作者:太危险):五次尝试的具体失败点、
+  2000 函数程序的收益(单模块 IR −56%、前端 −22%、链接 −44%)与将来若要做的前置条件
+  (发射期使用表 → 模块级 refId 解析 → 显式接口清单)都在 probes §97–§101。
+- **LTO 不划算(数值型负载)**:非 LTO 链接 2.3s/运行 347ms;LTO O2 链接 11.7s/运行 378ms —— 见 probes §105。
+  LTO 只对闭包搬运型负载有价值,文档里不要再写"发布一律 --lto"。
+
 ## 4. 待办(全部,按依赖排序)
 
 每条给:做什么 / 落在哪 / 验收 / 半径与依赖。
