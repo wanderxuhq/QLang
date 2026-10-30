@@ -1853,6 +1853,12 @@ let __procRun = (args) -> {
   let bad = __procCheckArgs(args, "std.process.run")?;
   let outPath = __procTemp(); let errPath = __procTemp();
   let status = __spawnRaw(args, outPath, errPath);
+  // Negative codes are mechanism failures (empty argv, >=64 args, open/fork
+  // failures), not exit statuses. Map them to an Error like __procSpawn does.
+  if status < 0 {
+    __fs_remove(outPath); __fs_remove(errPath);
+    return __err("IOError", "std.process.run: cannot spawn (code " + __itoa(status) + ")");
+  };
   let outText = ""; let errText = "";
   let outRead = __fs_read_text(outPath);
   if !isError(outRead) && outRead != null { outText = outRead; };

@@ -315,8 +315,10 @@ let stdWriteScan = (node) -> {
       let tainted = !isError(stdTainted[name]) && stdTainted[name] == true;
       let assigned = !isError(assignedUserNames[name]) && assignedUserNames[name] == true;
       let letBound = !isError(letSeenNames[name]) && letSeenNames[name] == true;
-      // 干净的本层 let 容器(且从未被重赋值)不可能指向 std;其余一律按可能写 std 处理。
-      if tainted || assigned || !letBound { stdMembersWritten = true; };
+      let isParam = !isError(paramNames[name]) && paramNames[name] == true;
+      // A clean let container (never reassigned, never a parameter name) cannot
+      // point at std; everything else is treated as a possible std write.
+      if tainted || assigned || !letBound || isParam { stdMembersWritten = true; };
     } else {
       stdMembersWritten = true;
     };
@@ -1207,6 +1209,9 @@ let astVisits = 0;
 let visitBy = { module: 0, slots: 0, names: 0, leaf: 0, bodylets: 0 };
 let assignedUserNames = {};
 let letSeenNames = {};
+// Names ever used as a function parameter. A write rooted at a parameter can
+// mutate std even if an unrelated `let` with the same name exists.
+let paramNames = {};
 let redeclaredUserNames = {};
 let exportedUserNames = {};
 // One pass over the program collects every *name-level* fact the emitter needs:
@@ -1232,6 +1237,13 @@ let collectAssignedNames = (node, names) -> {
     if !isError(node.type) && node.type == "Let" && !isError(node.name) {
       if !isError(letSeenNames[node.name]) { redeclaredUserNames[node.name] = true; }
       else { letSeenNames[node.name] = true; };
+    };
+    if !isError(node.type) && node.type == "Function" && !isError(node.parameters) {
+      let pi = 0;
+      while pi < node.parameters.length {
+        if !isError(node.parameters[pi].name) { paramNames[node.parameters[pi].name] = true; };
+        pi = pi + 1;
+      };
     };
     if !isError(node.type) && node.type == "Assign" && !isError(node.target) && !isError(node.target.type) && node.target.type == "Identifier" {
       names[node.target.name] = true;
@@ -1920,9 +1932,6 @@ let emitStoreByName = (name, expression, target, declaredType) -> {
   // A same-body write target is a direct slot pointer: the frontend guarantees
   // the binding exists, so the absent-pointer check is dead.
   let sameBody = hit.depth == 0 && (isError(hit.scope.optional) || isError(hit.scope.optional[name]));
-  if hit.depth == 0 && !isError(hit.scope.maybeEmpty) && !isError(hit.scope.maybeEmpty[name]) {
-    hit.scope.maybeEmpty[name] = false;
-  };
   let unannotated = sameBody && (isError(hit.scope.annotated) || isError(hit.scope.annotated[name]));
   if !inRuntime && !sameBody {
     let absent = temp(); let bad = lbl(); let good = lbl();
@@ -3736,18 +3745,24 @@ let cacheFlagsText = (foldEnabled, staticScan) -> {
 let sha256Map = (paths) -> {
   let map = {};
   if paths.length == 0 { return map; };
-  let cmd = ["sha256sum"]; let i = 0;
-  while i < paths.length { cmd[cmd.length] = paths[i]; i = i + 1; };
-  let r = std.process.run(cmd);
-  if r.status != 0 { return map; };
-  let lines = std.String.split(r.stdout)("\n"); let j = 0;
-  while j < lines.length {
-    let line = lines[j];
-    if line != "" {
-      let cells = std.String.split(line)("  ");
-      if cells.length >= 2 { map[cells[1]] = cells[0]; };
+  // ql_spawn accepts < 64 argv entries; a large import graph must not make the
+  // hash silently fail (which would turn every cache lookup into a miss).
+  let start = 0;
+  while start < paths.length {
+    let cmd = ["sha256sum"]; let i = start;
+    while i < paths.length && i < start + 50 { cmd[cmd.length] = paths[i]; i = i + 1; };
+    let r = std.process.run(cmd);
+    if r.status != 0 { return map; };
+    let lines = std.String.split(r.stdout)("\n"); let j = 0;
+    while j < lines.length {
+      let line = lines[j];
+      if line != "" {
+        let cells = std.String.split(line)("  ");
+        if cells.length >= 2 { map[cells[1]] = cells[0]; };
+      };
+      j = j + 1;
     };
-    j = j + 1;
+    start = start + 50;
   };
   map;
 };
@@ -3761,11 +3776,17 @@ let cachePathsOf = (entry, runtime, extras) -> {
 let cacheHeader = (entry, runtime, extras, envName, foldEnabled, staticScan) -> {
   let paths = cachePathsOf(entry, runtime, extras);
   let shas = sha256Map(paths);
+  // Never write a header with a missing hash: the Error text would be spliced into
+  // the file and the cache would silently never hit again. Skip caching instead.
+  if isError(shas[entry]) || isError(shas[runtime]) { return ""; };
   let lines = ["v2", "source=" + shas[entry], "env=" + envName, "runtime=" + shas[runtime], cacheFlagsText(foldEnabled, staticScan)];
   let i = 0;
   while i < paths.length {
     // entry/runtime 已有独立行;其余(import 模块、接口文件)逐条记路径+哈希。
-    if paths[i] != entry && paths[i] != runtime { lines[lines.length] = "dep=" + shas[paths[i]] + "\t" + paths[i]; };
+    if paths[i] != entry && paths[i] != runtime {
+      if isError(shas[paths[i]]) { return ""; };
+      lines[lines.length] = "dep=" + shas[paths[i]] + "\t" + paths[i];
+    };
     i = i + 1;
   };
   std.String.join(lines)("\n") + "\n---\n";
@@ -3802,17 +3823,17 @@ let cacheParse = (text) -> {
   };
   h;
 };
-let cacheVerify = (h, entry, runtime, extras, envName, foldEnabled, staticScan) -> {
+let cacheVerify = (h, entry, runtime, envName, foldEnabled, staticScan) -> {
   if h == null || h.version != "v2" { return false; };
   if h.env != envName { return false; };
   if h.flags != cacheFlagsText(foldEnabled, staticScan) { return false; };
-  // 依赖文件必须仍是头里记录的那些、且哈希一致。
-  let expected = cachePathsOf(entry, runtime, extras);
-  let want = []; let i = 0;
-  while i < expected.length { if expected[i] != entry && expected[i] != runtime { want[want.length] = expected[i]; }; i = i + 1; };
-  if want.length != h.deps.length { return false; };
-  let paths = [entry, runtime]; i = 0;
-  while i < want.length { paths[paths.length] = want[i]; i = i + 1; };
+  // Verify against the dependency list **stored in the header**. Recomputing it from
+  // moduleCache at read time cannot work: the cache is consulted before parsing, so
+  // moduleCache is empty and every program with an import missed (perf bug).
+  // A changed entry/runtime/module hash — including a module whose own imports
+  // changed — still invalidates correctly.
+  let paths = [entry, runtime]; let i = 0;
+  while i < h.deps.length { paths[paths.length] = h.deps[i].path; i = i + 1; };
   let shas = sha256Map(paths);
   if h.source != shas[entry] { return false; };
   if h.runtime != shas[runtime] { return false; };
@@ -3875,14 +3896,16 @@ let main = (args) -> {
     [];
   };
   // --ir-cache 命中:入口/runtime/import 模块/接口/选项全部未变才回放。默认关闭。
-  if irCacheOn && splitStdlibMode && args[4] != "-" {
+  if irCacheOn && splitStdlibMode && args[4] != "-" && membersOutPath == "" && !timingOn {
     let raw = std.fs.readFileText(args[1] + ".qir");
     // An Error value must not be passed as a call argument (the language turns
     // that into a new chained Error), so guard the miss before calling.
     let stamp = null;
     if !isError(raw) { stamp = cacheParse(raw); };
-    if stamp != null && cacheVerify(stamp, args[1], args[2], cacheExtras(), cacheEnvName(args[4]), foldEnabled, staticScan) {
-      print(stamp.body); return null;
+    if stamp != null && cacheVerify(stamp, args[1], args[2], cacheEnvName(args[4]), foldEnabled, staticScan) {
+      // `--check` promises no output; a hit must not replay the IR to stdout.
+      if !checkMode { print(stamp.body); };
+      return null;
     };
   };
   // --check 快路径:同上(依赖也参与),否则会拿旧结论掩盖新引入的 import 错误。
@@ -3890,7 +3913,7 @@ let main = (args) -> {
     let rawCheck = std.fs.readFileText(args[1] + ".qcheck");
     let stamp = null;
     if !isError(rawCheck) { stamp = cacheParse(rawCheck); };
-    if stamp != null && cacheVerify(stamp, args[1], args[2], cacheExtras(), cacheEnvName(args[4]), foldEnabled, staticScan) { return null; };
+    if stamp != null && cacheVerify(stamp, args[1], args[2], cacheEnvName(args[4]), foldEnabled, staticScan) { return null; };
   };
   if args.length != 3 && !splitStdlibMode && !interfaceDump { return std.Error.raise("CompileError", "usage: qlangc --emit-llvm|--emit-module source.ql runtime.ql", null); };
   let source = args[0]; let sourcePath = args[1]; let runtimeSource = args[2];
@@ -4062,7 +4085,7 @@ let main = (args) -> {
         line("declare %ql_value @" + sym + "(ptr, ptr, i64, %ql_value)");
       };
       let fdecl = fastArityBySymbol[sym];
-      if !isError(fdecl) && fdecl != null {
+      if !isError(fdecl) && fdecl != null && fdecl >= 0 {
         let sig = "ptr";
         let ai = 0;
         while ai < fdecl { sig = sig + ", %ql_value"; ai = ai + 1; };
@@ -4382,14 +4405,14 @@ let main = (args) -> {
   flushLines();
   if irCacheOn && splitStdlibMode && args[4] != "-" && irCacheBody.length > 0 {
     let header = cacheHeader(args[1], args[2], cacheExtras(), cacheEnvName(args[4]), foldEnabled, staticScan);
-    std.fs.writeText(args[1] + ".qir", header + std.String.join(irCacheBody)("\n") + "\n");
+    if header != "" { std.fs.writeText(args[1] + ".qir", header + std.String.join(irCacheBody)("\n") + "\n"); };
   };
   // --check 的产物:一份"结论"sidecar(只缓存 ok;有错不写,错误每次都要重报)。
   // env = stdlib 目录名 —— 它本身就是 (编译器字节 + runtime + bundle) 的哈希,和库缓存同源,
   // 因此换编译器/换库都会自动失效。
   if checkMode && args.length == 5 {
     let header = cacheHeader(args[1], args[2], cacheExtras(), cacheEnvName(args[4]), foldEnabled, staticScan);
-    std.fs.writeText(args[1] + ".qcheck", header + "verdict=ok\n");
+    if header != "" { std.fs.writeText(args[1] + ".qcheck", header + "verdict=ok\n"); };
   };
 };
 

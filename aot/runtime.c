@@ -35,6 +35,7 @@ static inline long syscall3(long n, long a, long b, long c) {
 #define CLASSES 33
 #define MIN_SHIFT 4
 #define MIN_COLLECTION ((size_t)8 * 1024 * 1024)
+#define MAX_COLLECTION ((size_t)64 * 1024 * 1024)
 typedef struct {
   size_t owner;
   unsigned shift;
@@ -143,9 +144,11 @@ __attribute__((noinline)) static void collect_heap(void) {
   allocated_since_gc = 0;
   /* Collect after allocating roughly the live set again, not half of it: GC cost
    * is dominated by scanning live data, and the interpreter's live set (bundle +
-   * Unicode tables) makes frequent small-heap collections dominate run time. */
+   * Unicode tables) makes frequent small-heap collections dominate run time.
+   * Cap the threshold so peak heap stays bounded (~1.5x live) on tight devices. */
   collection_threshold = live_bytes;
   if (collection_threshold < MIN_COLLECTION) collection_threshold = MIN_COLLECTION;
+  if (collection_threshold > MAX_COLLECTION) collection_threshold = MAX_COLLECTION;
 }
 void* ql_alloc(size_t n) {
   if (n > (size_t)1 << (CLASSES - 1)) return 0;

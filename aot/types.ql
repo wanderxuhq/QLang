@@ -80,7 +80,13 @@ let typeLookup = (name) -> {
   if isError(typeBuiltins[name]) { return ""; };
   name;
 };
-let typePush = () -> { typeScopes[typeDepth] = {}; typeFnResults[typeDepth] = {}; typeRepScopes[typeDepth] = {}; typeBindScopes[typeDepth] = {}; typeDepth = typeDepth + 1; null; };
+let typePush = () -> {
+  typeScopes[typeDepth] = {}; typeFnResults[typeDepth] = {}; typeRepScopes[typeDepth] = {};
+  typeBindScopes[typeDepth] = {};
+  let nt = typeNarrowTable(); nt[typeDepth] = {};
+  typeDepth = typeDepth + 1;
+  null;
+};
 let typePop = () -> { typeDepth = typeDepth - 1; null; };
 // 词法查找:这个名字是不是「返回类型已知的函数绑定」。
 let typeFnLookup = (name) -> {
@@ -99,17 +105,42 @@ let tagType = (node, name) -> { node.staticType = name; name; };
 // 它不产生新语义,只让发射端能把本已死掉的检查判为死代码。
 // 收窄事实按绑定 id 记,不按「名字+深度」。一个绑定在任意深度被写入都必须作废;
 // 否则嵌套块里的 `x = 1/z` 之后,外层仍认为 x 不是 Error(实测会把 Error 当 Number 算)。
-let typeNarrowBinds = {};
+// 事实必须**按深度分层**:函数体分析结束后,体内建立的收窄事实不能泄漏到之后分析的
+// 另一个函数(实测会把 Error 当 Number 算)。typePush 给每个新深度建一张表,typePop
+// 之后查不到它;写入则清除所有深度(嵌套块里的写入必须作废外层事实)。
+let typeNarrowFacts = {};
+let typeFloorStack = [];
+let typeFloorDepth = 0;
+let typeNarrowTable = () -> {
+  let t = typeNarrowFacts[typeProgram];
+  if isError(t) { t = {}; typeNarrowFacts[typeProgram] = t; };
+  t;
+};
 let typeNarrowed = (bid) -> {
   if isError(bid) || bid < 0 { return false; };
-  let table = typeNarrowBinds[typeProgram];
-  if isError(table) { return false; };
-  !isError(table[bid]) && table[bid] == true;
+  let table = typeNarrowTable();
+  let floor = if typeFloorDepth <= 0 { 0; } else { typeFloorStack[typeFloorDepth - 1]; };
+  let i = typeDepth - 1;
+  while i >= floor {
+    if !isError(table[i]) && !isError(table[i][bid]) && table[i][bid] == true { return true; };
+    i = i - 1;
+  };
+  false;
 };
 let typeNarrowMark = (bid, on) -> {
   if isError(bid) || bid < 0 { return null; };
-  if isError(typeNarrowBinds[typeProgram]) { typeNarrowBinds[typeProgram] = {}; };
-  typeNarrowBinds[typeProgram][bid] = on;
+  let table = typeNarrowTable();
+  if on {
+    let d = typeDepth - 1;
+    if isError(table[d]) { table[d] = {}; };
+    table[d][bid] = true;
+  } else {
+    let i = 0;
+    while i < typeDepth {
+      if !isError(table[i]) { table[i][bid] = false; };
+      i = i + 1;
+    };
+  };
   null;
 };
 // 语句序列是否「必然退出」(末句 return)。
@@ -925,6 +956,10 @@ let inferExpr = (node) -> {
     let declaredReturn = annotationBuiltinName(node.returnTypeAnnotation);
     annotationRejectConstructor(node.returnTypeAnnotation);
     typePush();
+    // Facts from enclosing scopes must not flow into a function body: the body
+    // may run after later writes. Only facts established inside it are visible.
+    typeFloorStack[typeFloorDepth] = typeDepth;
+    typeFloorDepth = typeFloorDepth + 1;
     let p = 0;
     while p < node.parameters.length {
       let param = node.parameters[p];
@@ -1058,6 +1093,7 @@ let inferExpr = (node) -> {
       if rawAnyParam { rawAbiFuncAny = rawAbiFuncAny + 1; };
       if node.rawAbiRet { rawAbiFuncRet = rawAbiFuncRet + 1; };
     };
+    typeFloorDepth = typeFloorDepth - 1;
     typePop();
     tagType(node, "Function");
     node.cannotBeError = true;
@@ -1413,7 +1449,8 @@ let inferTypes = (stmts) -> {
   typeAssignedNames[typeProgram] = {};
   typeBindTable[typeProgram] = [];
   typeBindCount[typeProgram] = 0;
-  typeNarrowBinds[typeProgram] = {};
+  typeNarrowFacts[typeProgram] = {};
+  typeFloorDepth = 0;
   typeScopes[0] = {};
   typeFnResults[0] = {};
   typeRepScopes[0] = {};
@@ -1442,7 +1479,8 @@ let inferTypes = (stmts) -> {
   typeNsUnresolved[typeProgram] = 0;
   typeUnknownBinds[typeProgram] = [];
   typeUnknownParams[typeProgram] = [];
-  typeNarrowBinds[typeProgram] = {};
+  typeNarrowFacts[typeProgram] = {};
+  typeFloorDepth = 0;
   typeDepth = 1;
   typeReturnDepth = 0;
   inferStmts(stmts);
