@@ -3398,3 +3398,54 @@ python3 aot/run_runtime_diagnostic_tests.py    → Runtime diagnostic suite: ALL
 
 顺带纠正 handoff §5 的三条"已知红":`runtime_diag`(本条)、`module`(§104)、`extension`(§116)
 现在都不红了 —— 这三条都是文档滞后,不是代码状态。
+
+## 122. 2026-10-31 审查修复:错值/崩溃/门禁静默失真(2026-10-31)
+
+对 `rust-error-model` @ `dc8af53` 做完整审查后的一批修复。每条都带最小双引擎回归,
+下面只记**判决性测量**与口径变化;细节在提交信息里。
+
+**错值类**
+
+- 裸槽(unboxable)判定加入 `prone`(`types.ql`)。反例 `let x = 1/z; println(x + 1);`
+  修复前 native 打印 `1`(解释器 `?Error`)。
+- 收窄事实改按 `bindId` 记,嵌套块赋值作废(`types.ql`);同类反例修复前 native `1` / boot `?Error`。
+- String `==` 快路径要求 String 一侧 `cannotBeError`(否则 Error 被当"不等")。
+- `?Option` 失败边补返回检查,与 boot 的 Return completion 对齐。
+- `fastArityOf` 改按**符号**记(`fastArityBySymbol`):同名带注解用户函数不再发未定义的 `@ql_fnN_f`。
+- std 链缓存/直调的失效判据加入别名污点(`let m = std.Math; m.abs = ...`)与 import 模块写入。
+- boot `TypedArray`/`TypedSizedArray` 对成员错误加 `isError` 守卫(此前 boot 接受 `TypedArray(5)`)。
+- parser 返回表补 `setReturnContext`:插值 `${(1/z)?}` 不再绕过 Result/Option 规则。
+
+**崩溃/挂死**
+
+- `std.process.*` argv 用字符串头字节长(非 ASCII 不再截断);参数/`fs.writeText` 先验
+  `tag==2`,`std.process.run(["echo",42])` 与 `writeText(path,42)` 从段错误变为 `TypeMismatch`。
+- `ql_wait` 只在 `EINTR` 重试、`pid<=0` 直接报错;重复 wait 从死循环变为 `IOError`。
+- GC 阈值从 `live/2` 改为 `live`(GC 成本由 live 扫描主导)。实测:
+  解释器 `println(1)` 8.2s → 3.3s;`t43_number_library` >600s(超时)→ **242s**;
+  `t43` 前缀后单次 `parseFloat` 74s → 13.7s。
+
+- 未初始化读的另一条路径:`let x; println("${x}")` 修复前 native **段错误**(引导器 `?Error`):
+  `emitIdentifier` 的 sameBody 快捷路径假设前端已证初始化,但插值内的读不被"直接读"判据拦。
+  现在 `let x;` 的绑定保留 `ql_empty` 检查,直到第一次赋值。
+
+**门禁/工具**
+
+- `--ir-cache`/`--check` 的 key 升 v2:入口 + runtime + 每个 import 模块 + symbols/mod + 选项;
+  改 import 后不再命中旧 IR/旧结论,`--debug --ir-cache` 不再回放 release IR。
+- `tools/link` 真正消费 `--opt`(此前 opt 0/2 产物逐字节相同);runtime.o 缓存键 = 优化级 + 源码哈希,
+  且用 `Bytes.read` 判存在(文本读 ELF 必 IOError ⇒ 每次重编)。
+- `verify` 不再对 0 条比对报绿;link 默认从对象旁取 `strings.tsv`,缺失则失败(除非 `--no-verify`)。
+- 测试驱动:缺 `.expected` 一律失败(此前 16 个用例静默 pass,其中 native 分支根本不执行);
+  `run_diff` 比较退出码;`run_debug_diff_tests.py` emit 失败不再跳过;`run_bench` 失败返回非零。
+- split 模式补上 symbols.tsv 第三列 → 库的寄存器入口终于被使用(t30 风格程序:11 个 `_f` 调用、233 条声明)。
+
+**头条(单模块 t20,`clang -O2`)**:IR **188,630** / 机器 **145,187**;
+修复前同源编译器 187,736 / 142,367 ⇒ **+894 / +2,820**。原因可解释:
+`unboxable bindings` 667 → **506**(少 161 个绑定不再被错误解箱),`located-error elided` 92 → 111。
+这是正确性代价,不是新优化;不要拿它当性能回归去回滚。
+
+**验收(同源)**:selfhost(59)/interpreter(41,含 t43/t64)/assignment/semantic(含插值与 `Array(...)` 诊断)/
+runtime_diag/module/debug-diff/String 套件全绿;QLang 驱动 `run_tests` 59/0;`bundle --check` 通过;
+stage2→stage3 IR 逐字节相同(1,020,735 行)。新增 `t64_array_types`(三张清单);
+`t13`/`t14` 的静态已知不匹配改用动态值/允许 exit 1(运行期检查的覆盖不变)。

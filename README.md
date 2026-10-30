@@ -807,8 +807,8 @@ overhead.
   is `T.check(v)` (mirroring `isError(v)`): `Number.check(42)` is `true`,
   `Number.check("a")` is `false`.
 - A type value itself is **not callable** — `Number(42)` is an error
-  (`Not callable`). The exceptions are the type **constructors** `Array` and
-  `Object`, which are functions (below).
+  (`Not callable`). `Object` is a **constructor** function (below); `Array` is
+  only a placeholder name (not callable, not a type).
 - Types have **no names** — `Number`, `String`, ... are just globals pointing
   at type values, exactly like any other binding. Error messages quote the
   annotation text you wrote.
@@ -858,25 +858,22 @@ old string-returning `Type.of` (migrate comparisons like
 There is no global `Type` alias — the annotation form is `std.Type`:
 `let T: std.Type = Number`.
 
-### Type constructors: `Array(x)` / `Object(x)`
+### Array types and the `Object(x)` constructor
 
-`Array` and `Object` are **functions (constructors)** taking exactly **one**
-argument, whose type is a *union* of allowed forms (union members are mutually
-exclusive — a number is not a type value and vice versa); the member that
-matches decides the semantics. Invalid forms are rejected at construction time
-with an error value (never silently).
+**Array family — one name per type** (2016-10 rename; `Array` itself is only a
+placeholder, so `Array(3)` / `Array(Number)` are errors, not types):
 
-**`Array(x)` — argument is `Number | Type | [Type] | {length, element}`:**
-
-| Matching member | Semantics | `check` |
+| Constructor | Semantics | `check` |
 |---|---|---|
-| `Number` (length `n`) | fixed-length array, any elements | array && `length == n` |
-| `Type` (`T`) | any length, every element of `T` | array && every element passes `T.check` |
-| `[Type]` (`[T1, T2, ...]`) | fixed length `n`, per-position element types | `length == n` && per-position checks |
-| `{length, element}` | fixed length + element type combined | array && `length == n` && every element passes `element.check` |
+| `AnyArray` | any length, any elements | value is an array |
+| `SizedArray(n)` | exactly `n` elements | array && `length == n` |
+| `TypedArray(T)` | any length, every element of `T` | array && every element passes `T.check` |
+| `TypedSizedArray(n, T)` | exactly `n`, every element of `T` | array && `length == n` && every element passes `T.check` |
+| `Tuple([T1, T2, ...])` | fixed positions | `length == n` && per-position checks |
 
-The members are self-describing: `[Type]` is `Array(std.Type)` and
-`{length, element}` is `Object({length: Number, element: std.Type})`.
+`T` may itself be a type value or an ordinary object-schema descriptor (the same
+descriptor `Object({...})` accepts). Invalid members are rejected at
+construction time with an `Error` value (never silently).
 
 **`Object(x)` — argument is `Type | shape object`:**
 

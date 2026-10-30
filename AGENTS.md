@@ -101,19 +101,19 @@ python3 aot/native_link.py /tmp/p.ll -o /tmp/p
   `run_extension <tmp-dir> --root <repo>`,先编宿主、再编 4 个 `.so`(`--shared`)与 3 个负例,
   删源码后跑宿主比对 `.expected`(28 契约)。`tmp-dir` 必须在 dlopen 允许的路径下。
 - **不依赖 Python 的测试驱动**:`aot/run_tests.ql`(QLang)——
-  `run_tests <stdlib-dir>` 跑原生用例(按 `aot/tests/manifest.txt`,57 个);
-  `run_tests <stdlib-dir> --interpreter` 跑解释器用例(按 `aot/tests/interpreter.txt`,40 个,
+  `run_tests <stdlib-dir>` 跑原生用例(按 `aot/tests/manifest.txt`,59 个);
+  `run_tests <stdlib-dir> --interpreter` 跑解释器用例(按 `aot/tests/interpreter.txt`,41 个,
   缺解释器时会自己编)。`t37_extensions` 不在此列(要现建 `.so`,归 extension 测试)。
   构建/链接本身也早就有 QLang 版:`aot/build.ql`。清单是显式文件(QLang 没有目录列举原语),
   加用例时要同时加一行。
 - **自举测试也可以 QLang 跑**:`aot/run_selfhost.ql` —— `run_selfhost <stdlib-dir> [--jobs N]`,
-  并行跑 `aot/tests/split.txt`(55 个)并验证 stage2/stage3 的 IR 逐字节相同;
+  并行跑 `aot/tests/split.txt`(56 个)并验证 stage2/stage3 的 IR 逐字节相同;
   `--jobs 6` 约 8 分钟。新增宿主叶子后必须先重建标准库对象,否则新 API 在旧对象里不存在。
 - **基准也可以 QLang 跑**:`aot/run_bench.ql` —— `run_bench <stdlib-dir> [--runs N]`,
   按 `aot/bench/benches.txt` 测单模块/标准库对象两档的构建与运行耗时并比对输出
   (计时靠 `date +%s%N`;本机 `/proc/uptime` 冻结、`/proc/self/stat` 只算本进程 CPU)。
 - **差分测试也可以 QLang 跑**:`aot/run_diff.ql` —— `run_diff <stdlib-dir> [--jobs N]`,
-  每个用例两档各编一次并比对输出,`--jobs 6` 55 通过 / 0 失败(约 1.5 分钟)。
+  每个用例两档各编一次并比对输出,`--jobs 6` 56 通过 / 0 失败(约 1.5 分钟)。
   Python 版 `run_debug_diff_tests.py` 仍在,两者判据相同(两档逐字节相同)。
 - `native_link.py` 用单线程 LLD,并校验每个静态字符串的 ELF 重定位/字节;不要绕过它直接 clang 链接。
 - `tools/link --root <repo>`:链接器自己的三处仓库相对路径(`aot/runtime.c`、`aot/toolchain/*.cfg`、
@@ -213,8 +213,10 @@ cp /tmp/qlang-library-bundle.ql stdlib/bundle.ql
 - `let x: T = v` 在声明时检查;参数注解在**完成调用**时检查(部分应用不查);
   重赋值再审;注解是完整表达式,在出现处求值。
 - 检查失败产生 `TypeCheck` 错误值,不是崩溃;若 `check` 自身出错,检查**失败**,并把该错误值直接作为绑定值。
-- `Array` / `Object` 是**构造器函数**(恰好 1 参),不是类型值:
-  `Array(Number)`、`Array(3)`、`Object({name: String})`。
+- `Array` 只是**占位名**(不是类型、不可调用);数组类型是一族独立构造器:
+  `SizedArray(n)`、`TypedArray(T)`、`TypedSizedArray(n, T)`、`Tuple([...])`(外加 `AnyArray`)。
+  `Object` 仍是构造器函数(恰好 1 参):`Object({name: String})`。
+  旧写法 `Array(3)`/`Array(Number)` 现在报编译错误(占位名不是构造器)。
 - 联合类型的规范构造子是 `A | B`,用 `std.Type.make` 组合:
   `let Union = (A, B) -> std.Type.make((v) -> A.check(v) || B.check(v));`
   `Result(T) ≡ T | Error`、`Option(T) ≡ T | Null` 已在 `stdlib/result.ql` 实现;
@@ -358,9 +360,11 @@ source.ql
   - **K**:基线卫生/仓库:module 环境缺口、extension 先于本次红、platform 需 release;
     4 项未纳入基线;difftest 不可裁决;清理 `_b.ql`/`_df_*`/worktree/backup。
   - **L**:未验证隔离区(不许当结论用)。
-- 已知红(最后一次记录;重跑确认):`runtime_diag` 的 cause-provenance(`t38:38`)是真 bug;
+- 已知红(最后一次记录;重跑确认):`runtime_diag` 的 cause-provenance 已修(`t38:38` 转绿,2026-10-30 复核);
   `module` 是环境缺口(需 debug 宿主;宿主跑 boot 太慢/超时);`extension` 在 HEAD 上也红。
-  `assignment`/`runtime_diag` 的测试用例漂移已在 `5d0f4e8` 修(assignment 应绿;runtime_diag 仍因 D 红)。
+  `assignment`/`runtime_diag` 的测试用例漂移已在 `5d0f4e8` 修。
+  2026-10-31 审查修复后:`selfhost`/`interpreter`/`assignment`/`semantic`/`runtime_diag`/String 套件均绿;
+  解释器套件在 GC 阈值收紧前会卡 `t43`(解析极值指数分配密集),修复后 t43 ~4 min。
 
 ## 6. 工作纪律(硬规则)
 
