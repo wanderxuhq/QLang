@@ -162,6 +162,10 @@ cp /tmp/qlang-library-bundle.ql stdlib/bundle.ql
 ```
 
 - 改 `stdlib/*.ql` 后**必须**重建 `stdlib/bundle.ql` 并 `--check`;`manifest.json` 管依赖与导出顺序。
+- **不用 Rust 的重建方式**(产物与 Rust 宿主逐字节相同,见 probes §109):
+  `stage2 --emit-llvm stdlib/build_bundle.ql aot/runtime.ql > /tmp/bb.ll && tools/link /tmp/bb.ll -o
+  /tmp/bb && /tmp/bb > stdlib/bundle.ql && /tmp/bb --check`。native 解释器跑这个脚本会超时,
+  原因是解释执行太慢 —— 要跑就编成原生二进制。
 - 保持 `core.autocrlf=false`;CRLF 工作区会让 `--check` 假报过期,并悄悄改变编译器解析的源文本。
 
 ### 2.7 本机环境

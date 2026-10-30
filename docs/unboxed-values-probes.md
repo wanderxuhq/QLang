@@ -3103,3 +3103,27 @@ tools/link /tmp/rt.ll -o /tmp/rt
 
 为什么用显式清单而不是扫目录:QLang 没有目录列举原语(`std.fs` 只有读写),所以清单是显式文件;
 漏登记的用例不会被跑到,改夹具时要记得加一行。
+
+## 109. 连 `bundle.ql` 的重建也不需要 Rust 了:把构建脚本编成原生工具(2026-10-30)
+
+`stdlib/bundle.ql` 一直是用 **Rust 宿主**跑的:`./target/release/qlang stdlib/build_bundle.ql`。
+两条路都试过:
+
+| 做法 | 结果 |
+|---|---|
+| native **解释器**跑 `build_bundle.ql` | **600s 超时**(只出了 12 行输出)——解释执行跑这种"读一堆文件再拼接"的脚本太慢 |
+| **先把它编成原生二进制**再跑 | **秒级完成,产物与 Rust 宿主逐字节相同** |
+
+后者就是 QLang 自己的路:
+
+```
+stage2 --emit-llvm stdlib/build_bundle.ql aot/runtime.ql > /tmp/bb.ll
+tools/link /tmp/bb.ll -o /tmp/bb
+/tmp/bb > stdlib/bundle.ql          # 重建
+/tmp/bb --check                     # 校验(exit 0 = 未过期)
+```
+
+实测:`/tmp/bb` 的输出与 `stdlib/bundle.ql` **逐字节一致**,`--check` 通过。
+
+**结论**:工具链、标准库对象、bundle 重建、原生测试用例,现在全部可以只用 QLang 二进制完成;
+Rust 只剩"初始 bootstrap"(第一次把编译器带上路)这一件事。
