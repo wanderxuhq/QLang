@@ -56,3 +56,4 @@ t6_nested_shortcircuit
 t7_factorial
 t7_fib
 t63_async_process
+t64_array_types

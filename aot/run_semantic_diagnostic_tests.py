@@ -28,6 +28,13 @@ def main():
          None, 3, 18, '? requires a Result or Option return type'),
         ('propagate-string', 'let f = (): String -> {\n  let z = 0;\n  let v = (1 / z)?;\n  v;\n};',
          None, 3, 18, '? requires a Result or Option return type'),
+        # `?` inside an interpolated expression used to bypass the return-type rule
+        # because the sub-parser never received the return context.
+        ('propagate-interpolation',
+         'let f = (): Number -> {\n  let z = 0;\n  let s = `${(1 / z)?}`;\n  s;\n};',
+         None, 3, 21, '? requires a Result or Option return type'),
+        # `Array` is a placeholder, not a constructor: catch the old spelling.
+        ('array-placeholder', 'let T = Array(3);', None, 1, 9, 'Array is a placeholder'),
     ]
     with tempfile.TemporaryDirectory(prefix='qlang-semantic-diagnostics-') as tmp:
         work = Path(tmp)

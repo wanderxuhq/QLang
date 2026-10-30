@@ -1,6 +1,8 @@
 // A declaration establishes a binding, never a null value. Reading it before
 // initialization is now a frontend error (see bootstrapped/tests/diagnostics.ql).
 let pending = null; let zero = 0;
+// Values that must be typed dynamically (a literal mismatch is a compile error now).
+let dyn = (v) -> { let cell = { value: v }; cell.value; };
 println(Null.check(pending));
 println(std.Type.of(pending) == Null);
 pending = 7;
@@ -20,7 +22,11 @@ nullable = null;
 println(Null.check(nullable));
 let initialized: Null = null;
 println(Null.check(initialized));
-let number: Number = "bad";
+// The value must be dynamically typed: a literal "bad" is a statically known
+// mismatch and is now rejected at compile time. Through a field read the
+// annotation check fires at run time, which is what this case pins.
+let holder = { value: "bad" };
+let number: Number = holder.value;
 println(number.type);
 println(number.message);
 number = 42;
@@ -164,11 +170,11 @@ let failedDefinition = () -> { let f = (x: badType()?) -> x; sideEffect(); };
 println(failedDefinition().type);
 println(sideEffects);
 
-let nullMismatch: Number = null;
+let nullMismatch: Number = dyn(null);
 println(nullMismatch.message);
-let objectMismatch: Number = Number;
+let objectMismatch: Number = dyn(Number);
 println(objectMismatch.message);
-let arrayMismatch: Number = [];
+let arrayMismatch: Number = dyn([]);
 println(arrayMismatch.message);
 
 // Executed empty branches clear the previous statement value; a skipped branch keeps it.
