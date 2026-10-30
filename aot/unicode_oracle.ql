@@ -19,6 +19,12 @@ let hex = (s) -> {
   while i < s.length { v = v * 16 + dv(std.String.at(s, i)); i = i + 1; };
   v;
 };
+let dirOf = (p) -> {
+  let parts = std.String.split(p)("/");
+  let out = ""; let i = 0;
+  while i < parts.length - 1 { out = if out == "" { parts[i]; } else { out + "/" + parts[i]; }; i = i + 1; };
+  out;
+};
 let lines = std.String.split(std.fs.readFileText(path)?)("\n");
 let up = 0; let lo = 0; let bad = 0; let firstBad = "";
 let i = 0;
@@ -47,6 +53,36 @@ while i < lines.length {
   };
   i = i + 1;
 };
-println("Unicode 参照(主流子集,U+0020..U+2FFF):upper " + std.Number.toString(up) + " / lower " + std.Number.toString(lo) + " → " + std.Number.toString(bad) + " 处不一致");
+// White_Space:每个成员都必须被 trim 去掉;夹在字母中间也要去掉;并留一个反向对照("a" 不被 trim)。
+let wsPath = dirOf(path) + "/whitespace.txt";
+let wsText = std.fs.readFileText(wsPath);
+let ws = 0;
+if !isError(wsText) {
+  let wl = std.String.split(wsText)("\n");
+  let wi = 0;
+  while wi < wl.length {
+    let h = std.String.trim(wl[wi]);
+    if h != "" {
+      let ch = std.String.fromCodePoint(hex(h));
+      if std.String.trim(ch) != "" {
+        bad = bad + 1;
+        if firstBad == "" { firstBad = "trim U+" + h + " 未去掉"; };
+      };
+      // 中间(两侧有字母)的空白**不该**被去掉;只有首尾才去。
+      if std.String.trim("a" + ch + "a") != "a" + ch + "a" {
+        bad = bad + 1;
+        if firstBad == "" { firstBad = "trim 误删中间 U+" + h; };
+      };
+      if std.String.trim(ch + "a") != "a" || std.String.trim("a" + ch) != "a" {
+        bad = bad + 1;
+        if firstBad == "" { firstBad = "trim 首尾 U+" + h; };
+      };
+      ws = ws + 1;
+    };
+    wi = wi + 1;
+  };
+  if std.String.trim("a") != "a" { bad = bad + 1; if firstBad == "" { firstBad = "trim 误删字母"; }; };
+};
+println("Unicode 参照(主流子集,U+0020..U+2FFF):upper " + std.Number.toString(up) + " / lower " + std.Number.toString(lo) + " / White_Space " + std.Number.toString(ws) + " → " + std.Number.toString(bad) + " 处不一致");
 if bad > 0 { println("首个不一致:" + firstBad); assert(false, "unicode mismatch"); 1; };
 0;

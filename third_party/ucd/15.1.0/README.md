@@ -40,3 +40,19 @@ mv /tmp/cc.txt case-common.txt
 ```
 
 为什么不在运行时现读 `UnicodeData.txt`:见 `docs/unboxed-values-probes.md` §118.1(太慢)。
+
+## 派生数据:`whitespace.txt`
+
+`whitespace.txt`(25 个码点)同样从 `PropList.txt` 派生:
+
+```sh
+awk 'function h2d(s,   i,c,v,digits){ digits="0123456789ABCDEF"; v=0;
+  for(i=1;i<=length(s);i++){ c=toupper(substr(s,i,1)); v=v*16+(index(digits,c)-1) } return v }
+BEGIN{ FS=";" }
+/; White_Space #/ { gsub(/[ \t]/,"",$1); k=index($1,"..");
+  if (k>0) { lo=h2d(substr($1,1,k-1)); hi=h2d(substr($1,k+2)) } else { lo=h2d($1); hi=lo }
+  for(p=lo;p<=hi;p++){ printf "%04X\n", p } }' PropList.txt > whitespace.txt
+```
+
+注意 `awk` 的 `split(s, a, "..")` 里第三个参数是**正则**,`..` 会匹配任意两个字符 —— 所以上面用
+`index()` 找范围分隔符,不要用 `split`。
