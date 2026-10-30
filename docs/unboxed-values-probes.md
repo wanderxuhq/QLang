@@ -2643,3 +2643,30 @@ check(annotationCase() == Number, "annotation slot propagates return")?;
 
 代码回滚到 `cbcd3f8`。五条证据(§97、99、99.1–99.5)已经足够说明:这条路要么做成"发射期使用表",
 要么就必须把"编译器按名字直连的名字"完整列出来 —— 后者是白名单思路,和仓库"反对特判"的规矩冲突。
+
+### 99.6 extension 那次到底是哪条边:被删的是 `path`,而它的名字在 AST 里从不出现(2026-10-30)
+
+按名字计数 + 排除带注解形参后跑 extension 宿主,`; ql-symbol` 对比显示被删的是:
+
+```
+< ; ql-symbol path ql_fn302 0      ← 被删
+< ; ql-symbol nested ql_fn304 0
+> ; ql-symbol nested ql_fn303 0   ← 编号顺移
+```
+
+`path` 的定义是 `let path = () -> { pathCalls = pathCalls + 1; args[0]; };`,宿主里**没有任何
+Identifier 叫 `path`**(所以 AST 计数=0);再加一趟发射期使用探针(`--dump-uses`,记录所有
+`lookupSlot(name)`),`path` **也不在**"发射期用过但 AST 说 0"的名单里 —— 也就是说发射器自己
+也从不按名字找它。
+
+那两个可能都得留着验证:
+1. **删它本身破坏了什么**(例如扩展桥按函数编号/符号顺序对齐);
+2. **槽布局顺移**(`path` 少占一个槽,后面对齐全变)才是元凶 —— 证据:`nested` 的 `ql_fn` 编号
+   从 304 变 303,说明删除会影响后续所有编号/槽号;而 extension ABI 里有 `__extension_args_slot`
+   这类"把宿主槽位告诉插件"的机制。
+
+**下一轮的决定性实验(便宜)**:不改判据,只在宿主里加一个**与扩展无关**的空函数
+(`let unusedDummy = (x) -> x;`),让它被删、而 `path` 保留 —— 如果宿主仍段错误,就是"槽/编号顺移"
+而不是"删了 path"。
+
+本轮同样回滚到 `cbcd3f8`(判据:`git diff cbcd3f8 HEAD -- aot/qlangc.ql` 为空)。
