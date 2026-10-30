@@ -97,6 +97,9 @@ python3 aot/native_link.py /tmp/p.ll -o /tmp/p
 - **并行子进程**:`std.process.run(args)` 同步;`std.process.spawn(args)` → 句柄
   (`{pid,out,err}`),`std.process.wait(h)` → `{status,stdout,stderr}`。底层是 `runtime.c` 的
   `ql_spawn_async`/`ql_wait`(叶子是 QLang 侧唯一的宿主通道)。判据 `t63_async_process`。
+- **扩展测试也可以 QLang 跑**:`aot/run_extension.ql` ——
+  `run_extension <tmp-dir> --root <repo>`,先编宿主、再编 4 个 `.so`(`--shared`)与 3 个负例,
+  删源码后跑宿主比对 `.expected`(28 契约)。`tmp-dir` 必须在 dlopen 允许的路径下。
 - **不依赖 Python 的测试驱动**:`aot/run_tests.ql`(QLang)——
   `run_tests <stdlib-dir>` 跑原生用例(按 `aot/tests/manifest.txt`,57 个);
   `run_tests <stdlib-dir> --interpreter` 跑解释器用例(按 `aot/tests/interpreter.txt`,40 个,

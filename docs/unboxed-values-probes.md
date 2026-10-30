@@ -3265,3 +3265,28 @@ tools/link <ir> -o <out> --root <repo> --stdlib-object <obj> ...
 ```
 
 这样驱动可以只拼绝对路径,不必再 `cd`,也顺手消掉了"必须在仓库根跑链接"这个隐性约束。
+
+## 116. 扩展(native .so)测试驱动也 QLang 化了(2026-10-30)
+
+`aot/run_extension.ql`:
+
+```
+run_extension <tmp-dir> --root <repo> [--compiler <c>]
+```
+
+完整的 28 契约,全程 QLang 二进制:
+
+1. **宿主先编**:扩展还不存在时就发 IR 并链接成 `host-O0`/`host-O2`(证明扩展是运行期加载);
+2. **四个独立扩展** `plugin`/`second`/`failure`/`cycle`:`--emit-module` 出 IR,再 `--shared` 链接成 `.so`(两档优化);
+3. **三个负例**:`wrong-abi`(把 IR 里 ABI 字符串 `\71\6C…\76\31` 改成 `…\76\39`)、
+   `no-entry`(把 `@qlang_extension_init_v1(` 改成 `@not_the_entry(`)、
+   `not-native`(直接写一个文本文件当 `.so`);
+4. **删掉源码**再跑宿主,与 `.expected` 逐字节比对。
+
+实测:**2 通过 / 0 失败**(宿主 O0/O2 各跑一次,各 28 契约)。
+
+三个容易踩的点(都在这轮踩到了):
+- `tmp-dir` 必须是 **dlopen 允许的路径**(Android 上 `/tmp` 会被 linker 拒绝);
+- 链接必须带 `--root <repo>`(§115),否则从别处链接读不到 `aot/runtime.c` 与 toolchain 模板;
+- `cycle.so` 必须**拷到 `<work>/source/cycle.so` 并按那个路径传**:宿主是用 `import(路径)` 触发重入来
+  验证 `ImportCycle` 的,传 `cycle-O0.so` 会让这条检查失败(计数仍是 28,但有一条 FAIL)。
