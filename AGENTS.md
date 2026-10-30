@@ -141,6 +141,9 @@ python3 aot/run_semantic_diagnostic_tests.py --compiler target/selfhost/stage2
 cargo test --offline          # 14 tests;钉住 Rust 宿主行为,不等于 QLang 前端行为
 ```
 
+- **String 套件是唯一"故意保留 Python"的**:它的第二条腿是**独立 Unicode 预言机**
+  (Python `unicodedata` 15.1.0),价值在于不复用 `stdlib/unicode_data.ql`;改写成 QLang 会变成
+  循环论证。夹具腿(t30)已经在 `aot/run_tests.ql` 与 `--interpreter` 里跑。见 probes §117。
 - 全量基线 = handoff §3.4 列出的测试套件(约 23 个 python runner + `run_v1_tests.sh`)
   外加 `stdlib/run_string_tests.py`、`cargo test`;清单、耗时、环境缺口以那节为准。
 - **验收 = 全量基线 + 本次改动相关测试套件**。只跑 `interpreter` + `selfhost` 会漏红:

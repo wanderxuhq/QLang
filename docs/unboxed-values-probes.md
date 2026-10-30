@@ -3290,3 +3290,22 @@ run_extension <tmp-dir> --root <repo> [--compiler <c>]
 - 链接必须带 `--root <repo>`(§115),否则从别处链接读不到 `aot/runtime.c` 与 toolchain 模板;
 - `cycle.so` 必须**拷到 `<work>/source/cycle.so` 并按那个路径传**:宿主是用 `import(路径)` 触发重入来
   验证 `ImportCycle` 的,传 `cycle-O0.so` 会让这条检查失败(计数仍是 28,但有一条 FAIL)。
+
+## 117. String 套件:预言机那一段**故意**留在 Python(2026-10-30)
+
+其余套件都 QLang 化了(§108–§116),这一个我建议**不搬**,理由是它和别的驱动不同:
+
+`stdlib/run_string_tests.py` 有两条腿:
+
+1. **夹具腿**:跑 `t30_strings.ql`(原生 + boot),与 `.expected` 比对 —— 这条**已经在 QLang 驱动里**
+   (`aot/tests/manifest.txt`、`interpreter.txt`、`split.txt` 都含 t30,一直输出 `string checks: 193`);
+2. **独立预言机腿**:用 **Python 的 `unicodedata`(钉住 15.1.0)** 遍历全部 Unicode 标量,
+   挑出 `upper`/`lower` 有非恒等映射的字符,生成一个 QLang 程序并算出期望输出,
+   再与两引擎的实际输出逐字节比对。
+
+第 2 条的价值恰恰在于**它不复用 QLang 自己的表**(`stdlib/unicode_data.ql`)。把它改写成 QLang,
+就变成"用 QLang 的 UCD 表去验证 QLang 的 UCD 表"——**循环论证**,测试会恒绿,再也不会发现表错。
+所以这里保留 Python 是**设计决定,不是欠债**;真要脱离 Python,得引入**第三方**的 Unicode 数据
+(比如另一份 UCD 快照、或 ICU 的产物),那才保持独立性。
+
+结论:不要"顺手把它也 QLang 化"。要动就动数据来源,不动驱动语言。
