@@ -113,6 +113,9 @@ python3 aot/native_link.py /tmp/p.ll -o /tmp/p
   每个用例两档各编一次并比对输出,`--jobs 6` 55 通过 / 0 失败(约 1.5 分钟)。
   Python 版 `run_debug_diff_tests.py` 仍在,两者判据相同(两档逐字节相同)。
 - `native_link.py` 用单线程 LLD,并校验每个静态字符串的 ELF 重定位/字节;不要绕过它直接 clang 链接。
+- `tools/link --root <repo>`:链接器自己的三处仓库相对路径(`aot/runtime.c`、`aot/toolchain/*.cfg`、
+  默认 verify 工具)按 root 解析 ⇒ **从任意 cwd 都能链接**,QLang 驱动不必再 `cd` 到仓库根。
+  默认空 = 原行为。
 - 改 `aot/qlangc.ql` 之后必须重建编译器。编译器、源码、测试用例必须**同源**(同一版本)。
 
 ### 2.3 Native 解释器

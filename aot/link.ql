@@ -10,10 +10,17 @@
 
 let fail = (message) -> { assert(false, "link: " + message); 1; };
 let startsWith = (text, prefix) -> std.String.startsWith(text)(prefix);
+let endsWith = (text, suffix) -> {
+  if text.length < suffix.length { return false; }
+  std.Bytes.slice(text, text.length - suffix.length, suffix.length) == suffix;
+};
 let clean = (paths) -> { let i = 0; while i < paths.length { std.process.run(["rm", "-f", paths[i]]); i = i + 1; }; null; };
 
 let irPath = ""; let output = ""; let stdlibObject = ""; let runtimeObject = "";
-let verifyTool = "target/tools/verify"; let stdlibIr = ""; let skipVerify = false;
+// `--root <repo>`:仓库相对路径(运行时叶子、toolchain 模板、verify 工具)都按它解析,
+// 这样从任意 cwd 都能链接 —— QLang 写的驱动不必再 `cd` 到仓库根。
+let root = "";
+let verifyTool = ""; let stdlibIr = ""; let skipVerify = false;
 let optLevel = "2"; let sharedMode = false; let ltoMode = false; let ltoOpt = "2"; let debugMode = false;
 let ai = 0;
 while ai < args.length {
@@ -21,6 +28,7 @@ while ai < args.length {
   if arg == "-o" { ai = ai + 1; output = args[ai]; }
   else if arg == "--stdlib-object" { ai = ai + 1; stdlibObject = args[ai]; }
   else if arg == "--runtime-object" { ai = ai + 1; runtimeObject = args[ai]; }
+  else if arg == "--root" { ai = ai + 1; root = args[ai]; if !endsWith(root, "/") { root = root + "/"; }; }
   else if arg == "--verify" { ai = ai + 1; verifyTool = args[ai]; }
   else if arg == "--stdlib-ir" { ai = ai + 1; stdlibIr = args[ai]; }   // 可以是 IR,也可以是对象旁的 strings.tsv
   else if arg == "--no-verify" { skipVerify = true; }
@@ -32,6 +40,7 @@ while ai < args.length {
   else if irPath == "" { irPath = arg; };
   ai = ai + 1;
 };
+if verifyTool == "" { verifyTool = root + "target/tools/verify"; };
 if irPath == "" || output == "" { fail("usage: link <ir> -o <out> [--stdlib-object <obj>] [--runtime-object <obj>]"); };
 
 // runtime.c → runtime.o(一次;键 = 平台)
@@ -39,7 +48,7 @@ if runtimeObject == "" {
   runtimeObject = "/tmp/.qlang-runtime-aarch64.o";
   let probe = std.fs.readFileText(runtimeObject);
   if isError(probe) || probe.length < 64 {
-    let built = std.process.run(["clang", "-O2", "-c", "aot/runtime.c", "-o", runtimeObject]);
+    let built = std.process.run(["clang", "-O2", "-c", root + "aot/runtime.c", "-o", runtimeObject]);
     if built.status != 0 { fail("runtime.c compile failed:\n" + built.stderr); };
   };
 };
@@ -95,7 +104,7 @@ let compiled = std.process.run(llcArgs);
 if compiled.status != 0 { fail("llc failed:\n" + compiled.stderr); };
 };
 
-let cfgText = std.fs.readFileText("aot/toolchain/aarch64-android24.cfg");
+let cfgText = std.fs.readFileText(root + "aot/toolchain/aarch64-android24.cfg");
 if isError(cfgText) { fail("cannot read toolchain template"); };
 let lines = std.String.split(cfgText)("\n");
 let template = "";

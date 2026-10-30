@@ -3248,3 +3248,20 @@ run_bench <stdlib-dir> [--compiler <c>] [--runs <n>]
 (要走 LTO 才追平,§105 记了 LTO 的代价)。六项输出全部一致。
 
 注意:这台机器负载波动极大(同一命令在不同时刻能差 5–10 倍),绝对值只作同一次运行内的相对比较。
+
+## 115. `tools/link --root <repo>`:从任意 cwd 都能链接(2026-10-30)
+
+之前链接器有三处**仓库相对路径**(`aot/runtime.c`、`aot/toolchain/<target>.cfg`、默认的
+`target/tools/verify`),所以调用方必须先 `cd` 到仓库根 —— QLang 写的驱动因此都得在 `sh -c` 里
+`cd` 过去,再拼绝对产物路径,很容易写错(extension 驱动就是卡在这上)。
+
+加了 `--root <dir>`:三处都按它解析,加了 `--root` 后从 `/tmp` 链接 t20 验证通过(输出 `20`)。
+默认空 = 保持原行为(相对 cwd)。
+
+用法:
+
+```
+tools/link <ir> -o <out> --root <repo> --stdlib-object <obj> ...
+```
+
+这样驱动可以只拼绝对路径,不必再 `cd`,也顺手消掉了"必须在仓库根跑链接"这个隐性约束。
