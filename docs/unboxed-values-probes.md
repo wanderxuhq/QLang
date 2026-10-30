@@ -2974,3 +2974,26 @@ not a type value`,因为那等于"用一个 null 类型值去做检查"。)
 同机对照:C `-O2` 100M = 336ms、Rust `-O` = 183ms。即 **release ≈ C 的 1.23×、Rust 的 2.3×;
 debug ≈ C 的 2.1×、Rust 的 3.9×**。debug 只快 10%(省的是 `opt` 那一趟 + 少量发射),
 因为它**只关掉优化、不省前端**;运行慢 71%,因为直调/装箱/检查全是通用路径。
+
+## 104. module 套件脱离 Rust:改用 stage2 + tools/link + native 解释器(2026-10-30)
+
+`aot/run_module_tests.py` 原本两条腿都依赖 Rust 宿主(`target/debug/qlang`):
+`--compile` 编程序、跑 `bootstrapped/run_file.ql` 当 boot 参照。而 AGENTS §2.1 记录"Rust 宿主跑 boot
+会挂",这套件因此在基线上一直是**环境缺口**(180s 超时)。
+
+改成纯 QLang 工具链:
+
+| 用途 | 原来 | 现在 |
+|---|---|---|
+| 编程序 | `qlang --compile` | `stage2 --emit-llvm` + `target/tools/link` |
+| boot 参照 | `qlang bootstrapped/run_file.ql` | **native 解释器**(stage2 编 `run_file.ql` + tools/link,缺则自动构建) |
+| Rust 对照腿 | `QLANG_CHECK_RUST=1` | 删除 |
+
+顺带修正两处**与语言契约不符的断言**:
+
+1. `boot_output` 原来要求退出码 0;t15 最后一条语句把 String 赋给 Number 注解会产生未处理 Error
+   ⇒ 契约是 **exit 1**。现在只取"程序自身输出"(截到 `Execution complete.` 之前),退出码单独断言。
+2. native 腿同样放宽到 `(0,1)`,但输出必须与解释器逐字节相同。
+
+**结果:`Module suite: ALL PASS`**(BOOT/NATIVE、输入删除后执行、3 类 cycle、6 类拒绝用例)。
+这套件现在只依赖 QLang 自己的编译器/链接器/解释器,不再需要 Rust。
