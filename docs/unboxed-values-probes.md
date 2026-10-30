@@ -2935,3 +2935,42 @@ mode=[--debug ] SCOPE moduleRoot=true own=20 parent=55 isRuntime=false
 debug 那次 `+208` 的读取是**哪条语句、哪个作用域**发的。
 
 本轮无代码改动(探针已回滚):编译器与 `cbcd3f8` 逐字相同。
+
+## 103. debug 档修好了:分水岭是"没有注解 ≠ 检查 null"(2026-10-30)
+
+前六轮追查的结论收敛成一处语义误解。`emitAnnotatedCheck` 收到的是 `ty`/`text` 两个**可能是内部
+占位串 `"null"`** 的值(表示没有注解/没有文本)。原来的写法把占位串直接当 `%ql_value` 写进 IR:
+
+```llvm
+store %ql_value null, ptr %t195     ; llc: null must be a pointer type
+```
+
+正确语义不是"对 null 做检查",而是"**没有注解就没有检查**":
+
+```qlang
+if ty == "null" { return value; };        // 无注解 ⇒ 不发检查
+if text == "null" { text = emitNull(); }; // 有类型但没有文本 ⇒ 文本用真正的 null
+```
+
+这两个占位串只在 release 下被省略检查时躲过去了,debug 档必走 —— 所以它一露头就是非法 IR 或段错误。
+(中途我试过"把所有 `null` 映射成 `zeroinitializer`,更错:t20 立刻报 `TypeCheck: type annotation is
+not a type value`,因为那等于"用一个 null 类型值去做检查"。)
+
+### 103.1 验收(全部同源)
+
+- `println(1 + 2)` → **3**;t20 → **20**;t30 → `string checks: 193`;100M f64 累加 → `4999999950000000`
+- `run_debug_diff_tests.py`:**41 个夹具两档输出逐字节相同**
+- selfhost(含 stage2/stage3 IR 固定点)、interpreter:**ALL PASS**
+- release 不回退:t20 的 `--emit-llvm` IR 与基线**逐字节相同**;IR 行数 release 184,842 / debug 186,523(+0.9%)
+
+### 103.2 debug vs release 实测(本机 min-of-3)
+
+| | release | debug |
+|---|---|---|
+| 构建 hello(前端 + 链接) | 2813ms | **2527ms**(−10%) |
+| 运行 100M f64 累加 | 414ms | **709ms**(+71%) |
+| 用户模块 IR 行数 | 184,842 | 186,523 |
+
+同机对照:C `-O2` 100M = 336ms、Rust `-O` = 183ms。即 **release ≈ C 的 1.23×、Rust 的 2.3×;
+debug ≈ C 的 2.1×、Rust 的 3.9×**。debug 只快 10%(省的是 `opt` 那一趟 + 少量发射),
+因为它**只关掉优化、不省前端**;运行慢 71%,因为直调/装箱/检查全是通用路径。

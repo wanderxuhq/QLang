@@ -77,7 +77,8 @@ python3 aot/native_link.py /tmp/p.ll -o /tmp/p
   (t30 前端 11.2s → 0.8s);链接用 `target/tools/link ... --stdlib-object <key>/stdlib.o`(快速)
   或再加 `--stdlib-ir <key>/strings.tsv --lto`(发布:库走 bitcode + LTO,运行与单模块持平)。
   `--timing` 打印 `; phase: parse/lib/analyze/emit` 四段耗时(默认关,固定点不受影响)。
-  **两档(debug / release)**:`--debug` 给编译器时走**保守发射** —— 不直调/不内联/不 raw ABI、
+  **两档(debug / release)**:两档语义一致、产物只差优化(`run_debug_diff_tests.py` 是常规门)。
+  `--debug` 给编译器时走**保守发射** —— 不直调/不内联/不 raw ABI、
   不 unbox 裸槽、不省略"可证不会失败"的检查、不删死函数,所有值走通用路径(闭包/`__call`);
   给 `tools/link` 时跳过 `opt`、让 `llc -O1` 直接吃 IR。两档**分析照跑**,诊断必须一致;
   release 默认且产物不变。**不做编译期删除**(作者决定,理由与尝试记录见 probes §97–§101)。

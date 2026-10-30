@@ -1670,6 +1670,11 @@ let emitKnownErrorPropagation = (O) -> {
 // Emit the annotation check and return the value to store. On failure this
 // terminates the current block (propagation / top-level exit), like the old path.
 let emitAnnotatedCheck = (value, ty, text, locNode, mayAcceptError) -> {
+  // ty/text 可能是内部占位串 "null"(无注解/无文本):换成真正的 null 值。否则会写出
+  // `store %ql_value null` 这种非法 IR —— release 下这些检查常被"可证不会失败"省略,
+  // debug 档会走到(踩过:t20 在 --debug 下 llc 报 null must be a pointer type)。
+  if ty == "null" { return value; };            // 没有注解 ⇒ 没有检查
+  if text == "null" { text = emitNull(); };      // 有类型但没有文本 ⇒ 文本用 null
   if !mayAcceptError {
     let checked = emitLocatedError(emitCallRegs("__check_binding", [value, ty, text]), locNode, false);
     emitPropagateError(checked);
