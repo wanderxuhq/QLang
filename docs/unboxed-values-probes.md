@@ -2771,3 +2771,21 @@ store %ql_value null, ptr %t195      ; llc: null must be a pointer type
 即 release 档:构建约为 clang 的 2.5×、rustc 的 1.9×;运行约为 C 的 1.4×、Rust 的 2.2×。
 debug 档的数字**暂缺**(上面两个 bug),但方向明确:它是"全装箱 + 全间接调用 + 无 IR 优化",
 运行会慢一个量级,编译只快 0.3s(链接档的 `opt` 那一趟)。
+
+### 102.2 debug 档的确切症状(缩小到一条发射路径)
+
+修掉 `store %ql_value null` 之后,debug 档能编译能链接,但**结果错在"表达式直接当实参"这条路径**上:
+
+| 程序 | release | debug |
+|---|---|---|
+| `println(3);` | 3 | 3 ✅ |
+| `let a = 1 + 2; println(a);` | 3 | 3 ✅ |
+| `println(1 + 2);` | 3 | **0** ❌ |
+| 100M 累加循环 | 174ms | **SIGSEGV** |
+
+也就是"值先落绑定再打印"是对的,"表达式直接进实参缓冲"就错 —— 保守路径下 `println(...)` 走的是
+通用 `__call`/`emitBorrowedCall`,实参缓冲那一段在 debug 下没有被正确填(ref 语义/写回不同)。
+release 不踩是因为它把这些调用直接内联/直调掉了。
+
+**结论**:debug 档目前不可用(结果错 + 段错误),但症状被缩到一条路径上,下轮修这一条即可。
+代码回滚到 `cbcd3f8`(release 完全不受影响)。
