@@ -2910,3 +2910,28 @@ debug 却拿到了 depth=1。两种可能:
   (`emitModule` 的入口段里不该有随 `allowDirectUserCalls` 走的分支)。
 
 本轮没再改代码(避免又改错地方):HEAD 与 `cbcd3f8` 的编译器逐字相同,release 不受影响。
+
+### 102.8 探针结果:入口处两档作用域**完全相同**(own=20 / parent=55),分叉发生在发射过程中(2026-10-30)
+
+在 `reserveModuleGlobals()` 之后打印作用域状态:
+
+```
+mode=[release] SCOPE moduleRoot=true own=20 parent=55 isRuntime=false
+mode=[--debug ] SCOPE moduleRoot=true own=20 parent=55 isRuntime=false
+```
+
+两档一模一样:`println` 在**当前作用域是槽 20**,全局(父)作用域另有一个槽 55。所以：
+
+- 不是"`curScope` 不是模块作用域"(§102.7 的解释 1 排除);
+- 也不是"条目被覆盖"(解释 2 排除);
+- 那 debug IR 里读的**父帧 + 208(=槽 13)** 其实**不是 `println`** —— 它读的是别的东西
+  (槽 13 在模块作用域是另一个名字),只是位置恰好出现在 `println(1+2)` 附近。
+
+所以分叉发生在**发射语句的过程中**:某个 helper(大概率是"检查用的注解/参数缓冲"那段,debug 档
+才会走到)在**另一个 `curScope` 上下文**里发了读取,而它读到的槽位是按那个上下文的编号算的。
+
+**下一步(一个小探针就能收口)**:在 `emitIdentifier` 里打印 `(名字, depth, curScope==模块作用域?, 槽号)`,
+只在该名字是 `println` 或槽号 > 200 时打印;同时给 `emitCall` 打 `STMT` 标记。两者交错就能看出
+debug 那次 `+208` 的读取是**哪条语句、哪个作用域**发的。
+
+本轮无代码改动(探针已回滚):编译器与 `cbcd3f8` 逐字相同。
