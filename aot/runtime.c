@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <dlfcn.h>
+#include <errno.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -140,7 +141,10 @@ __attribute__((noinline)) static void collect_heap(void) {
     i += size > PAGE_BYTES ? size / PAGE_BYTES : 1;
   }
   allocated_since_gc = 0;
-  collection_threshold = live_bytes / 2;
+  /* Collect after allocating roughly the live set again, not half of it: GC cost
+   * is dominated by scanning live data, and the interpreter's live set (bundle +
+   * Unicode tables) makes frequent small-heap collections dominate run time. */
+  collection_threshold = live_bytes;
   if (collection_threshold < MIN_COLLECTION) collection_threshold = MIN_COLLECTION;
 }
 void* ql_alloc(size_t n) {
@@ -287,7 +291,8 @@ long ql_spawn_async(const char *argbuf, long nargs, const char *out_path, const 
   char *argv[64];
   const char *p = argbuf;
   for (long i = 0; i < nargs; i++) {
-    if (!*p) return -1001;
+    /* An empty argument is `` just a NUL byte; rejecting it made
+       std.process.run(["echo", ""]) indistinguishable from a bad buffer. */
     argv[i] = (char *)p;
     p += strlen(p) + 1;
   }
@@ -315,17 +320,22 @@ long ql_spawn_async(const char *argbuf, long nargs, const char *out_path, const 
 }
 // 收一个 ql_spawn_async 起的子进程;状态编码与 ql_spawn 相同。
 long ql_wait(long pid) {
+  if (pid <= 0) return -2000;
   int st = 0;
-  while (waitpid((pid_t)pid, &st, 0) < 0) {}
+  pid_t r;
+  do { r = waitpid((pid_t)pid, &st, 0); } while (r < 0 && errno == EINTR);
+  if (r < 0) return -2001;   /* ECHILD: already reaped / not our child */
   if (WIFEXITED(st)) return WEXITSTATUS(st);
-  return 128 + (st & 0x7f);
+  if (WIFSIGNALED(st)) return 128 + WTERMSIG(st);
+  return -2002;
 }
 long ql_spawn(const char *argbuf, long nargs, const char *out_path, const char *err_path) {
   if (!argbuf || nargs <= 0 || nargs >= 64) return -1000;
   char *argv[64];
   const char *p = argbuf;
   for (long i = 0; i < nargs; i++) {
-    if (!*p) return -1001;
+    /* An empty argument is `` just a NUL byte; rejecting it made
+       std.process.run(["echo", ""]) indistinguishable from a bad buffer. */
     argv[i] = (char *)p;
     p += strlen(p) + 1;
   }
@@ -348,9 +358,12 @@ long ql_spawn(const char *argbuf, long nargs, const char *out_path, const char *
     _exit(127);
   }
   int st = 0;
-  while (waitpid(pid, &st, 0) < 0) {}
+  pid_t r;
+  do { r = waitpid(pid, &st, 0); } while (r < 0 && errno == EINTR);
   if (out >= 0) close(out);
   if (err >= 0) close(err);
+  if (r < 0) return -1005;
   if (WIFEXITED(st)) return WEXITSTATUS(st);
-  return 128 + (st & 0x7f);
+  if (WIFSIGNALED(st)) return 128 + WTERMSIG(st);
+  return -1006;
 }

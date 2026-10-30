@@ -1126,7 +1126,10 @@ let Parser = (tokens: AnyArray) -> {
     }
   };
 
-  return { parse: parse, getErrors: () -> errors, getDiagnostics: () -> diagnostics, setSource: setSource, setSourcePath: setSourcePath, setFunctionContext: setFunctionContext, peek: peek, previous: previous, advance: advance, check: check, parseExpression: parseExpression };
+  // Every context a sub-parser needs must be exported here. `setReturnContext` was
+  // missing, so an interpolated expression parsed with no return annotation and
+  // `?` silently bypassed the Result/Option rule inside `${...}`.
+  return { parse: parse, getErrors: () -> errors, getDiagnostics: () -> diagnostics, setSource: setSource, setSourcePath: setSourcePath, setFunctionContext: setFunctionContext, setReturnContext: setReturnContext, peek: peek, previous: previous, advance: advance, check: check, parseExpression: parseExpression };
 };
 
 export Parser;

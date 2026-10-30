@@ -239,7 +239,14 @@ let __arrElementCheck = (T, who) -> {
   };
   t.check;
 };
-let __bootTypedArray = (T) -> Type.make(arrayCheck({ length: null, element: __arrElementCheck(T, "TypedArray"), tuple: null }));
+let __bootTypedArray = (T) -> {
+  // `__arrElementCheck` returns an Error value for a bad member; propagating it is
+  // what the native constructor does. Swallowing it would build a type value whose
+  // check is an error (and Error is truthy, so `!T.check(v)` would look like pass).
+  let cf = __arrElementCheck(T, "TypedArray");
+  if cf == null || isError(cf) { return cf; };
+  Type.make(arrayCheck({ length: null, element: cf, tuple: null }));
+};
 let __bootTypedSizedArray = (n, T) -> {
   if n == null || isError(n.type) || n.type != "Number" {
     return std.Error.raise("TypeMismatch", "TypedSizedArray: length must be a Number", null);
@@ -247,7 +254,9 @@ let __bootTypedSizedArray = (n, T) -> {
   if n.value < 0 || n.value % 1 != 0 {
     return std.Error.raise("TypeMismatch", "TypedSizedArray: length must be a non-negative integer", null);
   };
-  Type.make(arrayCheck({ length: n.value, element: __arrElementCheck(T, "TypedSizedArray"), tuple: null }));
+  let cf = __arrElementCheck(T, "TypedSizedArray");
+  if cf == null || isError(cf) { return cf; };
+  Type.make(arrayCheck({ length: n.value, element: cf, tuple: null }));
 };
 let __bootTuple = (types) -> {
   if types == null || isError(types.type) || types.type != "Array" {

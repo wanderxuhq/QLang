@@ -30,7 +30,10 @@ let foldStrOps = 0;
 let isLiteralScalar = (node) -> {
   if node == null || isError(node) || isError(node.type) { return false; };
   let t = node.type;
-  if t == "Number" || t == "String" || t == "Boolean" || t == "Null" { return true; };
+  // An interpolated string is a String node with `value == ""` and the real text
+  // in `parts`; treating it as a literal folds every such call to the empty string.
+  if t == "String" { return isError(node.parts) || node.parts == null; };
+  if t == "Number" || t == "Boolean" || t == "Null" { return true; };
   if t == "UnaryOp" && (node.operator == "-" || node.operator == "+" || node.operator == "!") {
     return isLiteralScalar(node.operand);
   };
@@ -55,7 +58,10 @@ let foldEval = (node, params) -> {
   if foldFuel < 0 { return foldFail(); };
   let t = node.type;
   if t == "Number" { return { ok: true, kind: "Number", value: node.value }; };
-  if t == "String" { return { ok: true, kind: "String", value: node.value }; };
+  if t == "String" {
+    if !isError(node.parts) && node.parts != null { return foldFail(); };
+    return { ok: true, kind: "String", value: node.value };
+  };
   if t == "Boolean" { return { ok: true, kind: "Boolean", value: node.value }; };
   if t == "Null" { return { ok: true, kind: "Null", value: null }; };
   if t == "Identifier" {
@@ -156,7 +162,11 @@ let foldWalk = (node, lets) -> {
     if !isError(t) && t == "Call" && !isError(node.callee.type) && node.callee.type == "Identifier" {
       foldStatCalls = foldStatCalls + 1;
       let decl = lets[node.callee.name];
-      if !isError(decl) && decl != null {
+      // Resolve by binding, not by name: a parameter/local may shadow the
+      // top-level function, and folding would then inline the wrong body.
+      if !isError(decl) && decl != null
+         && !isError(node.callee.bindId) && node.callee.bindId >= 0
+         && !isError(decl.bindId) && node.callee.bindId == decl.bindId {
         let fn = decl.value;
         let expr = foldBodyExpr(fn);
         if expr == null { if foldStatReject == "" { foldStatReject = "body-shape"; }; };

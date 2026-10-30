@@ -80,7 +80,7 @@ let typeLookup = (name) -> {
   if isError(typeBuiltins[name]) { return ""; };
   name;
 };
-let typePush = () -> { typeScopes[typeDepth] = {}; typeFnResults[typeDepth] = {}; typeRepScopes[typeDepth] = {}; typeBindScopes[typeDepth] = {}; typeNarrowScopes[typeDepth] = {}; typeDepth = typeDepth + 1; null; };
+let typePush = () -> { typeScopes[typeDepth] = {}; typeFnResults[typeDepth] = {}; typeRepScopes[typeDepth] = {}; typeBindScopes[typeDepth] = {}; typeDepth = typeDepth + 1; null; };
 let typePop = () -> { typeDepth = typeDepth - 1; null; };
 // 词法查找:这个名字是不是「返回类型已知的函数绑定」。
 let typeFnLookup = (name) -> {
@@ -97,14 +97,20 @@ let tagType = (node, name) -> { node.staticType = name; name; };
 // 事实栈与 typeScopes 同深同栈:名字 → 该作用域内是否已知「不是 Error」。由守卫
 // (if !X.check(v) { …必然退出… } / if isError(v) { …必然退出… })在落到点上建立,被赋值作废。
 // 它不产生新语义,只让发射端能把本已死掉的检查判为死代码。
-let typeNarrowScopes = {};
-let typeNarrowed = (name) -> {
-  let i = typeDepth - 1;
-  while i >= 0 {
-    if !isError(typeNarrowScopes[i][name]) && typeNarrowScopes[i][name] == true { return true; };
-    i = i - 1;
-  };
-  false;
+// 收窄事实按绑定 id 记,不按「名字+深度」。一个绑定在任意深度被写入都必须作废;
+// 否则嵌套块里的 `x = 1/z` 之后,外层仍认为 x 不是 Error(实测会把 Error 当 Number 算)。
+let typeNarrowBinds = {};
+let typeNarrowed = (bid) -> {
+  if isError(bid) || bid < 0 { return false; };
+  let table = typeNarrowBinds[typeProgram];
+  if isError(table) { return false; };
+  !isError(table[bid]) && table[bid] == true;
+};
+let typeNarrowMark = (bid, on) -> {
+  if isError(bid) || bid < 0 { return null; };
+  if isError(typeNarrowBinds[typeProgram]) { typeNarrowBinds[typeProgram] = {}; };
+  typeNarrowBinds[typeProgram][bid] = on;
+  null;
 };
 // 语句序列是否「必然退出」(末句 return)。
 let branchAlwaysExits = (stmts) -> {
@@ -130,7 +136,9 @@ let narrowAfterGuard = (cond, exits) -> {
   let av = inner.arguments[0];
   if isError(av) || isError(av.type) || av.type != "Identifier" { return null; };
   if callee.type == "Identifier" && callee.name == "isError" && !negated {
-    typeNarrowScopes[typeDepth - 1][av.name] = true;
+    // Only when isError is still the builtin: a user rebinding makes the guard
+    // say nothing about the value.
+    if !typeBound("isError") { typeNarrowMark(av.bindId, true); };
     return null;
   };
   if callee.type != "MemberAccess" { return null; };
@@ -139,8 +147,14 @@ let narrowAfterGuard = (cond, exits) -> {
   if callee.field != "check" { return null; };
   if typeBound(base.name) || isError(typeBuiltins[base.name]) { return null; };
   if negated {
-    typeScopes[typeDepth - 1][av.name] = base.name;
-    typeNarrowScopes[typeDepth - 1][av.name] = true;
+    typeNarrowMark(av.bindId, true);
+    // Narrowing the static type is only safe while the binding is never
+    // reassigned; otherwise a write inside a nested block would leave a stale
+    // narrower type in an outer scope after the block ends.
+    let st = typeBindTable[typeProgram][av.bindId];
+    if !isError(st) && st.writes != null && st.writes.length <= 1 {
+      typeScopes[typeDepth - 1][av.name] = base.name;
+    };
   };
   null;
 };
@@ -901,7 +915,7 @@ let inferExpr = (node) -> {
       let st = typeBindTable[typeProgram][bind];
       if !isError(st) && st.prone == false { node.cannotBeError = true; };
     };
-    if typeNarrowed(node.name) { node.cannotBeError = true; };
+    if typeNarrowed(bind) { node.cannotBeError = true; };
     return tagRep(node, typeRepLookup(node.name));
   };
   if t == "Function" {
@@ -1151,6 +1165,12 @@ let inferExpr = (node) -> {
   if t == "Call" {
     // 先把 callee 分析一遍(成员函数名要在这时定型:std.<模块>.<成员> 的 memberReturn 靠它)。
     inferExpr(node.callee);
+    // `Array(...)` was the pre-rename spelling. `Array` is now a placeholder, so
+    // this is statically a guaranteed runtime error — report it at compile time.
+    if !typeCollectWrites && !isError(node.callee.type) && node.callee.type == "Identifier"
+       && node.callee.name == "Array" && !typeBound("Array") {
+      typeReport(node, "Array is a placeholder, not a constructor: use SizedArray(n), TypedArray(T), TypedSizedArray(n, T) or Tuple([...])");
+    };
     // 实参也要分析 —— 否则嵌在调用实参里的表达式永远不会被定型。
     let argIdx = 0;
     while argIdx < node.arguments.length { inferExpr(node.arguments[argIdx]); argIdx = argIdx + 1; };
@@ -1277,7 +1297,12 @@ let inferStmts = (stmts) -> {
       let lub = false;
       if s.bindId >= 0 {
         let lst = typeBindTable[typeProgram][s.bindId];
-        lub = !isError(lst) && lst.unk != true;
+        // `unk` alone is not enough: a write whose static type is known can still
+        // produce an Error at run time (1/z, a call that is not proven). Unboxing
+        // such a binding would let raw arithmetic read the Error box's payload as a
+        // double. The same invariant is already enforced for runtimeTypeFree by
+        // typeRefreshRuntimeChecks; unboxable must obey it too.
+        lub = !isError(lst) && lst.unk != true && lst.prone != true;
       } else {
         lub = isError(typeUnknownWrites[typeProgram][s.name]);
       };
@@ -1316,8 +1341,8 @@ let inferStmts = (stmts) -> {
         // 但不一致(此时运行期必须报 TypeCheck),都保留检查。
         if value == "" || isError(value) { typeUnknownWrites[typeProgram][s.target.name] = true; }
         else if declared != "" && value != declared { typeUnknownWrites[typeProgram][s.target.name] = true; };
-        // 写入会作废此前的收窄事实(该名字可能又被赋成别的类型)。
-        typeNarrowScopes[typeDepth - 1][s.target.name] = false;
+        // 写入作废该绑定的收窄事实 —— 按绑定 id 清,任意深度都生效。
+        typeNarrowMark(s.target.bindId, false);
         // 写入目标声明的内建类型(供发射器判定重检查是否为死代码)。
         s.declaredType = if isError(typeBuiltins[declared]) { ""; } else { declared; };
         // 有注解的绑定写入时会重新检查,所以它保持自己的类型;推导出来的类型一旦
@@ -1388,6 +1413,7 @@ let inferTypes = (stmts) -> {
   typeAssignedNames[typeProgram] = {};
   typeBindTable[typeProgram] = [];
   typeBindCount[typeProgram] = 0;
+  typeNarrowBinds[typeProgram] = {};
   typeScopes[0] = {};
   typeFnResults[0] = {};
   typeRepScopes[0] = {};
@@ -1416,6 +1442,7 @@ let inferTypes = (stmts) -> {
   typeNsUnresolved[typeProgram] = 0;
   typeUnknownBinds[typeProgram] = [];
   typeUnknownParams[typeProgram] = [];
+  typeNarrowBinds[typeProgram] = {};
   typeDepth = 1;
   typeReturnDepth = 0;
   inferStmts(stmts);

@@ -1800,22 +1800,45 @@ let __fs_canonical = (path) -> {
 };
 // 进程机制(std.process):argv 用 NUL 分隔的缓冲送进 C 叶子;stdout/stderr 落到
 // 两个临时文件,C 侧不需要 poll 管道。公开面是 std.process.run(args)。
-let __fs_remove = (path) -> { ql_unlink(ql_mem_get_ptr(path, 8)); null; };
+let __fs_remove = (path) -> {
+  if readU64(path, 0) != 2 { return __err("TypeMismatch", "std.fs.remove expects String"); };
+  let status = ql_unlink(ql_mem_get_ptr(path, 8));
+  if status < 0 { return __err("IOError", "cannot remove " + path); };
+  null;
+};
 let __fs_write_text = (path, text) -> {
+  // Both arguments are dereferenced by the C leaf; a non-String would read a
+  // Number/Error box as a pointer (segfault). Check before touching either.
+  if readU64(path, 0) != 2 || readU64(text, 0) != 2 {
+    return __err("TypeMismatch", "std.fs.writeText expects String path and String text");
+  };
   let name = __fs_path(path)?;
   let status = ql_write_file(ql_mem_get_ptr(name, 8), ql_mem_get_ptr(text, 8), readU64(text, 16));
   if status != 0 { return __err("IOError", "cannot write " + path); };
+  null;
+};
+// All process arguments must be Strings before any byte-level work: __spawnRaw
+// copies raw bytes and the C leaf execs them.
+let __procCheckArgs = (args, who) -> {
+  if readU64(args, 0) != 5 { return __err("TypeMismatch", who + " expects an array of String arguments"); };
+  let i = 0;
+  while i < args.length {
+    if readU64(args[i], 0) != 2 { return __err("TypeMismatch", who + " expects String arguments"); };
+    i = i + 1;
+  };
   null;
 };
 let __procSeq = 0;
 let __spawnRaw = (args, outPath, errPath) -> {
   let n = args.length;
   let total = 0; let i = 0;
-  while i < n { total = total + __s_len(args[i]) + 1; i = i + 1; };
+  // argv is a byte buffer: lengths come from the String header (+16), NOT from
+  // __s_len (UTF-8 scalar count). Using __s_len truncated non-ASCII arguments.
+  while i < n { total = total + readU64(args[i], 16) + 1; i = i + 1; };
   let buf = ql_alloc(total);
   let off = 0; i = 0;
   while i < n {
-    let str = args[i]; let src = ql_mem_get_ptr(str, 8); let len = __s_len(str); let j = 0;
+    let str = args[i]; let src = ql_mem_get_ptr(str, 8); let len = readU64(str, 16); let j = 0;
     while j < len { ql_mem_store(buf, off + j, ql_mem_get(src, j)); j = j + 1; };
     ql_mem_store(buf, off + len, 0);
     off = off + len + 1; i = i + 1;
@@ -1827,7 +1850,7 @@ let __procTemp = () -> {
   "/tmp/.qlang-proc-" + __itoa(ql_getpid()) + "-" + __itoa(__procSeq);
 };
 let __procRun = (args) -> {
-  if readU64(args, 0) != 5 { return __err("TypeMismatch", "std.process.run expects an array of arguments"); };
+  let bad = __procCheckArgs(args, "std.process.run")?;
   let outPath = __procTemp(); let errPath = __procTemp();
   let status = __spawnRaw(args, outPath, errPath);
   let outText = ""; let errText = "";
@@ -2182,11 +2205,11 @@ let stdFs = { readFileText: __fs_read_text, canonicalPath: __fs_canonical, write
 let __spawnRawAsync = (args, outPath, errPath) -> {
   let n = args.length;
   let total = 0; let i = 0;
-  while i < n { total = total + __s_len(args[i]) + 1; i = i + 1; };
+  while i < n { total = total + readU64(args[i], 16) + 1; i = i + 1; };
   let buf = ql_alloc(total);
   let off = 0; i = 0;
   while i < n {
-    let str = args[i]; let src = ql_mem_get_ptr(str, 8); let len = __s_len(str); let j = 0;
+    let str = args[i]; let src = ql_mem_get_ptr(str, 8); let len = readU64(str, 16); let j = 0;
     while j < len { ql_mem_store(buf, off + j, ql_mem_get(src, j)); j = j + 1; };
     ql_mem_store(buf, off + len, 0);
     off = off + len + 1; i = i + 1;
@@ -2196,7 +2219,7 @@ let __spawnRawAsync = (args, outPath, errPath) -> {
 // `std.process.spawn(args)` → 句柄;`std.process.wait(句柄)` → { status, stdout, stderr }。
 // 这是 run 的异步版:先 fan-out 再逐个收,用于并行构建/并行跑测试。
 let __procSpawn = (args) -> {
-  if readU64(args, 0) != 5 { return __err("TypeMismatch", "std.process.spawn expects an array of arguments"); };
+  let bad = __procCheckArgs(args, "std.process.spawn")?;
   let outPath = __procTemp(); let errPath = __procTemp();
   let pid = __spawnRawAsync(args, outPath, errPath);
   if pid < 0 { __fs_remove(outPath); __fs_remove(errPath); return __err("IOError", "cannot spawn: " + __itoa(pid)); };
@@ -2206,6 +2229,10 @@ let __procWait = (handle) -> {
   let pid = handle.pid;
   if isError(pid) { return pid; };
   let status = ql_wait(pid);
+  // ql_wait returns a negative code when the wait mechanism fails (already
+  // reaped, not our child). Turning that into an Error keeps the process ABI
+  // (exit code / signal) distinguishable from "could not wait".
+  if status < 0 { return __err("IOError", "std.process.wait: cannot wait for pid " + __itoa(pid)); };
   let outText = ""; let errText = "";
   let outRead = __fs_read_text(handle.out);
   if !isError(outRead) && outRead != null { outText = outRead; };
@@ -2401,11 +2428,17 @@ let __check_value = (value, ty) -> {
   let result = __call_borrowed(__obj_get(ty, "check"), [value], true)?;
   !!result;
 };
+// Format the TypeCheck error from an already-known verdict. The Boolean-verdict
+// emitter path calls __check_value once; re-entering __check_binding would call a
+// user-defined check a second time (observable side effects / non-determinism).
+let __check_binding_verdict = (value, text) -> {
+  let cause = null; if __isError(value) { cause = value; };
+  __err_new("TypeCheck", "value of type \"" + __type_name(value) + "\" does not match the annotated type \"" + text + "\"", cause);
+};
 let __check_binding = (value, ty, text) -> {
   let passed = __check_value(value, ty)?;
   if passed { return value; };
-  let cause = null; if __isError(value) { cause = value; };
-  __err_new("TypeCheck", "value of type \"" + __type_name(value) + "\" does not match the annotated type \"" + text + "\"", cause);
+  __check_binding_verdict(value, text);
 };
 let __call_depth = 0;
 // args is borrowed and read-only. Normal callees receive only its elements.

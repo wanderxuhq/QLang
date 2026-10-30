@@ -16,17 +16,11 @@ import ../bootstrapped/library.ql;
 // Static graph loading reads source only; module initialization stays in the ELF.
 // 标准库对象化模式:stdio 模块只发用户部分,库函数按外部符号调用。
 // `stdlibSymbolMap` 来自对象构建时落盘的 name<TAB>ql_fnN 表。
-// 名字 → 寄存器实参入口的元数(缺失/-1 = 只有通用入口)。
-let fastArityOf = {};
-// 预编译对象里带寄存器入口的函数:名字 → 元数(symbols.tsv 第三列)。
-let stdlibFastArity = {};
-let fastArityFor = (name) -> {
-  let local = fastArityOf[name];
-  if !isError(local) && local != null { return local; };
-  let fromStd = stdlibFastArity[name];
-  if !isError(fromStd) && fromStd != null { return fromStd; };
-  -1;
-};
+// 符号 → 寄存器实参入口的元数(-1 = 只有通用入口)。
+// fast 入口属于**符号**,不属于名字:同名用户函数带参数注解时没有 `_f`,按名字查
+// 会发出未定义的 `@ql_fnN_f`(实测 `let Option = (x: Number): Number -> ...`)。
+// 单模块发射时由 emitFunction 写;split 模式由 symbols.tsv 第三列写。
+let fastArityBySymbol = {};
 let splitStdlibMode = false;
 // 分析接口是否可用:传给 `-` 表示强制走「从源码分析」的对照路径。
 let stdlibFromCache = false;
@@ -52,7 +46,7 @@ let registerStdlibSymbols = (stmts) -> {
       if !isError(sym) && sym != "" {
         runtimeFnIr[st.name] = sym;
         if isError(curScope.directFns) { curScope.directFns = {}; };
-        curScope.directFns[st.name] = { ir: sym, arity: st.value.parameters.length };
+        curScope.directFns[st.name] = { ir: sym, arity: st.value.parameters.length, fast: fastArityBySymbol[sym] };
       };
     };
     i = i + 1;
@@ -178,7 +172,7 @@ let buildStdChainTargets = (fromObject) -> {
           if !isError(sym) { arity = stdMonoArity[name]; };
         };
         if !isError(sym) && sym != "" && !isError(arity) && arity >= 0 {
-          stdChainTargets[mods[i] + "." + mk[j]] = { ir: sym, arity: arity, fast: fastArityFor(name) };
+          stdChainTargets[mods[i] + "." + mk[j]] = { ir: sym, arity: arity, fast: fastArityBySymbol[sym] };
         };
         j = j + 1;
       };
@@ -255,7 +249,53 @@ let emitStdCacheInit = () -> {
   };
   null;
 };
-// 用户程序只要写过 std 的成员,整条链的直调证明就作废(保守到整个程序)。
+// 用户程序只要可能写 std 的成员,整条链的直调/闭包缓存就作废(保守到整个程序)。
+// 「可能」包括别名:`let m = std.Math; m.abs = ...` 与直接写 `std.Math.abs = ...` 等价。
+// 只认字面量 `std` 根会漏掉别名(实测 native 5 / 解释器 99)。
+let stdTainted = { std: true };
+let stdContainsRef = (node) -> {
+  if node == null || isError(node) { return false; };
+  if AnyArray.check(node) {
+    let i = 0; while i < node.length { if stdContainsRef(node[i]) { return true; }; i = i + 1; };
+    return false;
+  };
+  if !AnyObject.check(node) { return false; };
+  let t = node.type;
+  if isError(t) { return false; };
+  if t == "Import" { return false; };
+  if t == "Identifier" { return !isError(stdTainted[node.name]) && stdTainted[node.name] == true; };
+  let keys = std.Object.keys(node); let i = 0;
+  while i < keys.length {
+    let child = node[keys[i]];
+    if child != null && (AnyObject.check(child) || AnyArray.check(child)) { if stdContainsRef(child) { return true; }; };
+    i = i + 1;
+  };
+  false;
+};
+// 别名传播:let/重声明出来的、值里含 std(直接或经别名)的名字,视同 std 本身。
+// 可能是函数参数时名字不在 let 集里,写扫描会按「未知根」保守处理。
+let stdTaintScan = (node) -> {
+  if node == null || isError(node) { return null; };
+  if AnyArray.check(node) {
+    let i = 0; while i < node.length { stdTaintScan(node[i]); i = i + 1; };
+    return null;
+  };
+  if !AnyObject.check(node) { return null; };
+  let t = node.type;
+  if isError(t) { return null; };
+  if t == "Import" { return null; };
+  if t == "Let" && node.value != null && !isError(node.name) && stdContainsRef(node.value)
+     && (isError(assignedUserNames[node.name]) || assignedUserNames[node.name] != true) {
+    stdTainted[node.name] = true;
+  };
+  let keys = std.Object.keys(node); let i = 0;
+  while i < keys.length {
+    let child = node[keys[i]];
+    if child != null && (AnyObject.check(child) || AnyArray.check(child)) { stdTaintScan(child); };
+    i = i + 1;
+  };
+  null;
+};
 let stdWriteScan = (node) -> {
   if node == null || isError(node) { return null; };
   if AnyArray.check(node) {
@@ -266,10 +306,20 @@ let stdWriteScan = (node) -> {
   let t = node.type;
   if isError(t) { return null; };
   if t == "Import" { return null; };
-  if t == "Assign" && node.target != null && !isError(node.target.type) && node.target.type == "MemberAccess" {
+  if t == "Assign" && node.target != null && !isError(node.target.type)
+     && (node.target.type == "MemberAccess" || node.target.type == "IndexAccess") {
     let root = node.target;
-    while !isError(root.type) && root.type == "MemberAccess" { root = root.object; };
-    if !isError(root.type) && root.type == "Identifier" && root.name == "std" { stdMembersWritten = true; };
+    while !isError(root.type) && (root.type == "MemberAccess" || root.type == "IndexAccess") { root = root.object; };
+    if !isError(root.type) && root.type == "Identifier" {
+      let name = root.name;
+      let tainted = !isError(stdTainted[name]) && stdTainted[name] == true;
+      let assigned = !isError(assignedUserNames[name]) && assignedUserNames[name] == true;
+      let letBound = !isError(letSeenNames[name]) && letSeenNames[name] == true;
+      // 干净的本层 let 容器(且从未被重赋值)不可能指向 std;其余一律按可能写 std 处理。
+      if tainted || assigned || !letBound { stdMembersWritten = true; };
+    } else {
+      stdMembersWritten = true;
+    };
   };
   let keys = std.Object.keys(node); let i = 0;
   while i < keys.length {
@@ -903,8 +953,17 @@ let emitBinaryOp = (node) -> {
         // 省掉 __op_eq 那一层调用(否则每字符比较是两层 QLang 调用)。
         if op == "==" {
           let lStr = !isError(node.left.staticType) && node.left.staticType == "String";
+          // A statically String operand can still be an Error at run time (a
+          // declared `: String` function whose return check failed). Error must
+          // take part in the comparison as a chained Error, not as "not equal".
+          let sSafe = if lStr {
+            !isError(node.left.cannotBeError) && node.left.cannotBeError == true
+          } else {
+            !isError(node.right.cannotBeError) && node.right.cannotBeError == true
+          };
           let S = if lStr { L } else { R };
           let O = if lStr { R } else { L };
+          if sSafe {
           // String 是堆对象(kind 0 + 对象头 tag 2),不能用内层 kind 判;Number 才是标量 kind 1。
           let t = temp(); let isStr = temp();
           line("  " + t + " = call i64 @ql_tag(%ql_value " + O + ")");
@@ -921,6 +980,7 @@ let emitBinaryOp = (node) -> {
           let r = temp();
           line("  " + r + " = phi %ql_value [ " + rFast + ", %" + pFast + " ], [ " + rSlow + ", %" + pSlow + " ]");
           return r;
+          };
         };
         return emitDispOp(op, L, R);
       };
@@ -967,7 +1027,7 @@ let emitBinaryOp = (node) -> {
 // Shared failure edge for postfix ? and failed aggregate assignments.
 // tag 8 = Error (Result), tag 4 = Null (Option). The caller chooses which
 // failure value the enclosing function propagates.
-let emitPropagateTag = (O, failedTag) -> {
+let emitPropagateTag = (O, failedTag, checkPropagated, node) -> {
   let tO = temp(); let eO = temp();
   line("  " + tO + " = call i64 @ql_tag(%ql_value " + O + ")");
   line("  " + eO + " = icmp eq i64 " + tO + ", " + std.String.toString(failedTag));
@@ -979,15 +1039,23 @@ let emitPropagateTag = (O, failedTag) -> {
     emitCallRegs("__exit_error", [O]);
     line("  unreachable");
   } else {
-    line("  store %ql_value " + O + ", ptr " + curRetv);
+    // An Error propagated by `?` is exempt from the return check (the parser only
+    // allows `?` where the declared type accepts the failure side, and the boot
+    // engine's Propagate flow is exempt for the same reason). `?Option` propagates
+    // Null through an ordinary return, so it must pass the declared return check:
+    // otherwise `: Option(0)` (or a local alias named Option) silently returns null
+    // while the boot engine reports TypeCheck.
+    let propagated = O;
+    if checkPropagated && curReturnActive { propagated = emitReturnCheck(O, node); };
+    line("  store %ql_value " + propagated + ", ptr " + curRetv);
     line("  br label %" + curEpiLbl);
   };
   line(lOk + ":");
   curLbl = lOk;
   O;
 };
-let emitPropagateError = (O) -> emitPropagateTag(O, 8);
-let emitPropagateOptionNone = (O) -> emitPropagateTag(O, 4);
+let emitPropagateError = (O) -> emitPropagateTag(O, 8, false, null);
+let emitPropagateOptionNone = (O, node) -> emitPropagateTag(O, 4, true, node);
 
 // Unary operations produce inline scalar results; ? propagates the failure side
 // of the enclosing function: Error for ?, Null for ?Option. The parser decides
@@ -997,7 +1065,7 @@ let emitUnaryOp = (node) -> {
   let ov = emitValue(node.operand);
   if node.operator == "?" || node.operator == "?Option" {
     let value = if ov.raw == "Number" { emitFloatValue(ov.reg); } else if ov.raw == "Boolean" { emitBoolResult(ov.reg); } else { ov.reg; };
-    if node.operator == "?Option" { return emitPropagateOptionNone(value); };
+    if node.operator == "?Option" { return emitPropagateOptionNone(value, node); };
     return emitPropagateError(value);
   };
   if node.operator == "-" || node.operator == "+" {
@@ -1605,7 +1673,14 @@ let emitIdentifier = (node) -> {
   // A same-body read of a non-optional binding is guaranteed by the frontend's
   // definite-assignment check to exist and be initialized, so the null check and
   // the ql_empty check (with their cold diagnostic paths) are dead code.
-  let sameBody = hit.depth == 0 && (isError(hit.scope.optional) || isError(hit.scope.optional[node.name]));
+  // `let x;` leaves the slot all-zero until the first store. The frontend rejects
+  // direct statement reads, but an interpolation/closure argument read reaches
+  // emission with the empty slot (kind 0 / null pointer) and, without the ql_empty
+  // check, is used as a heap pointer (segfault). Bindings declared without an
+  // initializer therefore keep the checked path until the first store.
+  let maybeEmpty = !isError(hit.scope.maybeEmpty) && !isError(hit.scope.maybeEmpty[node.name])
+    && hit.scope.maybeEmpty[node.name] == true;
+  let sameBody = hit.depth == 0 && !maybeEmpty && (isError(hit.scope.optional) || isError(hit.scope.optional[node.name]));
   if sameBody { let direct = temp(); line("  " + direct + " = load %ql_value, ptr " + off); return direct; };
   let absent = temp(); let missing = lbl(); let found = lbl(); let done = lbl();
   line("  " + absent + " = icmp eq ptr " + off + ", null");
@@ -1695,7 +1770,9 @@ let emitAnnotatedCheck = (value, ty, text, locNode, mayAcceptError) -> {
   line("  " + passed + " = icmp ne i64 " + bits + ", 0");
   line("  br i1 " + passed + ", label %" + lOk + ", label %" + lFail);
   line(lFail + ":"); curLbl = lFail;
-  let denied = emitLocatedError(emitCallRegs("__check_binding", [value, ty, text]), locNode, false);
+  // The check already ran above; only build the error (calling __check_binding
+  // here would run a user-defined check twice).
+  let denied = emitLocatedError(emitCallRegs("__check_binding_verdict", [value, text]), locNode, false);
   emitKnownErrorPropagation(denied);
   line(lOk + ":"); curLbl = lOk;
   value;
@@ -1710,7 +1787,9 @@ let emitLetStmt = (node) -> {
   //    类型/文本槽与检查都可以不生成(闭包读取该槽的路径也不再需要它)。
   //  · 否则类型/文本槽必须照写(非同体写入会读它决定要不要检查),只是本次写入若右值
   //    类型已等于注解,这一次检查是死代码。
-  let typeFree = annotated && !inRuntime && !isError(node.runtimeTypeFree) && node.runtimeTypeFree == true;
+  // debug 档不消费分析结论:typeFree 会把类型/文本槽与检查一起省掉,使差分档看不到
+  // 分析错误的后果。conservativeMode 下强制按普通注解走。
+  let typeFree = annotated && !inRuntime && !conservativeMode && !isError(node.runtimeTypeFree) && node.runtimeTypeFree == true;
   // debug 档不省略"可证不会失败"的检查:注解检查一律发出来(慢一点,但每条路径都走)。
   let deadCheck = !conservativeMode && !inRuntime && (typeFree || checkIsDead(node.value, node.annotationType));
   if annotated && !typeFree { ty = emitExpr(node.annotation); text = internString(annotationText(node.annotation)); };
@@ -1758,6 +1837,13 @@ let emitLetStmt = (node) -> {
     };
   };
   let off = emitBindingPtr({ depth: 0, slot: slot });
+  // Remember that this binding starts empty: reads (including reads the frontend
+  // does not classify as direct, e.g. inside `${...}`) must keep the ql_empty
+  // check until it is stored.
+  if node.value == null {
+    if isError(curScope.maybeEmpty) { curScope.maybeEmpty = {}; };
+    curScope.maybeEmpty[node.name] = true;
+  };
   if annotated && !typeFree && node.value == null {
     // A declaration validates its annotation but does not check an absent value.
     let ok = emitCallRegs("__is_type_value", [ty]);
@@ -1810,7 +1896,7 @@ let emitLetStmt = (node) -> {
           pi = pi + 1;
         };
         curScope.directFns[node.name] = { ir: node.value.emittedIr, arity: node.value.parameters.length,
-                                          fast: fastArityFor(node.name), anns: anns };
+                                          fast: node.value.fastArity, anns: anns };
       };
     };
   };
@@ -1835,6 +1921,9 @@ let emitStoreByName = (name, expression, target, declaredType) -> {
   // A same-body write target is a direct slot pointer: the frontend guarantees
   // the binding exists, so the absent-pointer check is dead.
   let sameBody = hit.depth == 0 && (isError(hit.scope.optional) || isError(hit.scope.optional[name]));
+  if hit.depth == 0 && !isError(hit.scope.maybeEmpty) && !isError(hit.scope.maybeEmpty[name]) {
+    hit.scope.maybeEmpty[name] = false;
+  };
   let unannotated = sameBody && (isError(hit.scope.annotated) || isError(hit.scope.annotated[name]));
   if !inRuntime && !sameBody {
     let absent = temp(); let bad = lbl(); let good = lbl();
@@ -1853,8 +1942,8 @@ let emitStoreByName = (name, expression, target, declaredType) -> {
   if inRuntime || unannotated { line("  store %ql_value " + value + ", ptr " + off); return null; };
   // 编译期类型信息(来自 Assign 节点的标注):右值静态类型已等于声明的内建类型
   // ⇒ 重检查不可能失败,走 plain;整条绑定类型已知时同理(其类型槽也不再生成)。
-  if !isError(hit.scope.typeFree) && !isError(hit.scope.typeFree[name]) { line("  store %ql_value " + value + ", ptr " + off); return null; };
-  if checkIsDead(expression, declaredType) { line("  store %ql_value " + value + ", ptr " + off); return null; };
+  if !isError(hit.scope.typeFree) && !isError(hit.scope.typeFree[name]) && !conservativeMode { line("  store %ql_value " + value + ", ptr " + off); return null; };
+  if !conservativeMode && checkIsDead(expression, declaredType) { line("  store %ql_value " + value + ", ptr " + off); return null; };
   let ap = temp(); let ty = temp(); let has = temp();
   line("  " + ap + " = getelementptr i8, ptr " + off + ", i64 16");
   line("  " + ty + " = load %ql_value, ptr " + ap);
@@ -2003,7 +2092,9 @@ let emitFunction = (node, name, rawDirect) -> {
     };
   };
   let fastName = fname + "_f";
-  if name != "" && fastAbi { fastArityOf[name] = node.parameters.length; };
+  let fastArk = if fastAbi { node.parameters.length } else { -1 };
+  node.fastArity = fastArk;
+  fastArityBySymbol[fname] = fastArk;
   if name != "" { line("  ; ql-symbol " + name + " " + fname + " " + std.String.toString(if fastAbi { node.parameters.length; } else { -1; })); };
   if rawMode {
     let signature = "ptr %env";
@@ -2409,7 +2500,7 @@ let emitDirectCallValue = (irName, FN, argRegs, fastArity) -> {
 };
 let emitDirectCall = (irName, name, argRegs) -> {
   let FN = emitIdentifier({ type: "Identifier", name: name, internal: true });
-  emitDirectCallValue(irName, FN, argRegs, fastArityFor(name));
+  emitDirectCallValue(irName, FN, argRegs, fastArityBySymbol[irName]);
 };
 let emitCallRegs = (fname, argRegs) -> {
   // NOTE(deviation from brief): emitIdentifier 现签名取 Identifier 节点(读 node.name),
@@ -2960,7 +3051,7 @@ let emitLocatedError = (value, node, callFrame) -> {
 // 检查失败得到的是 TypeCheck 错误,它就是这次调用的返回值,所以调用方看得到。
 let emitReturnCheck = (value, valueNode) -> {
   if !curReturnActive { return value; };
-  if curReturnType != "" && valueNode != null && !isError(valueNode) && !isError(valueNode.staticType) && valueNode.staticType == curReturnType { return value; };
+  if !conservativeMode && curReturnType != "" && valueNode != null && !isError(valueNode) && !isError(valueNode.staticType) && valueNode.staticType == curReturnType { return value; };
   emitLocatedError(emitCallRegs("__check_binding", [value, curReturnTy, curReturnText]), valueNode, false);
 };
 // emitExpr(node) returns an LLVM %ql_value operand (constant or register).
@@ -3564,7 +3655,7 @@ let loadStdlibInterface = (text) -> {
         if !isError(sym) && sym != "" {
           runtimeFnIr[cells[1]] = sym;
           if isError(curScope.directFns) { curScope.directFns = {}; };
-          curScope.directFns[cells[1]] = { ir: sym, arity: std.Number.parseFloat(cells[2]) };
+          curScope.directFns[cells[1]] = { ir: sym, arity: std.Number.parseFloat(cells[2]), fast: fastArityBySymbol[sym] };
         };
       }
       else if kind == "MV" {
@@ -3587,7 +3678,7 @@ let loadStdlibInterface = (text) -> {
         let memSym = stdlibSymbolMap[cells[3]];
         if !isError(memSym) && memSym != "" {
           let memArity = if cells.length > 4 { std.Number.parseFloat(cells[4]) } else { -1 };
-          stdChainTargets[cells[1] + "." + cells[2]] = { ir: memSym, arity: memArity, fast: -1 };
+          stdChainTargets[cells[1] + "." + cells[2]] = { ir: memSym, arity: memArity, fast: fastArityBySymbol[memSym] };
         };
       }
       else if kind == "MAX" {
@@ -3622,6 +3713,116 @@ let usToMs = (us) -> {
   if isError(us) { return 0; };
   let whole = us - us % 1000;
   whole / 1000;
+};
+// ---- 缓存 key(IR 缓存与 --check 结论共用)----------------------------------
+// 产物取决于:入口源码、runtime、import 的每个模块、stdlib 接口文件(symbols/mod)
+// 以及代码生成选项。只哈希入口会让「改了 import 的模块」命中旧 IR / 旧诊断。
+let sortByteStrings = (xs) -> {
+  let out = []; let i = 0;
+  while i < xs.length { out[i] = xs[i]; i = i + 1; };
+  let j = 1;
+  while j < out.length {
+    let v = out[j]; let k = j - 1;
+    while k >= 0 && lessBytes(v, out[k]) { out[k + 1] = out[k]; k = k - 1; };
+    out[k + 1] = v; j = j + 1;
+  };
+  out;
+};
+let cacheFlagsText = (foldEnabled, staticScan) -> {
+  "flags=debug:" + (if conservativeMode { "1"; } else { "0" })
+  + ",fold:" + (if foldEnabled { "1"; } else { "0" })
+  + ",scan:" + (if staticScan { "1"; } else { "0" });
+};
+// 一次 sha256sum 进程拿全部输入,避免每个文件一次进程启动。
+let sha256Map = (paths) -> {
+  let map = {};
+  if paths.length == 0 { return map; };
+  let cmd = ["sha256sum"]; let i = 0;
+  while i < paths.length { cmd[cmd.length] = paths[i]; i = i + 1; };
+  let r = std.process.run(cmd);
+  if r.status != 0 { return map; };
+  let lines = std.String.split(r.stdout)("\n"); let j = 0;
+  while j < lines.length {
+    let line = lines[j];
+    if line != "" {
+      let cells = std.String.split(line)("  ");
+      if cells.length >= 2 { map[cells[1]] = cells[0]; };
+    };
+    j = j + 1;
+  };
+  map;
+};
+let cachePathsOf = (entry, runtime, extras) -> {
+  let paths = [entry, runtime];
+  let i = 0; while i < extras.length { if extras[i] != "" { paths[paths.length] = extras[i]; }; i = i + 1; };
+  let mods = std.Object.keys(moduleCache); i = 0;
+  while i < mods.length { paths[paths.length] = mods[i]; i = i + 1; };
+  sortByteStrings(paths);
+};
+let cacheHeader = (entry, runtime, extras, envName, foldEnabled, staticScan) -> {
+  let paths = cachePathsOf(entry, runtime, extras);
+  let shas = sha256Map(paths);
+  let lines = ["v2", "source=" + shas[entry], "env=" + envName, "runtime=" + shas[runtime], cacheFlagsText(foldEnabled, staticScan)];
+  let i = 0;
+  while i < paths.length {
+    // entry/runtime 已有独立行;其余(import 模块、接口文件)逐条记路径+哈希。
+    if paths[i] != entry && paths[i] != runtime { lines[lines.length] = "dep=" + shas[paths[i]] + "\t" + paths[i]; };
+    i = i + 1;
+  };
+  std.String.join(lines)("\n") + "\n---\n";
+};
+// 把缓存文件拆成头 + 正文(正文是 IR 或 verdict 行)。
+let cacheParse = (text) -> {
+  if isError(text) { return null; };
+  let lines = std.String.split(text)("\n");
+  let header = []; let body = []; let inBody = false; let i = 0;
+  while i < lines.length {
+    if !inBody && lines[i] == "---" { inBody = true; }
+    else if inBody { body[body.length] = lines[i]; }
+    else { header[header.length] = lines[i]; };
+    i = i + 1;
+  };
+  if !inBody { return null; };
+  let h = { version: "", source: "", env: "", runtime: "", flags: "", deps: [], body: std.String.join(body)("\n") };
+  let j = 0;
+  while j < header.length {
+    let line = header[j];
+    if line != "" {
+      if j == 0 { h.version = line; }
+      else if std.String.startsWith(line)("source=") { h.source = std.Bytes.slice(line, 7, line.length - 7); }
+      else if std.String.startsWith(line)("env=") { h.env = std.Bytes.slice(line, 4, line.length - 4); }
+      else if std.String.startsWith(line)("runtime=") { h.runtime = std.Bytes.slice(line, 8, line.length - 8); }
+      else if std.String.startsWith(line)("flags=") { h.flags = line; }
+      else if std.String.startsWith(line)("dep=") {
+        let rest = std.Bytes.slice(line, 4, line.length - 4);
+        let tab = std.String.split(rest)("\t");
+        if tab.length >= 2 { h.deps[h.deps.length] = { sha: tab[0], path: std.Bytes.slice(rest, tab[0].length + 1, rest.length - tab[0].length - 1) }; };
+      };
+    };
+    j = j + 1;
+  };
+  h;
+};
+let cacheVerify = (h, entry, runtime, extras, envName, foldEnabled, staticScan) -> {
+  if h == null || h.version != "v2" { return false; };
+  if h.env != envName { return false; };
+  if h.flags != cacheFlagsText(foldEnabled, staticScan) { return false; };
+  // 依赖文件必须仍是头里记录的那些、且哈希一致。
+  let expected = cachePathsOf(entry, runtime, extras);
+  let want = []; let i = 0;
+  while i < expected.length { if expected[i] != entry && expected[i] != runtime { want[want.length] = expected[i]; }; i = i + 1; };
+  if want.length != h.deps.length { return false; };
+  let paths = [entry, runtime]; i = 0;
+  while i < want.length { paths[paths.length] = want[i]; i = i + 1; };
+  let shas = sha256Map(paths);
+  if h.source != shas[entry] { return false; };
+  if h.runtime != shas[runtime] { return false; };
+  i = 0;
+  while i < h.deps.length {
+    if shas[h.deps[i].path] != h.deps[i].sha { return false; };
+    i = i + 1;
+  };
+  true;
 };
 let main = (args) -> {
   // `--fold` 是独立选项(AST 级常量折叠),不属于 codegen;默认关闭。
@@ -3664,31 +3865,33 @@ let main = (args) -> {
   if timingOn { tStart = nowUs(); };
   let interfaceDump = args.length == 2 && args[0] == "--emit-stdlib-interface";
   splitStdlibMode = args.length == 5 && args[0] == "--emit-llvm-split";
-  // --ir-cache 命中:直接回放上次的 IR(源与工具链都没变)。默认关闭。
+  let cacheEnvName = (modPath) -> {
+    let dir = std.fs.canonicalPath(modPath);
+    if isError(dir) { return "-"; };
+    let bits = std.String.split(dir)("/");
+    bits[bits.length - 2];
+  };
+  let cacheExtras = () -> {
+    if args.length == 5 && splitStdlibMode { return [args[3], args[4]]; };
+    [];
+  };
+  // --ir-cache 命中:入口/runtime/import 模块/接口/选项全部未变才回放。默认关闭。
   if irCacheOn && splitStdlibMode && args[4] != "-" {
-    let stamp = std.fs.readFileText(args[1] + ".qir");
-    let sum = std.process.run(["sha256sum", args[1]]);
-    if !isError(stamp) && sum.status == 0 {
-      let hex = std.String.split(sum.stdout)(" ");
-      let dir = std.fs.canonicalPath(args[4]);
-      let envName = if isError(dir) { "-"; } else { let bits = std.String.split(dir)("/"); bits[bits.length - 2]; };
-      let head = "v1\nsource=" + hex[0] + "\nenv=" + envName + "\n---\n";
-      if stamp.length > head.length && std.String.startsWith(stamp)(head) { print(std.Bytes.slice(stamp, head.length, stamp.length - head.length)); return null; };
+    let raw = std.fs.readFileText(args[1] + ".qir");
+    // An Error value must not be passed as a call argument (the language turns
+    // that into a new chained Error), so guard the miss before calling.
+    let stamp = null;
+    if !isError(raw) { stamp = cacheParse(raw); };
+    if stamp != null && cacheVerify(stamp, args[1], args[2], cacheExtras(), cacheEnvName(args[4]), foldEnabled, staticScan) {
+      print(stamp.body); return null;
     };
   };
-  // --check 快路径:源码与工具链都没变 ⇒ 直接复用上次的"无诊断"结论(连 parse 都不做)。
+  // --check 快路径:同上(依赖也参与),否则会拿旧结论掩盖新引入的 import 错误。
   if checkMode && args.length == 5 {
-    let stamp = std.fs.readFileText(args[1] + ".qcheck");
-    if !isError(stamp) {
-      let sum = std.process.run(["sha256sum", args[1]]);
-      let dir = std.fs.canonicalPath(args[4]);
-      let envName = "-";
-      if !isError(dir) { let bits = std.String.split(dir)("/"); envName = bits[bits.length - 2]; };
-      if sum.status == 0 {
-        let hex = std.String.split(sum.stdout)(" ");
-        if stamp == "v1\nsource=" + hex[0] + "\nenv=" + envName + "\nverdict=ok\n" { return null; };
-      };
-    };
+    let rawCheck = std.fs.readFileText(args[1] + ".qcheck");
+    let stamp = null;
+    if !isError(rawCheck) { stamp = cacheParse(rawCheck); };
+    if stamp != null && cacheVerify(stamp, args[1], args[2], cacheExtras(), cacheEnvName(args[4]), foldEnabled, staticScan) { return null; };
   };
   if args.length != 3 && !splitStdlibMode && !interfaceDump { return std.Error.raise("CompileError", "usage: qlangc --emit-llvm|--emit-module source.ql runtime.ql", null); };
   let source = args[0]; let sourcePath = args[1]; let runtimeSource = args[2];
@@ -3707,6 +3910,13 @@ let main = (args) -> {
         // 闭包间接调用。这是 split 路径比单模块慢 3–5× 的主因之一。
         if cells.length == 3 || cells.length == 2 {
           stdlibSymbolMap[cells[0]] = cells[1];
+          // 第三列 = 该符号的寄存器入口元数;不读它 split 模式下库的 `_f` 永远不声明。
+          if cells.length == 3 {
+            let fa = std.Number.parseFloat(cells[2]);
+            fastArityBySymbol[cells[1]] = if isError(fa) { -1; } else { fa };
+          } else {
+            fastArityBySymbol[cells[1]] = -1;
+          };
           // 用户函数接着库函数的编号往下排,否则会重定义对象里的 ql_fnN。
           let digits = std.String.replace(cells[1])("ql_fn")("");
           if digits != cells[1] {
@@ -3799,7 +4009,20 @@ let main = (args) -> {
   // 反而少了一层(t62 因此多了 32 条指令)。
   // 计数器在进程启动时就是 0;不能在这里重置 —— 那会把已经跑完的分析阶段清零。
   collectAssignedNames(userProgram.statements, assignedUserNames);
+  stdTaintScan(userProgram.statements);
+  let scanModules = std.Object.keys(moduleCache); let sm = 0;
+  while sm < scanModules.length {
+    let mod = moduleCache[scanModules[sm]];
+    if !isError(mod) && !isError(mod.program) { stdTaintScan(mod.program.statements); };
+    sm = sm + 1;
+  };
   stdWriteScan(userProgram.statements);
+  sm = 0;
+  while sm < scanModules.length {
+    let mod = moduleCache[scanModules[sm]];
+    if !isError(mod) && !isError(mod.program) { stdWriteScan(mod.program.statements); };
+    sm = sm + 1;
+  };
   if foldEnabled {
     // 折叠还需要 import 名字:导入会覆盖同名槽,不能当成不可变本地函数。
     let foldLets = {};
@@ -3839,7 +4062,7 @@ let main = (args) -> {
         declaredSym[sym] = true;
         line("declare %ql_value @" + sym + "(ptr, ptr, i64, %ql_value)");
       };
-      let fdecl = stdlibFastArity[symNames[sni]];
+      let fdecl = fastArityBySymbol[sym];
       if !isError(fdecl) && fdecl != null {
         let sig = "ptr";
         let ai = 0;
@@ -4159,28 +4382,15 @@ let main = (args) -> {
   };
   flushLines();
   if irCacheOn && splitStdlibMode && args[4] != "-" && irCacheBody.length > 0 {
-    let sum = std.process.run(["sha256sum", args[1]]);
-    let dir = std.fs.canonicalPath(args[4]);
-    let envName = if isError(dir) { "-"; } else { let bits = std.String.split(dir)("/"); bits[bits.length - 2]; };
-    if sum.status == 0 {
-      let hex = std.String.split(sum.stdout)(" ");
-      std.fs.writeText(args[1] + ".qir",
-        "v1\nsource=" + hex[0] + "\nenv=" + envName + "\n---\n" + std.String.join(irCacheBody)("\n") + "\n");
-    };
+    let header = cacheHeader(args[1], args[2], cacheExtras(), cacheEnvName(args[4]), foldEnabled, staticScan);
+    std.fs.writeText(args[1] + ".qir", header + std.String.join(irCacheBody)("\n") + "\n");
   };
   // --check 的产物:一份"结论"sidecar(只缓存 ok;有错不写,错误每次都要重报)。
   // env = stdlib 目录名 —— 它本身就是 (编译器字节 + runtime + bundle) 的哈希,和库缓存同源,
   // 因此换编译器/换库都会自动失效。
   if checkMode && args.length == 5 {
-    let dir = std.fs.canonicalPath(args[4]);
-    let bits = std.String.split(dir)("/");
-    let envName = if isError(dir) { "" } else { bits[bits.length - 2]; };
-    let sum = std.process.run(["sha256sum", args[1]]);
-    if sum.status == 0 {
-      let hex = std.String.split(sum.stdout)(" ");
-      std.fs.writeText(args[1] + ".qcheck",
-        "v1\nsource=" + hex[0] + "\nenv=" + envName + "\nverdict=ok\n");
-    };
+    let header = cacheHeader(args[1], args[2], cacheExtras(), cacheEnvName(args[4]), foldEnabled, staticScan);
+    std.fs.writeText(args[1] + ".qcheck", header + "verdict=ok\n");
   };
 };
 
