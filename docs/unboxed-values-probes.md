@@ -2729,3 +2729,45 @@ debug 档(`--debug`)不跑这条(保守路线保留一切)。
 
 在此之前,`--debug`(保守发射)与 `release`(静态优化)两档的分工保持不变;编译速度的收益走
 `mod.ql` 接口、标准库对象、`link --debug` 这些**不改变语义**的路子。
+
+## 102. `--debug` 档的两个 IR bug(release 不受影响)+ 当前 debug/release 与系统语言的对比(2026-10-30)
+
+**bug 1:`store %ql_value null`(非法 IR)**。`--debug` 会把 release 下被省略的注解检查发出来,而这些
+路径里发射器用内部占位串 `"null"` 表示"没有这个值",它被原样写进了 `store`:
+
+```
+store %ql_value null, ptr %t195      ; llc: null must be a pointer type
+```
+
+正确零值是 `zeroinitializer`。三处 `store %ql_value`(绑定存储、注解数组、调用参数缓冲)都要过一遍
+映射。release 不踩是因为这些检查多半被"可证不会失败"省略了 —— 这正是 debug 档存在的价值:它把
+只在冷路径上的发射器 bug 变成必现。
+
+**bug 2:修掉占位串后仍段错误**。保守路径发出来的程序跑到 100M 循环时 SIGSEGV(539ms 后崩),
+说明还有一处"release 永远不会走、debug 必走"的发射路径是错的(候选:装箱直调/raw 之外的分派
+兜底、`__call` 的被调者读取)。修完 bug 1 后仍崩,所以**当前 debug 档还不能用于测速**。
+
+两个 bug 都只在 `--debug` 下出现,release 产物不变(判据:`git diff cbcd3f8 HEAD -- aot/qlangc.ql` 为空)。
+
+### 102.1 当前能测到的数(release,本机 min-of-5)
+
+构建 hello(编译+链接):
+
+| | 时间 |
+|---|---|
+| clang -O2 | 750ms |
+| rustc -O | 1025ms |
+| **QLang release(前端 + `tools/link`)** | **1916ms** |
+
+运行 100M 次 f64 累加(依赖链,同类型对照):
+
+| | 时间 |
+|---|---|
+| Go(注:int64 求和,不是同类型) | 71ms |
+| Rust f64 -O | 80ms |
+| C f64 -O2 | 121ms |
+| **QLang release** | **174ms** |
+
+即 release 档:构建约为 clang 的 2.5×、rustc 的 1.9×;运行约为 C 的 1.4×、Rust 的 2.2×。
+debug 档的数字**暂缺**(上面两个 bug),但方向明确:它是"全装箱 + 全间接调用 + 无 IR 优化",
+运行会慢一个量级,编译只快 0.3s(链接档的 `opt` 那一趟)。
