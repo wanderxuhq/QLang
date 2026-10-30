@@ -289,13 +289,25 @@ runtime 注册为 native、boot 直接装同一实现;测试用例 `t57_assert`,
 同源验收(interpreter 57 PASS、selfhost ALL PASS、stage3/stage4 IR identical)见
 `docs/rust-error-model.md` §3.7。`expect` 仍未做,与 Result/Option 的辅助函数一起设计(§3.6/§4)。
 
-### D. **cause 链 provenance 真 bug**(§12,属错误模型本体)
-实测:`direct.line` 持久正确 ✓,但 `chained.cause.line` 给的是**读取所在的绑定行**(9/11/15)而不是
-来源行(2),**与 `runtime.ql:97-98` 自己的注释矛盾**。已定位守卫:`__err_record`(`:103-120`)里
-`:107` `if located && !callFrame { return e; }` 本应拦住「已定位不被重记」。
-**待办**:先做**逐语句 bisect** 证实/证伪假设(假设:cause 槽里放的是**未定位**的错误对象 ⇒ 守卫不生效),
-再修;验收 `aot/tests/t38_runtime_diagnostics.ql:38` 转绿、`runtime_diag` 全绿。
-**不要**去改那条断言 —— 它在**正确地**抓 bug。
+### D. ~~cause 链 provenance 真 bug~~ —— **已修,2026-10-30 复核转绿**
+
+原来:`direct.line` 正确,但 `chained.cause.line` 给的是读取所在的绑定行而不是来源行
+(`__err_record` 的「已定位不被重记」守卫没生效)。
+
+**2026-10-30 复核:不再是红。** 复现命令:
+
+```sh
+stage2 --emit-llvm-split aot/tests/t38_runtime_diagnostics.ql aot/runtime.ql \
+  <stdlib>/symbols.tsv <stdlib>/mod.ql > /tmp/t38.ll
+tools/link /tmp/t38.ll -o /tmp/t38 --root <repo> --stdlib-object <stdlib>/stdlib.o
+/tmp/t38                                  # → "runtime source checks: 17",exit 0
+python3 aot/run_runtime_diagnostic_tests.py --compiler target/selfhost/stage2
+                                          # → ALL CHECKS PASS
+```
+
+`chained.cause.line == 3` 这条断言现在通过。修复应该来自后续的错误模型切片(没有单独一笔),
+所以这里只记录"已不复现",不声称了解具体是哪次改动修好的 —— 以后若再出现,按原假设
+(cause 槽里放的是**未定位**的错误对象 ⇒ 守卫不生效)重新 bisect。
 
 ### E. **错误载体的类型面**(设计已定,实现未做)
 - `Result(T) ≡ T | Error`、`Option(T) ≡ T | Null`,**唯一类型构造子是 `A | B`**;

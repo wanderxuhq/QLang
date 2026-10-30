@@ -3381,3 +3381,20 @@ SHA-256 记在子集的头部注释里 —— 这样权威性仍然追溯到 UCD
 
 顺带一个 awk 的坑:`split(s, arr, "..")` 的第三个参数是**正则**,`..` 会匹配任意两个字符 ——
 解析 `0009..000D` 这种范围必须用 `index()` 找分隔符,否则切出来全是垃圾(我第一次就这样得到 11 行 "0000")。
+
+## 121. 复核:cause 链 provenance 不再复现(2026-10-30)
+
+handoff §4 D 把 `chained.cause.line` 记成真 bug(`t38:38`)。这次按主线回来复核,**已经绿了**:
+
+```
+/tmp/t38                                       → runtime source checks: 17,exit 0
+python3 aot/run_runtime_diagnostic_tests.py    → Runtime diagnostic suite: ALL CHECKS PASS
+```
+
+即 `first.line == 7 && chained.cause.line == 3`(那条 30000 次分配之后的 provenance 断言)通过。
+具体是哪次改动修好的没有被单独记录(很可能随错误模型切片一起变的),所以只记"不复现",
+不再声称了解成因;若将来重现,按原假设重开 bisect:cause 槽里放的是**未定位**错误对象 ⇒
+`__err_record` 的「已定位不被重记」守卫不生效。
+
+顺带纠正 handoff §5 的三条"已知红":`runtime_diag`(本条)、`module`(§104)、`extension`(§116)
+现在都不红了 —— 这三条都是文档滞后,不是代码状态。
