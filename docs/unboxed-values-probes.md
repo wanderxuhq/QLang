@@ -2885,3 +2885,28 @@ debug  : depth=1, depth=0
 
 本轮结论:修法仍未落地;确认"两档作用域解析不同"是根因方向,且需要语句级归属的探针才能定位。
 代码回滚到 cbcd3f8(release 不受影响)。
+
+### 102.7 关键观察:`%t206` 是模块帧,debug 却从**父帧**读 `println`(2026-10-30)
+
+把 §102.6 的 IR 再对一遍定义:
+
+```llvm
+%t206 = alloca i8, i64 272          ; 模块帧(272B = 17 个槽)
+...
+%t254 = load ptr, ptr %t206          ; ← 帧偏移 0 = 父帧指针
+%t255 = getelementptr i8, ptr %t254, i64 208   ; 父帧(全局帧)槽 13
+```
+
+`reserveModuleGlobals()` 会把 `$exports`(0)、`std`(1) 和 `moduleGlobalNames` 全部
+`defineSlot` 进**模块作用域**(里面就有 `println`),所以 `lookupSlot("println")` 本该 depth=0;
+debug 却拿到了 depth=1。两种可能:
+1. 进入发射时 `curScope` **不是**模块作用域(而是全局作用域),`reserveModuleGlobals` 没生效;
+2. `reserveModuleGlobals` 生效了,但**条目被后来的 `defineSlot`/invalidate 覆盖**。
+
+**关键的下一步(1 个探针 + 1 个修法)**:
+- 探针:发射第一条语句前,打印 `curScope.moduleRoot` 与 `curScope.slots["println"]`,
+  以及 `curScope.parent` 上是否有同名槽 —— 一次就能分辨是 1 还是 2;
+- 修法:无论哪条,方向都是"入口程序的 `curScope` 建立/全局保留"必须与档位无关
+  (`emitModule` 的入口段里不该有随 `allowDirectUserCalls` 走的分支)。
+
+本轮没再改代码(避免又改错地方):HEAD 与 `cbcd3f8` 的编译器逐字相同,release 不受影响。
