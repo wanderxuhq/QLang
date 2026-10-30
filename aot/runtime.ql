@@ -2179,7 +2179,42 @@ let __verify_elf_strings = (elfPath, stringsPath, irPath, relaxed) -> {
 let stdBytes = { read: __bytes_read, length: __bytes_length, byteAt: __bytes_at, u32: __bytes_u32, u64: __bytes_u64, hex: __bytes_hex, slice: __bytes_slice, verifyStrings: __verify_elf_strings };
 let stdFs = { readFileText: __fs_read_text, canonicalPath: __fs_canonical, writeText: __fs_write_text, remove: __fs_remove };
 // 公开能力:运行一个外部程序并拿到 status/stdout/stderr。
-let stdProcess = { run: __procRun };
+let __spawnRawAsync = (args, outPath, errPath) -> {
+  let n = args.length;
+  let total = 0; let i = 0;
+  while i < n { total = total + __s_len(args[i]) + 1; i = i + 1; };
+  let buf = ql_alloc(total);
+  let off = 0; i = 0;
+  while i < n {
+    let str = args[i]; let src = ql_mem_get_ptr(str, 8); let len = __s_len(str); let j = 0;
+    while j < len { ql_mem_store(buf, off + j, ql_mem_get(src, j)); j = j + 1; };
+    ql_mem_store(buf, off + len, 0);
+    off = off + len + 1; i = i + 1;
+  };
+  ql_spawn_async(buf, n, ql_mem_get_ptr(outPath, 8), ql_mem_get_ptr(errPath, 8));
+};
+// `std.process.spawn(args)` → 句柄;`std.process.wait(句柄)` → { status, stdout, stderr }。
+// 这是 run 的异步版:先 fan-out 再逐个收,用于并行构建/并行跑测试。
+let __procSpawn = (args) -> {
+  if readU64(args, 0) != 5 { return __err("TypeMismatch", "std.process.spawn expects an array of arguments"); };
+  let outPath = __procTemp(); let errPath = __procTemp();
+  let pid = __spawnRawAsync(args, outPath, errPath);
+  if pid < 0 { __fs_remove(outPath); __fs_remove(errPath); return __err("IOError", "cannot spawn: " + __itoa(pid)); };
+  { pid: pid, out: outPath, err: errPath };
+};
+let __procWait = (handle) -> {
+  let pid = handle.pid;
+  if isError(pid) { return pid; };
+  let status = ql_wait(pid);
+  let outText = ""; let errText = "";
+  let outRead = __fs_read_text(handle.out);
+  if !isError(outRead) && outRead != null { outText = outRead; };
+  let errRead = __fs_read_text(handle.err);
+  if !isError(errRead) && errRead != null { errText = errRead; };
+  __fs_remove(handle.out); __fs_remove(handle.err);
+  { status: status, stdout: outText, stderr: errText };
+};
+let stdProcess = { run: __procRun, spawn: __procSpawn, wait: __procWait };
 
 // Private embedding capability used by the QLang AST evaluator. Source points
 // are ordinary language data; LLVM does not recognize interpreter/library names.

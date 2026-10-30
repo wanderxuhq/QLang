@@ -280,6 +280,46 @@ long ql_write_file(const char *path, const void *data, long length) {
   close(fd);
   return 0;
 }
+// 异步 spawn:同样的参数/重定向,但**不等待**子进程。返回 pid(>0)或负的错误码。
+// 配对的 ql_wait(pid) 收状态 —— QLang 侧可以 fan-out 多个子进程再逐个收。
+long ql_spawn_async(const char *argbuf, long nargs, const char *out_path, const char *err_path) {
+  if (!argbuf || nargs <= 0 || nargs >= 64) return -1000;
+  char *argv[64];
+  const char *p = argbuf;
+  for (long i = 0; i < nargs; i++) {
+    if (!*p) return -1001;
+    argv[i] = (char *)p;
+    p += strlen(p) + 1;
+  }
+  argv[nargs] = NULL;
+  int out = -1, err = -1;
+  if (out_path && *out_path) {
+    out = open(out_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (out < 0) return -1002;
+  }
+  if (err_path && *err_path) {
+    err = open(err_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (err < 0) { if (out >= 0) close(out); return -1003; }
+  }
+  pid_t pid = fork();
+  if (pid < 0) { if (out >= 0) close(out); if (err >= 0) close(err); return -1004; }
+  if (pid == 0) {
+    if (out >= 0) { dup2(out, 1); close(out); }
+    if (err >= 0) { dup2(err, 2); close(err); }
+    execvp(argv[0], argv);
+    _exit(127);
+  }
+  if (out >= 0) close(out);
+  if (err >= 0) close(err);
+  return (long)pid;
+}
+// 收一个 ql_spawn_async 起的子进程;状态编码与 ql_spawn 相同。
+long ql_wait(long pid) {
+  int st = 0;
+  while (waitpid((pid_t)pid, &st, 0) < 0) {}
+  if (WIFEXITED(st)) return WEXITSTATUS(st);
+  return 128 + (st & 0x7f);
+}
 long ql_spawn(const char *argbuf, long nargs, const char *out_path, const char *err_path) {
   if (!argbuf || nargs <= 0 || nargs >= 64) return -1000;
   char *argv[64];

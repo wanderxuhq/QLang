@@ -3146,3 +3146,35 @@ Rust 只剩"初始 bootstrap"(第一次把编译器带上路)这一件事。
 
 至此原生与解释器两类主测试都能只靠 QLang 二进制跑;剩下仍要 Python 的是 selfhost(固定点 +
 并行)、extension(现建 `.so`)、module(多文件)、String(Unicode 预言机)、bench 与时序探针。
+
+## 111. `std.process.spawn/wait`:QLang 终于能并行起子进程(2026-10-30)
+
+探针先确认了限制:两次 `std.process.run(["sleep","0.3"])` = **810ms**(串行),因为
+`runtime.c` 的 `ql_spawn` 在 `fork`/`execvp` 之后直接 `while (waitpid(...))` —— 叶子自己会阻塞。
+
+补上的机制(四通道里的 1 号:C 宿主原语 + 4 号:程序可见的 std 面):
+
+| 层 | 新增 |
+|---|---|
+| `aot/runtime.c` | `ql_spawn_async(argbuf, nargs, out, err)`(同样重定向,不 wait,返回 pid)、`ql_wait(pid)`(状态编码与 `ql_spawn` 相同) |
+| `aot/runtime.ql` | `std.process.spawn(args) -> { pid, out, err }`、`std.process.wait(h) -> { status, stdout, stderr }`;`std.process` 变成 `{ run, spawn, wait }` |
+| `aot/qlangc.ql` | 叶子白名单、调用签名表、前置声明三处登记 |
+
+**引导顺序是个坑**:新叶子要先被"知道",但旧编译器不认识 `ql_spawn_async`,直接用它编新
+`runtime.ql` 会报 `undeclared name`。正确顺序是两步:
+
+```
+旧编译器 + 旧 runtime.ql → C1(知道新叶子,但装着旧 runtime)
+C1 + 新 runtime.ql       → C2(知道新叶子,装着新 runtime)
+```
+
+实测(两个 `sleep 0.3`):
+
+| 写法 | 墙钟 |
+|---|---|
+| `run` 两次(串行) | 810ms |
+| `spawn` 两次再 `wait` | **538ms** |
+
+并行确实生效(差值就是省下的 300ms;剩下的是两次 fork/exec 的启动成本)。判据用例
+`aot/tests/t63_async_process.ql`:并发起两个子进程再收输出(`ab`),并验证 `wait` 拿到
+退出码(`exit 3` → `3`)。

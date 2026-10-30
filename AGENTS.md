@@ -94,6 +94,9 @@ python3 aot/native_link.py /tmp/p.ll -o /tmp/p
   「从源码分析」的对照路径);`native_link.py --stdlib-object`
   或环境变量 `QLANG_STDLIB_OBJECT` 链接对象。单测试用例构建 ~22s → ~1.7s。
   两套主测试会自动构建并启用它。测量见 `docs/unboxed-values-probes.md` §22-§29。
+- **并行子进程**:`std.process.run(args)` 同步;`std.process.spawn(args)` → 句柄
+  (`{pid,out,err}`),`std.process.wait(h)` → `{status,stdout,stderr}`。底层是 `runtime.c` 的
+  `ql_spawn_async`/`ql_wait`(叶子是 QLang 侧唯一的宿主通道)。判据 `t63_async_process`。
 - **不依赖 Python 的测试驱动**:`aot/run_tests.ql`(QLang)——
   `run_tests <stdlib-dir>` 跑原生用例(按 `aot/tests/manifest.txt`,57 个);
   `run_tests <stdlib-dir> --interpreter` 跑解释器用例(按 `aot/tests/interpreter.txt`,40 个,
