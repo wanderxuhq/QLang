@@ -3629,6 +3629,10 @@ let main = (args) -> {
   // `--check`:走完整的 parse/分析/发射,但**不产出**(不写 IR、不链接),只报诊断。
   // 之所以不"停在分析之后":用户诊断有一部分是发射期产生的(addCompileError),两条路会分叉。
   let checkMode = false;
+  // `--ir-cache`:把发出的用户模块 IR 缓存到 `<src>.qir`(头里有 source/env 哈希),命中就直接回放。
+  // **opt-in**:固定点/门禁默认不开 —— 否则 stage3 会命中 stage2 的缓存,把"固定点"变成空断言。
+  let irCacheOn = false;
+  let irCacheBody = [];
   let keptArgs = [];
   let stdlibDir = "";
   let membersOutPath = "";
@@ -3638,6 +3642,7 @@ let main = (args) -> {
     else if args[argIndex] == "--static-scan" { staticScan = true; }
     else if args[argIndex] == "--timing" { timingOn = true; }
     else if args[argIndex] == "--check" { checkMode = true; }
+    else if args[argIndex] == "--ir-cache" { irCacheOn = true; }
     else if args[argIndex] == "--debug" { conservativeMode = true; }
     else if args[argIndex] == "--stdlib-object" { stdlibDir = args[argIndex + 1]; argIndex = argIndex + 1; }
     else if args[argIndex] == "--members-out" { membersOutPath = args[argIndex + 1]; argIndex = argIndex + 1; }
@@ -3655,6 +3660,18 @@ let main = (args) -> {
   if timingOn { tStart = nowUs(); };
   let interfaceDump = args.length == 2 && args[0] == "--emit-stdlib-interface";
   splitStdlibMode = args.length == 5 && args[0] == "--emit-llvm-split";
+  // --ir-cache 命中:直接回放上次的 IR(源与工具链都没变)。默认关闭。
+  if irCacheOn && splitStdlibMode && args[4] != "-" {
+    let stamp = std.fs.readFileText(args[1] + ".qir");
+    let sum = std.process.run(["sha256sum", args[1]]);
+    if !isError(stamp) && sum.status == 0 {
+      let hex = std.String.split(sum.stdout)(" ");
+      let dir = std.fs.canonicalPath(args[4]);
+      let envName = if isError(dir) { "-"; } else { let bits = std.String.split(dir)("/"); bits[bits.length - 2]; };
+      let head = "v1\nsource=" + hex[0] + "\nenv=" + envName + "\n---\n";
+      if stamp.length > head.length && std.String.startsWith(stamp)(head) { print(std.Bytes.slice(stamp, head.length, stamp.length - head.length)); return null; };
+    };
+  };
   // --check 快路径:源码与工具链都没变 ⇒ 直接复用上次的"无诊断"结论(连 parse 都不做)。
   if checkMode && args.length == 5 {
     let stamp = std.fs.readFileText(args[1] + ".qcheck");
@@ -4106,6 +4123,7 @@ let main = (args) -> {
   };
   let emitLine = (s) -> {
     if checkMode { return null; };
+    if irCacheOn && irCacheBody.length < 400000 { irCacheBody[irCacheBody.length] = s; };
     chunkLines[chunkLines.length] = s;
     if chunkLines.length >= 4096 { flushLines(); };
   };
@@ -4136,6 +4154,16 @@ let main = (args) -> {
     si = si + 1;
   };
   flushLines();
+  if irCacheOn && splitStdlibMode && args[4] != "-" && irCacheBody.length > 0 {
+    let sum = std.process.run(["sha256sum", args[1]]);
+    let dir = std.fs.canonicalPath(args[4]);
+    let envName = if isError(dir) { "-"; } else { let bits = std.String.split(dir)("/"); bits[bits.length - 2]; };
+    if sum.status == 0 {
+      let hex = std.String.split(sum.stdout)(" ");
+      std.fs.writeText(args[1] + ".qir",
+        "v1\nsource=" + hex[0] + "\nenv=" + envName + "\n---\n" + std.String.join(irCacheBody)("\n") + "\n");
+    };
+  };
   // --check 的产物:一份"结论"sidecar(只缓存 ok;有错不写,错误每次都要重报)。
   // env = stdlib 目录名 —— 它本身就是 (编译器字节 + runtime + bundle) 的哈希,和库缓存同源,
   // 因此换编译器/换库都会自动失效。
