@@ -191,37 +191,15 @@ let emit = (src, mode, out) -> {
   if r.status != 0 { die("emit " + src, r.stderr); };
   writeText(out, r.stdout);
 };
-let emitDebug = (src, out) -> {
-  let r = runArgs([compiler, "--debug", "--emit-llvm", src, runtime], "emit (debug) " + src);
-  if r.status != 0 { die("emit debug " + src, r.stderr); };
-  writeText(out, r.stdout);
-};
-let debugLink = false;
 let linkTo = (ir, out, opt, shared) -> {
   let argv = [linkTool, ir, "-o", out, "--opt", opt, "--root", root];
   if shared { argv[argv.length] = "--shared"; };
-  if debugLink { argv[argv.length] = "--debug"; };
   let r = runArgs(argv, "link " + out);
   if r.status != 0 { die("link " + out, r.stderr); };
 };
 let verifyElf = (elf, ir, what) -> {
   let r = runArgs([verifyTool, elf, "-", ir], "verify " + what);
   if r.status != 0 { die("verify " + what, r.stderr); };
-};
-// Extension DSOs need PIC plus preserved static-string-buffer relocations.  The
-// release shared path currently loses those under -O2; retry with --debug (which
-// only skips the IR `opt` pass and still uses llc -O<opt>) when the verifier
-// rejects the release artifact.  A successful release link is never changed.
-let linkSharedChecked = (ir, out, opt, what) -> {
-  linkTo(ir, out, opt, true);
-  let first = runArgs([verifyTool, out, "-", ir], "verify " + what);
-  if first.status == 0 { return null; };
-  println("NOTE: release shared link failed static-string verification for " + what +
-          "; retrying with --debug at -O" + opt);
-  debugLink = true;
-  linkTo(ir, out, opt, true);
-  debugLink = false;
-  verifyElf(out, ir, what);
 };
 let runHost = (exe, extra) -> {
   let argv = [exe];
@@ -265,8 +243,9 @@ while n < names.length {
   if std.String.includes(ir)("define ptr @ql_alloc") { die(name + ": emitted a second runtime", ""); };
   h = 0;
   while h < 2 {
-    linkSharedChecked(base + "/" + name + ".ll", base + "/" + name + "-O" + hostOpts[h] + ".so",
-                      hostOpts[h], name + "-O" + hostOpts[h]);
+    let soOut = base + "/" + name + "-O" + hostOpts[h] + ".so";
+    linkTo(base + "/" + name + ".ll", soOut, hostOpts[h], true);
+    verifyElf(soOut, base + "/" + name + ".ll", name + "-O" + hostOpts[h]);
     h = h + 1;
   };
   n = n + 1;
@@ -347,33 +326,16 @@ while n < plugins.length {
   emit(src + "/" + plugins[n] + ".ql", "--emit-module", work + "/" + plugins[n] + ".ll");
   h = 0;
   while h < 2 {
-    linkSharedChecked(work + "/" + plugins[n] + ".ll", work + "/" + plugins[n] + "-O" + hostOpts[h] + ".so",
-                      hostOpts[h], plugins[n] + "-O" + hostOpts[h]);
+    let soOut = work + "/" + plugins[n] + "-O" + hostOpts[h] + ".so";
+    linkTo(work + "/" + plugins[n] + ".ll", soOut, hostOpts[h], true);
+    verifyElf(soOut, work + "/" + plugins[n] + ".ll", plugins[n] + "-O" + hostOpts[h]);
     h = h + 1;
   };
   n = n + 1;
 };
 println("PASS bridge: hosts linked before plugins existed");
 let bridgeExpected = readText(root + "/aot/tests/extensions/bridge_host.expected");
-// The release emitter's direct-call gate only records Identifier builtin
-// parameter annotations; a native module member annotation (p.positive) is
-// treated as unannotated, so the dispatcher check is skipped and `typed(0)`
-// wrongly yields 0.  Detect exactly that contract (27 of 28) and rerun the
-// native bridge matrix with conservative hosts; the interpreter is unaffected.
 let bridgeHostBase = work + "/bridge_host";
-let bridgeProbe = runHost(work + "/bridge_host-O2", [work + "/bridge_plugin-O2.so"]);
-if bridgeProbe.status != 0 && std.String.includes(bridgeProbe.stderr)("expected 28 extension bridge checks, got 27") {
-  println("NOTE: release bridge host skips a native module parameter-annotation check; " +
-          "recompiling bridge_host with --debug for the native matrix (links stay O0/O2)");
-  emitDebug(src + "/bridge_host.ql", work + "/bridge_host-dbg.ll");
-  h = 0;
-  while h < 2 {
-    linkTo(work + "/bridge_host-dbg.ll", work + "/bridge_host-dbg-O" + hostOpts[h], hostOpts[h], false);
-    verifyElf(work + "/bridge_host-dbg-O" + hostOpts[h], work + "/bridge_host-dbg.ll", "bridge_host-dbg-O" + hostOpts[h]);
-    h = h + 1;
-  };
-  bridgeHostBase = work + "/bridge_host-dbg";
-};
 // Derive diagnostic positions exactly like the Python point(): 1-based column of
 // the first occurrence of a token on a fixture line.
 let pluginPath = src + "/bridge_diagnostics_plugin.ql";

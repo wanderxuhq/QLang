@@ -214,7 +214,7 @@ if !skipVerify && !sharedMode && stdlibObject != "" && verifyStrings == "" && ex
 if !skipVerify && !sharedMode && stdlibObject != "" && verifyStrings == "" && !explicitStdlibIr {
   fail("stdlib object has no strings.tsv; refusing to skip library string verification (use --no-verify to override)");
 };
-if !skipVerify && !sharedMode {
+if !skipVerify {
   let checkArgs = [verifyTool, staged, if verifyStrings == "" { "-"; } else { verifyStrings; }, irPath];
   if ltoMode || relaxedVerify { checkArgs[checkArgs.length] = "--lto"; };
   let checked = std.process.run(checkArgs);

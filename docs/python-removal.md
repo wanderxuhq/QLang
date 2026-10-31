@@ -122,12 +122,13 @@ Android 上 `/tmp` 不可用。`run_link` 需要先构建 `target/tools/run_link
 2. **difftest**:291 个源中 63 个在 native-vs-interp 下不可裁决(static reject /
    TypeCheck vs UndefinedField 等),在 `aot/run_semantics_diff.ql` 的 `skipped`
    表中显式列出;Rust/V8 腿已退役。
-3. **release 直调**:`qlangc` 对非内建类型注解(`(v: p.positive)`)的直接调用会
-   跳过 `__call` 的 TypeCheck;bridge 驱动以 `--debug` 复编译 host 绕过,
-   解释器路径 28/28。待修 `aot/qlangc.ql`。
-4. **`--shared --opt 2`**:当前链接器会丢 `.strbox` 重定位,verify 拒绝、DSO 可能
-   段错误;bridge 驱动在该 DSO 校验失败时回退 `--debug`(优化级不变)。
-   待修 `aot/link.ql`。
+3. **release 直调的注解检查(已修)**:`qlangc` 只把内建 Identifier 注解登记为
+   "可证明";`(v: p.positive)` 现在记成哨兵并回落 `__call`,内联/裸 ABI 也只接受
+   字面内建 `Number` 注解。回归用例在 `aot/run_value_contracts.ql`
+   (`annotation-direct`),bridge 不再需要 `--debug` 回退。
+4. **`--shared --opt 2`(已修)**:`aot/link.ql` 现在对 `--shared` 也执行
+   静态字符串/ELF 校验;4 个扩展 × O0/O2 与 bridge 的 DSO 均在发布档通过,
+   不再需要 `--debug` 重试。
 5. **冻结数据不可在仓库内重生成**:difftest/fuzz/数值语料由一次性脚本从旧
    Python 版导出;仓库只保留数据。数学/Unicode 生成器已 QLang 化,可重生成。
 6. **Unicode 表生成头**已从 `.py` 改为 `aot/generate_unicode_tables.ql`,并重建

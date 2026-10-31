@@ -317,8 +317,8 @@ source.ql
 
 - **2026-10-31**:仓库移除全部 Python(32 个文件)。工具链、测试驱动、String/Unicode
   预言机、difftest/fuzz 语料、数学/Unicode 生成器都改为 QLang;全量基线见
-  `docs/python-removal.md`。已知缺口:冷启动、difftest 63 个隔离用例、release 直调注解、
-  `--shared --opt 2` 重定位。
+  `docs/python-removal.md`。已知缺口:冷启动、difftest 63 个隔离用例、冻结语料
+  不可在仓库内重生成。release 直调注解与 `--shared --opt 2` 已修。
 
 - **2026-10-25 更新**:新分支 `rust-error-model`(从 `5d0f4e8` 切出)开始落地 Rust 式错误模型;
   口径与切片见 **`docs/rust-error-model.md`**。它与 `unboxed-values-handoff.md` 冲突时,以新文件为准。
