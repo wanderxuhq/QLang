@@ -4,9 +4,11 @@
 //
 // 覆盖原 Python 套件:
 //   run_array_tests.py         t29 @ O0/O2 + 8 个未处理错误探针
+//   run_array_tests.py --library  stdlib/array.ql 可移植性 + t29/8 探针走 ArrayLibrary.
 //   run_object_tests.py        t28 @ O0/O2 + 8 个未处理错误探针
 //   run_call_tests.py          t27 @ O0/O2、t24 @ O0/O2、legacy runtime 拒绝、
-//                              t24 压力(j < 20000)@ O0/O2 + 入口 alloca 扫描
+//                              t24 压力(j < 20000)@ O0/O2 + 入口 alloca 扫描、
+//                              插桩 ql_alloc 计分配(1000/2000 相等,100000 走 1 MiB 栈)
 //   run_json_numeric_tests.py  30 个十进制字面量 host/native 逐字节一致
 //
 // 仓库相对路径按当前目录解析(与 aot/build.ql、aot/run_modules.ql 一样,从仓库根运行);
@@ -68,16 +70,23 @@ let showFailure = (label, run) -> {
   null;
 };
 // 对象化构建:emit 只发用户模块,链接器用标准库对象 + 静态字符串校验。
-let build = (source, binary, opt) -> {
+// `runtimeObject` 非空时替换 aot/runtime.c(分配计数腿用插桩后的 runtime)。
+let buildWith = (source, binary, opt, runtimeObject) -> {
   let emitted = std.process.run([compiler, "--emit-llvm-split", source, runtime,
                                 stdlibDir + "/symbols.tsv", stdlibDir + "/mod.ql"]);
   if emitted.status != 0 { return { ok: false, run: emitted, ir: "" }; };
   let ir = binary + ".ll";
   writeFile(ir, emitted.stdout);
-  let linked = std.process.run([linkTool, ir, "-o", binary, "--opt", num(opt),
-                                "--stdlib-object", stdlibDir + "/stdlib.o", "--root", root]);
+  let argv = [linkTool, ir, "-o", binary, "--opt", num(opt),
+              "--stdlib-object", stdlibDir + "/stdlib.o", "--root", root];
+  if runtimeObject != "" {
+    argv[argv.length] = "--runtime-object";
+    argv[argv.length] = runtimeObject;
+  };
+  let linked = std.process.run(argv);
   return { ok: linked.status == 0, run: linked, ir: ir };
 };
+let build = (source, binary, opt) -> buildWith(source, binary, opt, "");
 let runBinary = (binary, extra) -> {
   let command = [binary];
   let k = 0;
@@ -151,9 +160,13 @@ let probeText = (cases) -> {
   };
   text + "println(\"UNREACHABLE\");\n";
 };
-let probeSuite = (tag, cases) -> {
+// `prefix` 非空时前置(`import <library>;`)并把 std.Array. 改写成 ArrayLibrary.
+// —— 与 run_array_tests.py --library 的探针程序一致。
+let probeSuite = (tag, cases, prefix) -> {
   let source = base + "/" + tag + "-errors.ql";
-  writeFile(source, probeText(cases));
+  let text = probeText(cases);
+  if prefix != "" { text = prefix + std.String.replace(text)("std.Array.")("ArrayLibrary."); };
+  writeFile(source, text);
   let b0 = build(source, base + "/" + tag + "-errors-O0", 0);
   let b2 = build(source, base + "/" + tag + "-errors-O2", 2);
   record(b0.ok, tag + ":probe-build-O0");
@@ -183,8 +196,8 @@ let probeSuite = (tag, cases) -> {
   null;
 };
 let group = startGroup();
-probeSuite("array", arrayProbeCases);
-probeSuite("object", objectProbeCases);
+probeSuite("array", arrayProbeCases, "");
+probeSuite("object", objectProbeCases, "");
 endGroup(group, "unhandled errors: 8 array + 8 object @ O0/O2 (rc 1, empty stdout, TypeMismatch)");
 
 // ---- 3) JSON 十进制/f64 边界:host 与 native 逐字节一致 ------------------
@@ -325,6 +338,128 @@ if s2.ok {
   if r.status != 0 || r.stdout != t24Expected || r.stderr != "" { showFailure("stress:O2", r); };
 };
 endGroup(group, "t24 stress j<20000 @ O0/O2, stdout expected, entry-only allocas");
+
+// ---- 6) 分配抖动:插桩 ql_alloc 的 runtime.c + 常数循环 -------------------
+// 锚点先确认命中:替换静默落空会让「分配次数相等」退化成对空 stderr 的假绿。
+let countOccurrences = (text, needle) -> {
+  if needle == "" { return 0; };
+  std.String.split(text)(needle).length - 1;
+};
+let group = startGroup();
+let runtimeText = readFile("aot/runtime.c");
+let includeNeedle = "#include <stddef.h>";
+let includeReplacement = "#include <stdio.h>\n#include <stddef.h>";
+let allocNeedle = "void* ql_alloc(size_t n) {";
+let allocReplacement = "static unsigned long long allocations;\n"
+  + "__attribute__((destructor)) static void report(void) { fprintf(stderr, \"ALLOCATIONS %llu\\n\", allocations); }\n"
+  + "void* ql_alloc(size_t n) { ++allocations;";
+let includeHits = countOccurrences(runtimeText, includeNeedle);
+let allocHits = countOccurrences(runtimeText, allocNeedle);
+record(includeHits > 0, "churn:runtime-patch-stdio");
+record(allocHits > 0, "churn:runtime-patch-alloc");
+if includeHits == 0 || allocHits == 0 { assert(false, "runtime.c instrumentation anchors missing"); };
+let instrumented = base + "/count-runtime.c";
+writeFile(instrumented, std.String.replace(
+  std.String.replace(runtimeText)(includeNeedle)(includeReplacement))(allocNeedle)(allocReplacement));
+let runtimeObject = base + "/count-runtime.o";
+let cc = std.process.run(["clang", "-O2", "-c", instrumented, "-o", runtimeObject]);
+record(cc.status == 0, "churn:runtime-compile");
+if cc.status != 0 { showFailure("churn:runtime-compile", cc); };
+
+let churnSource = (n) -> "let run = (limit) -> { let i = 0; while i < limit { i = i + 1; }; i; };\n"
+  + "println(run(" + num(n) + "));\n";
+// stderr 只允许 `ALLOCATIONS <digits>\n`;合格返回数字串,不合格返回空串。
+let allocDigits = (stderr) -> {
+  let head = "ALLOCATIONS ";
+  if !startsWith(stderr, head) { return ""; };
+  if stderr.length < head.length + 2 { return ""; };
+  if std.Bytes.slice(stderr, stderr.length - 1, 1) != "\n" { return ""; };
+  let digits = std.Bytes.slice(stderr, head.length, stderr.length - head.length - 1);
+  let k = 0;
+  while k < digits.length {
+    if !contains("0123456789", std.Bytes.slice(digits, k, 1)) { return ""; };
+    k = k + 1;
+  };
+  digits;
+};
+let churnCounts = [];
+let churnValues = [1000, 2000, 100000];
+let ni = 0;
+while ni < churnValues.length {
+  let n = churnValues[ni];
+  let tag = "churn:" + num(n);
+  let source = base + "/churn-" + num(n) + ".ql";
+  writeFile(source, churnSource(n));
+  let built = buildWith(source, base + "/churn-" + num(n), 2, runtimeObject);
+  record(built.ok, tag + ":build");
+  if !built.ok { showFailure(tag + ":build", built.run); };
+  if built.ok {
+    let binary = base + "/churn-" + num(n);
+    // 100000 次循环压 1 MiB 栈:每次循环多占一帧都会溢出。
+    let r = if n == 100000 {
+      std.process.run(["sh", "-c", "ulimit -s 1024; exec " + sq(binary)]);
+    } else {
+      std.process.run([binary]);
+    };
+    record(r.status == 0 && r.stdout == num(n) + "\n", tag + ":run");
+    if r.status != 0 || r.stdout != num(n) + "\n" { showFailure(tag + ":run", r); };
+    let digits = allocDigits(r.stderr);
+    record(digits != "", tag + ":stderr");
+    if digits == "" { showFailure(tag + ":stderr", r); };
+    // 1000/2000 用等宽输出比较:循环翻倍不应新增任何堆分配。
+    if n != 100000 && digits != "" { churnCounts[churnCounts.length] = std.Number.parseFloat(digits); };
+  };
+  ni = ni + 1;
+};
+let churnEqual = churnCounts.length == 2 && churnCounts[0] == churnCounts[1];
+record(churnEqual, "churn:no-growth");
+if !churnEqual && churnCounts.length == 2 {
+  println("DETAIL churn:no-growth counts=" + num(churnCounts[0]) + "," + num(churnCounts[1]));
+};
+endGroup(group, "allocation churn: instrumented runtime.c, n=1000/2000 equal, n=100000 on 1 MiB stack");
+
+// ---- 7) 可移植 Array:显式 ArrayLibrary 模块(t29 + 错误探针)------------
+// 与 run_array_tests.py --library 一致:库源码不得触碰 runtime 叶子,
+// t29 与 8 个错误探针都改走 import 进来的 ArrayLibrary。
+let group = startGroup();
+let libraryText = readFile("stdlib/array.ql");
+let forbidden = ["ql_mem_", "readU64", "writeU64", "ql_alloc", "std.Array."];
+let fi = 0;
+while fi < forbidden.length {
+  let needle = forbidden[fi];
+  record(!contains(libraryText, needle), "library:forbidden-" + needle);
+  if contains(libraryText, needle) { println("DETAIL library:forbidden-" + needle); };
+  fi = fi + 1;
+};
+let t29Text = readFile("aot/tests/t29_arrays.ql");
+let rewritten = std.String.replace(t29Text)("std.Array.")("ArrayLibrary.");
+let pwdText = std.String.trim(std.process.run(["pwd"]).stdout);
+let libraryPath = pwdText + "/stdlib/array.ql";
+let prefix = "import " + libraryPath + ";\n";
+let portablePath = base + "/portable-arrays.ql";
+writeFile(portablePath, prefix + rewritten);
+let rewriteOk = rewritten != t29Text && !contains(rewritten, "std.Array.");
+let pathOk = endsWith(libraryPath, "stdlib/array.ql") && startsWith(prefix, "import ");
+record(rewriteOk && pathOk, "library:rewrite");
+let portableExpected = readFile("aot/tests/t29_arrays.expected");
+let p0 = build(portablePath, base + "/portable-arrays-O0", 0);
+let p2 = build(portablePath, base + "/portable-arrays-O2", 2);
+record(p0.ok, "library:build-O0");
+record(p2.ok, "library:build-O2");
+if !p0.ok { showFailure("library:build-O0", p0.run); };
+if !p2.ok { showFailure("library:build-O2", p2.run); };
+if p0.ok {
+  let r = std.process.run([base + "/portable-arrays-O0"]);
+  record(r.status == 0 && r.stdout == portableExpected && r.stderr == "", "library:O0");
+  if r.status != 0 || r.stdout != portableExpected || r.stderr != "" { showFailure("library:O0", r); };
+};
+if p2.ok {
+  let r = std.process.run([base + "/portable-arrays-O2"]);
+  record(r.status == 0 && r.stdout == portableExpected && r.stderr == "", "library:O2");
+  if r.status != 0 || r.stdout != portableExpected || r.stderr != "" { showFailure("library:O2", r); };
+};
+probeSuite("library", arrayProbeCases, prefix);
+endGroup(group, "portable Array: stdlib/array.ql free of runtime leaves, t29 + 8 errors @ O0/O2");
 
 println("QLang 值契约驱动:" + num(pass) + " 通过 / " + num(fail) + " 失败");
 if failed != "" { println("失败:" + failed); };
