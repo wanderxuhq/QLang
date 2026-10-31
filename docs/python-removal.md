@@ -132,3 +132,32 @@ Android 上 `/tmp` 不可用。`run_link` 需要先构建 `target/tools/run_link
    Python 版导出;仓库只保留数据。数学/Unicode 生成器已 QLang 化,可重生成。
 6. **Unicode 表生成头**已从 `.py` 改为 `aot/generate_unicode_tables.ql`,并重建
    `stdlib/unicode_data.ql` 与 bundle;`--check` 通过。
+
+## 5. 2026-10-31 删除后实测(同一份源码/编译器/对象)
+
+| 驱动 | 结果 |
+|---|---|
+| `run_tests` native / interpreter | 60 / 0、42 / 0 |
+| `run_selfhost`(含固定点) | 59 / 0 |
+| `run_diff` | 57 / 0 |
+| `run_compiler` | 69 / 0 |
+| `run_diagnostics` | 855 / 0 |
+| `run_modules` | 78 / 0 |
+| `run_value_contracts` | 111 / 0 |
+| `run_numeric` | 12 / 0(792 行) |
+| `run_gc` / `run_lifetime` | 5 / 0、12 / 0 |
+| `run_bundle` / `run_platform` | 23 / 0、15 / 0 |
+| `run_link` | ALL CHECKS PASS |
+| `run_string` | 26 / 0 |
+| `run_extension` | 4 / 4 组合 |
+| `run_extension_bridge` | 134 checks / 0 |
+| `run_interpreter_contracts` | 23 / 0 |
+| `run_fuzz` | 390 / 0 |
+| `run_semantics_diff` | 228 / 0,63 跳过 |
+| `run_bench` | 6 bench,insns/clang/CPU 列 |
+| `generate_math_constants --check` | 76 limbs 匹配 |
+| `generate_unicode_tables --check` | byte-identical |
+| `cargo test --offline` | 14 passed |
+
+扩展/桥接在 `target/ext-base-tmp`、`target/ext-bridge-base-tmp` 下跑
+(dlopen 允许的路径);语义差分在 63 个隔离用例之外全绿。
