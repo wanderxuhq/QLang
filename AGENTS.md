@@ -364,9 +364,10 @@ source.ql
     4 项未纳入基线;difftest 不可裁决;清理 `_b.ql`/`_df_*`/worktree/backup。
   - **L**:未验证隔离区(不许当结论用)。
 - 已知红(最后一次记录;重跑确认):`runtime_diag` 的 cause-provenance 已修(`t38:38` 转绿,2026-10-30 复核);
-  `module` 是环境缺口(需 debug 宿主;宿主跑 boot 太慢/超时);`extension` 在 HEAD 上也红。
+  `module` 需要同源解释器(stage2 + native interpreter 下 2026-10-31 实测 ALL PASS);
+  `extension` 需要 dlopen 允许的临时目录,未纳入本轮。
   `assignment`/`runtime_diag` 的测试用例漂移已在 `5d0f4e8` 修。
-  2026-10-31 审查修复后:`selfhost`/`interpreter`/`assignment`/`semantic`/`runtime_diag`/String 套件均绿;
+  2026-10-31 审查修复后:`selfhost`/`interpreter`/`assignment`/`semantic`/`runtime_diag`/`module`/debug-diff/String 套件均绿;
   解释器套件在 GC 阈值收紧前会卡 `t43`(解析极值指数分配密集),修复后 t43 ~4 min。
 
 ## 6. 工作纪律(硬规则)

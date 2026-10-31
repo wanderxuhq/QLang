@@ -3485,3 +3485,34 @@ stage2→stage3 IR 逐字节相同(1,020,735 行)。新增 `t64_array_types`(三
 **头条变化**:第二轮修复后 t20 单模块 IR **189 275** / 机器 **146 238**
 (第一轮 188 630 / 145 187;修复前 187 736 / 142 367)。+645/+1 051 来自收窄事实不再跨函数、
 `let x;` 永久保留 empty 检查:`located-error elided` 111 → 102;**正确性代价**,不是优化回退。
+
+## 124. 第三轮审查:收窄清除/floor、未初始化裸算术、参数别名污点(2026-10-31)
+
+对 §122–§123 的修复再做一轮审查,发现并修掉:
+
+- **Critical**:Assign 分支的 `typeNarrowMark(s.target.bindId, false)` 是 no-op —— Assign 的目标
+  Identifier 从不经过 `inferExpr`,bindId 未设置。守卫事实在写入后仍生效,导致下面的注解检查被省略:
+  `if !Number.check(x){...}; x = 1/z; let y: Number = x;` 修复前 native 绑定 `y` 为 Error
+  并打印其 type(rc=0),boot 是 TypeCheck(rc=1)。现在 Assign 先 `typeBindLookup` 再清除;
+  双引擎回归(循环内守卫+写入+注解)通过。
+- **High**:`typeFloorStack` off-by-one(`typePush` 之后存 `typeDepth`,但函数体表索引是 `typeDepth-1`),
+  函数体自身的收窄事实永远不可见。修正为 `typeDepth - 1`;`located-error elided` 102 → 111。
+- **High(既有,本轮暴露)**:`let x: Number;` 没有初始化器,但被当成"类型已知的稳定绑定"
+  → 解箱/raw 算术把 Uninitialized Error 的 payload 当 double(`${x+1}` native 打印 `1`,
+  boot 是 TypeCheck 链)。现在 `base` 对无初始化声明置为 prone(可能 Error):不解箱、
+  `cannotBeError` 为假、raw 路径退回装箱派发。回归:插值/闭包/比较/乘法五条双引擎一致。
+- **High**:std 污点可经「参数 → let 别名」逃逸:
+  `(p) -> { let q2 = p; q2.abs = (x) -> 99; }; f(std.Math)` native 5 / boot 99。
+  `stdContainsRef` 现在把参数名也视为可能持 std;模块参数名也在 taint 扫描前收集。
+- **Medium**:`build.ql` 曾在编译前删 `-o`,源文件/不存在路径/`-o == 源` 会毁数据。
+  现在先编译(IR 用唯一临时名),emit 成功后才删旧产物;并拒绝 `-o` 与各输入同名。
+- **Medium**:显式 `--stdlib-ir <x>.ll/.bc` 会静默跳过库字符串校验;现在向 `/dev/stderr`
+  打 warning(用户 IR 仍校验),真正缺清单仍失败。
+- **Low**:`--timing` 现在进缓存 flags(带 timing 的缓存不再被无 timing 的运行回放);
+  `run_extension` 要求宿主 exit 0;`stdlib_build` 的 `full.ll/stdlib.ll/symbols.json` 也原子写;
+  `run_module_tests` 过滤不存在的源;`smoke_status` 非法行直接失败;t14 补 `.expected`(34 行两引擎一致)。
+
+**头条**:t20 单模块 IR **188 738** / 机器 **145 279**(第二轮 189 275 / 146 238;修复前 187 736 / 142 367
+⇒ 两轮审查净增 +1 002 / +2 912,其中 floor 修正把第二轮多出的 537/959 收回)。
+验收:selfhost(59)/interpreter(41)/assignment/semantic/runtime_diag/module/debug-diff(44)/String 全绿;
+QLang run_tests 59-0、run_diff 56-0、run_selfhost 57-0;固定点逐字节相同(1 027 195 行)。
