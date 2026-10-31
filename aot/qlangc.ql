@@ -263,7 +263,12 @@ let stdContainsRef = (node) -> {
   let t = node.type;
   if isError(t) { return false; };
   if t == "Import" { return false; };
-  if t == "Identifier" { return !isError(stdTainted[node.name]) && stdTainted[node.name] == true; };
+  if t == "Identifier" {
+    // A parameter may hold a std module at run time (f(std.Math)); an alias made
+    // from it must not look like a clean local container.
+    if !isError(paramNames[node.name]) && paramNames[node.name] == true { return true; };
+    return !isError(stdTainted[node.name]) && stdTainted[node.name] == true;
+  };
   let keys = std.Object.keys(node); let i = 0;
   while i < keys.length {
     let child = node[keys[i]];
@@ -292,6 +297,33 @@ let stdTaintScan = (node) -> {
   while i < keys.length {
     let child = node[keys[i]];
     if child != null && (AnyObject.check(child) || AnyArray.check(child)) { stdTaintScan(child); };
+    i = i + 1;
+  };
+  null;
+};
+// Collect parameter names from imported-module ASTs too: a write rooted at a
+// parameter may mutate std even when a user-level let with the same name exists.
+let collectParamNames = (node) -> {
+  if node == null || isError(node) { return null; };
+  if AnyArray.check(node) {
+    let i = 0; while i < node.length { collectParamNames(node[i]); i = i + 1; };
+    return null;
+  };
+  if !AnyObject.check(node) { return null; };
+  let t = node.type;
+  if isError(t) { return null; };
+  if t == "Import" { return null; };
+  if t == "Function" && !isError(node.parameters) {
+    let pi = 0;
+    while pi < node.parameters.length {
+      if !isError(node.parameters[pi].name) { paramNames[node.parameters[pi].name] = true; };
+      pi = pi + 1;
+    };
+  };
+  let keys = std.Object.keys(node); let i = 0;
+  while i < keys.length {
+    let child = node[keys[i]];
+    if child != null && (AnyObject.check(child) || AnyArray.check(child)) { collectParamNames(child); };
     i = i + 1;
   };
   null;
@@ -3298,7 +3330,10 @@ let emitPrelude = () -> {
 // Nested scopes use ordinary shadowing, assignment and closure capture rules.
 // Imports may replace these bindings without mutating private library bindings.
 let emitModuleStd = () -> {
-  stdSlotScope = curScope;
+  // The std member cache slots live in the main module's frame. Do not let a later
+  // imported module overwrite the owner: that disabled every chain direct call /
+  // cached member access in the main program (stdchain hits=0 with any import).
+  if stdSlotScope == null { stdSlotScope = curScope; };
   let value = emitCallRegs("__fresh_std", []);
   let off = emitBindingPtr({ depth: 0, slot: curScope.slots["std"] });
   emitBindingStore(off, value, "null", "null");
@@ -3736,10 +3771,11 @@ let sortByteStrings = (xs) -> {
   };
   out;
 };
-let cacheFlagsText = (foldEnabled, staticScan) -> {
+let cacheFlagsText = (foldEnabled, staticScan, timingOn) -> {
   "flags=debug:" + (if conservativeMode { "1"; } else { "0" })
   + ",fold:" + (if foldEnabled { "1"; } else { "0" })
-  + ",scan:" + (if staticScan { "1"; } else { "0" });
+  + ",scan:" + (if staticScan { "1"; } else { "0" })
+  + ",timing:" + (if timingOn { "1"; } else { "0" });
 };
 // 一次 sha256sum 进程拿全部输入,避免每个文件一次进程启动。
 let sha256Map = (paths) -> {
@@ -3773,13 +3809,13 @@ let cachePathsOf = (entry, runtime, extras) -> {
   while i < mods.length { paths[paths.length] = mods[i]; i = i + 1; };
   sortByteStrings(paths);
 };
-let cacheHeader = (entry, runtime, extras, envName, foldEnabled, staticScan) -> {
+let cacheHeader = (entry, runtime, extras, envName, foldEnabled, staticScan, timingOn) -> {
   let paths = cachePathsOf(entry, runtime, extras);
   let shas = sha256Map(paths);
   // Never write a header with a missing hash: the Error text would be spliced into
   // the file and the cache would silently never hit again. Skip caching instead.
   if isError(shas[entry]) || isError(shas[runtime]) { return ""; };
-  let lines = ["v2", "source=" + shas[entry], "env=" + envName, "runtime=" + shas[runtime], cacheFlagsText(foldEnabled, staticScan)];
+  let lines = ["v2", "source=" + shas[entry], "env=" + envName, "runtime=" + shas[runtime], cacheFlagsText(foldEnabled, staticScan, timingOn)];
   let i = 0;
   while i < paths.length {
     // entry/runtime 已有独立行;其余(import 模块、接口文件)逐条记路径+哈希。
@@ -3823,10 +3859,10 @@ let cacheParse = (text) -> {
   };
   h;
 };
-let cacheVerify = (h, entry, runtime, envName, foldEnabled, staticScan) -> {
+let cacheVerify = (h, entry, runtime, envName, foldEnabled, staticScan, timingOn) -> {
   if h == null || h.version != "v2" { return false; };
   if h.env != envName { return false; };
-  if h.flags != cacheFlagsText(foldEnabled, staticScan) { return false; };
+  if h.flags != cacheFlagsText(foldEnabled, staticScan, timingOn) { return false; };
   // Verify against the dependency list **stored in the header**. Recomputing it from
   // moduleCache at read time cannot work: the cache is consulted before parsing, so
   // moduleCache is empty and every program with an import missed (perf bug).
@@ -3902,7 +3938,7 @@ let main = (args) -> {
     // that into a new chained Error), so guard the miss before calling.
     let stamp = null;
     if !isError(raw) { stamp = cacheParse(raw); };
-    if stamp != null && cacheVerify(stamp, args[1], args[2], cacheEnvName(args[4]), foldEnabled, staticScan) {
+    if stamp != null && cacheVerify(stamp, args[1], args[2], cacheEnvName(args[4]), foldEnabled, staticScan, timingOn) {
       // `--check` promises no output; a hit must not replay the IR to stdout.
       if !checkMode { print(stamp.body); };
       return null;
@@ -3913,7 +3949,7 @@ let main = (args) -> {
     let rawCheck = std.fs.readFileText(args[1] + ".qcheck");
     let stamp = null;
     if !isError(rawCheck) { stamp = cacheParse(rawCheck); };
-    if stamp != null && cacheVerify(stamp, args[1], args[2], cacheEnvName(args[4]), foldEnabled, staticScan) { return null; };
+    if stamp != null && cacheVerify(stamp, args[1], args[2], cacheEnvName(args[4]), foldEnabled, staticScan, timingOn) { return null; };
   };
   if args.length != 3 && !splitStdlibMode && !interfaceDump { return std.Error.raise("CompileError", "usage: qlangc --emit-llvm|--emit-module source.ql runtime.ql", null); };
   let source = args[0]; let sourcePath = args[1]; let runtimeSource = args[2];
@@ -4035,7 +4071,7 @@ let main = (args) -> {
   let scanModules = std.Object.keys(moduleCache); let sm = 0;
   while sm < scanModules.length {
     let mod = moduleCache[scanModules[sm]];
-    if !isError(mod) && !isError(mod.program) { stdTaintScan(mod.program.statements); };
+    if !isError(mod) && !isError(mod.program) { collectParamNames(mod.program.statements); stdTaintScan(mod.program.statements); };
     sm = sm + 1;
   };
   stdWriteScan(userProgram.statements);
@@ -4404,14 +4440,14 @@ let main = (args) -> {
   };
   flushLines();
   if irCacheOn && splitStdlibMode && args[4] != "-" && irCacheBody.length > 0 {
-    let header = cacheHeader(args[1], args[2], cacheExtras(), cacheEnvName(args[4]), foldEnabled, staticScan);
+    let header = cacheHeader(args[1], args[2], cacheExtras(), cacheEnvName(args[4]), foldEnabled, staticScan, timingOn);
     if header != "" { std.fs.writeText(args[1] + ".qir", header + std.String.join(irCacheBody)("\n") + "\n"); };
   };
   // --check 的产物:一份"结论"sidecar(只缓存 ok;有错不写,错误每次都要重报)。
   // env = stdlib 目录名 —— 它本身就是 (编译器字节 + runtime + bundle) 的哈希,和库缓存同源,
   // 因此换编译器/换库都会自动失效。
   if checkMode && args.length == 5 {
-    let header = cacheHeader(args[1], args[2], cacheExtras(), cacheEnvName(args[4]), foldEnabled, staticScan);
+    let header = cacheHeader(args[1], args[2], cacheExtras(), cacheEnvName(args[4]), foldEnabled, staticScan, timingOn);
     if header != "" { std.fs.writeText(args[1] + ".qcheck", header + "verdict=ok\n"); };
   };
 };

@@ -958,7 +958,9 @@ let inferExpr = (node) -> {
     typePush();
     // Facts from enclosing scopes must not flow into a function body: the body
     // may run after later writes. Only facts established inside it are visible.
-    typeFloorStack[typeFloorDepth] = typeDepth;
+    // The function body's own fact table is at index typeDepth - 1 (typePush
+    // already advanced typeDepth); the floor must include that table.
+    typeFloorStack[typeFloorDepth] = typeDepth - 1;
     typeFloorDepth = typeFloorDepth + 1;
     let p = 0;
     while p < node.parameters.length {
@@ -1306,7 +1308,12 @@ let inferStmts = (stmts) -> {
       if typeCollectWrites {
         bindId = typeBindCount[typeProgram];
         typeBindCount[typeProgram] = bindId + 1;
-        let st = { base: isError(typeScalar[bindingType]), prone: false, busy: false, done: false, writes: [], unk: (value == "" || isError(value)), decl: s };
+        // A declaration without an initializer can be read (via interpolation,
+        // closures, aliases) before its first store. Treat it as possibly-Error
+        // so reads never enter raw arithmetic / unboxing; otherwise the
+        // uninitialized Error's payload is bitcast to a double (native printed 1
+        // where boot reported Uninitialized).
+        let st = { base: (isError(typeScalar[bindingType]) || s.value == null), prone: false, busy: false, done: false, writes: [], unk: (value == "" || isError(value)), decl: s };
         if s.value != null { st.writes[0] = s.value; };
         typeBindTable[typeProgram][bindId] = st;
       } else {
@@ -1377,8 +1384,11 @@ let inferStmts = (stmts) -> {
         // 但不一致(此时运行期必须报 TypeCheck),都保留检查。
         if value == "" || isError(value) { typeUnknownWrites[typeProgram][s.target.name] = true; }
         else if declared != "" && value != declared { typeUnknownWrites[typeProgram][s.target.name] = true; };
-        // 写入作废该绑定的收窄事实 —— 按绑定 id 清,任意深度都生效。
-        typeNarrowMark(s.target.bindId, false);
+        // 写入作废该绑定的收窄事实 —— 按绑定 id 清,任意深度都生效。Assign 的目标
+        // Identifier 不经过 inferExpr,它的 bindId 必须在这里补上(否则清除是 no-op,
+        // 守卫事实会在写入后继续生效,注解检查被错误省略)。
+        s.target.bindId = targetBind;
+        typeNarrowMark(targetBind, false);
         // 写入目标声明的内建类型(供发射器判定重检查是否为死代码)。
         s.declaredType = if isError(typeBuiltins[declared]) { ""; } else { declared; };
         // 有注解的绑定写入时会重新检查,所以它保持自己的类型;推导出来的类型一旦
