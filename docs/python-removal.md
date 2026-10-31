@@ -144,7 +144,7 @@ Android 上 `/tmp` 不可用。`run_link` 需要先构建 `target/tools/run_link
 | `run_compiler` | 69 / 0 |
 | `run_diagnostics` | 855 / 0 |
 | `run_modules` | 78 / 0 |
-| `run_value_contracts` | 111 / 0 |
+| `run_value_contracts` | 114 / 0 |
 | `run_numeric` | 12 / 0(792 行) |
 | `run_gc` / `run_lifetime` | 5 / 0、12 / 0 |
 | `run_bundle` / `run_platform` | 23 / 0、15 / 0 |
