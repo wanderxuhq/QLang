@@ -40,6 +40,12 @@ while ai < args.length {
   ai = ai + 1;
 };
 if source == "" || output == "" { fail("usage: build <source> -o <out> [--compiler path] [--stdlib-object obj]"); };
+// Removing the output before compiling must never delete an input.
+if output == source { fail("output must differ from the source file"); };
+if stdlibObject != "" && output == stdlibObject { fail("output must differ from --stdlib-object"); };
+if symbols != "" && output == symbols { fail("output must differ from --symbols"); };
+if interface != "" && output == interface { fail("output must differ from --interface"); };
+if stdlibStrings != "" && output == stdlibStrings { fail("output must differ from --stdlib-strings"); };
 
 // 对象化构建:接口/符号/字符串都从对象旁边取,不要往 argv 里塞空串
 // (空参数以前让 ql_spawn 直接 -1001,编译器根本没启动,只留下一条空诊断)。
@@ -49,9 +55,6 @@ if stdlibObject != "" {
   if interface == "" { interface = dir + "/mod.ql"; };
   if stdlibStrings == "" { stdlibStrings = dir + "/strings.tsv"; };
 };
-
-// 0) 先删旧产物:任一步失败都不能让上一次的二进制留在 -o 位置冒充成功。
-std.fs.remove(output);
 
 // 1) 编译。
 let emitArgs = [];
@@ -64,11 +67,15 @@ if stdlibObject != "" {
 let emitted = std.process.run(emitArgs);
 if emitted.status != 0 { fail("emit failed for " + source + ":\n" + emitted.stderr); };
 
-let irPath = output + ".ir.ll";
+// Unique IR path: a fixed `output + ".ir.ll"` would clobber (and then delete) a
+// user file with that name.
+let irPath = output + ".ir.ll." + std.Number.toString(std.Math.random());
 let written = std.fs.writeText(irPath, emitted.stdout);
 if isError(written) { fail("cannot write " + irPath); };
 
-// 2) 链接(+ 校验),由 QLang 链接器完成。
+// 2) 链接(+ 校验),由 QLang 链接器完成。编译成功后才删旧产物:链接失败不能让
+//    上一次的二进制留在 -o 位置冒充成功;编译/读源失败则保留旧产物。
+std.fs.remove(output);
 let linkArgs = ["target/tools/link", irPath, "-o", output];
 if stdlibObject != "" { linkArgs[linkArgs.length] = "--stdlib-object"; linkArgs[linkArgs.length] = stdlibObject; };
 if stdlibStrings != "" { linkArgs[linkArgs.length] = "--stdlib-ir"; linkArgs[linkArgs.length] = stdlibStrings; };

@@ -193,7 +193,7 @@ std.fs.writeText(emptyPath, "");
 let membersPath = outDir + "/members.txt";
 let emitted = std.process.run([compiler, "--emit-llvm", "--members-out", membersPath, emptyPath, runtimePath]);
 if emitted.status != 0 { fail("emit failed:\n" + emitted.stderr); };
-let wrote = std.fs.writeText(fullPath, emitted.stdout);
+let wrote = writeAtomic(fullPath, emitted.stdout);
 if isError(wrote) { fail("cannot write " + fullPath); };
 
 let parsed = parseModule(emitted.stdout);
@@ -268,7 +268,8 @@ while fci < functions.length { bodyChunks[bodyChunks.length] = functions[fci].bo
 let gci = 0;
 while gci < globals.length { bodyChunks[bodyChunks.length] = globals[gci]; gci = gci + 1; };
 stdlibText = stdlibText + std.String.join(bodyChunks)("\n") + "\n";
-std.fs.writeText(stdlibPath, stdlibText);
+let w6 = writeAtomic(stdlibPath, stdlibText);
+if isError(w6) { fail("cannot write stdlib.ll"); };
 
 // 6) symbols.tsv / strings.tsv
 let symbolLines = [];
@@ -354,7 +355,8 @@ while jg < globals.length {
 };
 jsonChunks[jsonChunks.length] = " }";
 jsonChunks[jsonChunks.length] = "}";
-std.fs.writeText(outDir + "/symbols.json", std.String.join(jsonChunks)("\n") + "\n");
+let w5 = writeAtomic(outDir + "/symbols.json", std.String.join(jsonChunks)("\n") + "\n");
+if isError(w5) { fail("cannot write symbols.json"); };
 
 let stringLines = [];
 let slines = std.String.split(stdlibText)("\n");

@@ -30,7 +30,7 @@ while ai < args.length {
   else if arg == "--runtime-object" { ai = ai + 1; runtimeObject = args[ai]; }
   else if arg == "--root" { ai = ai + 1; root = args[ai]; if !endsWith(root, "/") { root = root + "/"; }; }
   else if arg == "--verify" { ai = ai + 1; verifyTool = args[ai]; }
-  else if arg == "--stdlib-ir" { ai = ai + 1; stdlibIr = args[ai]; }   // 可以是 IR,也可以是对象旁的 strings.tsv
+  else if arg == "--stdlib-ir" { ai = ai + 1; stdlibIr = args[ai]; }   // 优先 strings.tsv;IR/bitcode 只用于用户 IR 校验
   else if arg == "--no-verify" { skipVerify = true; }
   else if arg == "--opt" { ai = ai + 1; optLevel = args[ai]; }
   else if arg == "--shared" { sharedMode = true; }
@@ -49,7 +49,7 @@ let sqPath = (v) -> "'" + std.String.replace(v)("'")("'\\''") + "'";
 let runtimeContentHash = (path, cfgPath) -> {
   // sha256(runtime.c + toolchain cfg): content and codegen template both invalidate.
   let r = std.process.run(["sh", "-c", "cat " + sqPath(path) + " " + sqPath(cfgPath) + " | sha256sum"]);
-  if r.status != 0 { return "0"; };
+  if r.status != 0 { return std.Number.toString(std.Math.random()); };
   let hex = std.String.split(r.stdout)(" ");
   if hex.length < 1 { return "0"; };
   std.Bytes.slice(hex[0], 0, 16);
@@ -182,6 +182,11 @@ if endsWith(verifyStrings, ".ll") || endsWith(verifyStrings, ".bc") { verifyStri
 // An explicit --stdlib-ir that is IR/bitcode cannot serve as the TSV string list;
 // verify still checks the user IR, so do not hard-fail in that case. A bare
 // object with no list at all is the silent-skip case and still fails.
+if !skipVerify && !sharedMode && stdlibObject != "" && verifyStrings == "" && explicitStdlibIr {
+  // Explicit IR/bitcode cannot serve as the TSV list; user IR is still verified.
+  // Warn (best effort) instead of silently claiming library strings were checked.
+  std.fs.writeText("/dev/stderr", "warning: --stdlib-ir is IR/bitcode; library string verification skipped\n");
+};
 if !skipVerify && !sharedMode && stdlibObject != "" && verifyStrings == "" && !explicitStdlibIr {
   fail("stdlib object has no strings.tsv; refusing to skip library string verification (use --no-verify to override)");
 };

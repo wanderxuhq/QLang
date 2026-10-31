@@ -145,7 +145,8 @@ __attribute__((noinline)) static void collect_heap(void) {
   /* Collect after allocating roughly the live set again, not half of it: GC cost
    * is dominated by scanning live data, and the interpreter's live set (bundle +
    * Unicode tables) makes frequent small-heap collections dominate run time.
-   * Cap the threshold so peak heap stays bounded (~1.5x live) on tight devices. */
+   * Cap the threshold: with live < 64MB the peak is about 2x live; above that it
+   * is live + 64MB, which keeps tight devices bounded. */
   collection_threshold = live_bytes;
   if (collection_threshold < MIN_COLLECTION) collection_threshold = MIN_COLLECTION;
   if (collection_threshold > MAX_COLLECTION) collection_threshold = MAX_COLLECTION;

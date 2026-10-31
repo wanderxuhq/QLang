@@ -40,6 +40,7 @@ def interpreter():
     # boot leg into a mixed-source baseline (AGENTS trap #3).
     sources = [ROOT / 'aot/runtime.ql', ROOT / 'aot/runtime.c', ROOT / 'aot/value_abi.ql', COMPILER]
     sources += sorted((ROOT / 'bootstrapped').glob('*.ql'))
+    sources = [src for src in sources if src.exists()]
     stale = path.exists() and any(src.stat().st_mtime > path.stat().st_mtime for src in sources)
     if not path.exists() or stale:
         path.parent.mkdir(parents=True, exist_ok=True)

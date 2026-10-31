@@ -39,7 +39,10 @@ if !isError(smokeText) {
   while si < rows.length {
     if rows[si] != "" {
       let cells = std.String.split(rows[si])("\t");
-      if cells.length >= 2 { smokeStatus[cells[0]] = std.Number.parseFloat(cells[1]); };
+      if cells.length != 2 { assert(false, "smoke_status: bad line: " + rows[si]); 1; };
+      let st = std.Number.parseFloat(cells[1]);
+      if isError(st) || (st != 0 && st != 1) { assert(false, "smoke_status: bad status for " + cells[0]); 1; };
+      smokeStatus[cells[0]] = st;
     };
     si = si + 1;
   };

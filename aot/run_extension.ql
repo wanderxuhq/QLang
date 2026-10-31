@@ -88,7 +88,7 @@ while r < 2 {
   let paths = ""; let spi = 0;
   while spi < soPaths.length { paths = paths + (if spi == 0 { ""; } else { " "; }) + sq(soPaths[spi]); spi = spi + 1; };
   let run = sh(sq(work + "/host-O" + opt) + " " + paths + " 2>/dev/null");
-  if run.stdout == expected { ok = ok + 1; println("PASS 宿主 O" + opt + ": 28 契约"); }
+  if run.status == 0 && run.stdout == expected { ok = ok + 1; println("PASS 宿主 O" + opt + ": 28 契约"); }
   else { bad = bad + 1; println("FAIL 宿主 O" + opt + " 输出不一致"); };
   r = r + 1;
 };
