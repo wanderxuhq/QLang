@@ -39,3 +39,4 @@ t45_native_function_members
 t46_number_literal_keys
 t47_finite_number_rendering
 t64_array_types
+t65_fs_contracts

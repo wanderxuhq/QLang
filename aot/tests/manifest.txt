@@ -57,3 +57,4 @@ t7_factorial
 t7_fib
 t63_async_process
 t64_array_types
+t65_fs_contracts

@@ -1,0 +1,12 @@
+empty: ""
+nul: "A\u0000Z"
+missing: IOError
+directory: IOError
+canonical-directory: true
+symlink-canonical: true
+symlink-read: true
+null-read: TypeMismatch
+number-read: TypeMismatch
+null-canonical: TypeMismatch
+nul-path-read: IOError
+nul-path-canonical: IOError
