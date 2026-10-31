@@ -43,6 +43,26 @@ while ai < args.length {
 if verifyTool == "" { verifyTool = root + "target/tools/verify"; };
 if irPath == "" || output == "" { fail("usage: link <ir> -o <out> [--stdlib-object <obj>] [--runtime-object <obj>]"); };
 
+// 单模块 IR 自带 runtime/stdlib 定义;再叠 --stdlib-object 就是重复符号。
+// opt/LTO 可能把重复定义折叠掉而不报错,所以必须在链接前按 IR 显式拒绝。
+if stdlibObject != "" {
+  let irText = std.fs.readFileText(irPath);
+  if isError(irText) { fail("cannot read IR " + irPath); };
+  let lines = std.String.split(irText)("\n");
+  let li = 0; let dup = "";
+  while li < lines.length && dup == "" {
+    let line = lines[li];
+    if startsWith(line, "define ")
+       && (std.String.includes(line)("@ql_alloc(") || std.String.includes(line)("@__stdlib_init(")) {
+      dup = line;
+    };
+    li = li + 1;
+  };
+  if dup != "" {
+    fail("IR still defines runtime/stdlib symbols; emit with --emit-llvm-split or drop --stdlib-object:\n" + dup);
+  };
+};
+
 // runtime.c → runtime.o。缓存键 = 平台 + 优化级 + 文件内容哈希(改 runtime.c 自动失效);
 // 用 Bytes.read 读 ELF 判存在(按文本读必然 IOError,会导致每次链接都重编)。
 let sqPath = (v) -> "'" + std.String.replace(v)("'")("'\\''") + "'";
@@ -173,6 +193,7 @@ let dirOf = (path) -> {
 };
 let explicitStdlibIr = stdlibIr != "";
 let verifyStrings = stdlibIr;
+let relaxedVerify = false;
 if verifyStrings == "" && stdlibObject != "" {
   let candidate = dirOf(stdlibObject) + "/strings.tsv";
   let probe = std.Bytes.read(candidate);
@@ -185,6 +206,9 @@ if endsWith(verifyStrings, ".ll") || endsWith(verifyStrings, ".bc") { verifyStri
 if !skipVerify && !sharedMode && stdlibObject != "" && verifyStrings == "" && explicitStdlibIr {
   // Explicit IR/bitcode cannot serve as the TSV list; user IR is still verified.
   // Warn (best effort) instead of silently claiming library strings were checked.
+  // The library's extra .strbox symbols cannot be attributed without its list, so
+  // the verifier's "extra symbol" gate has to be relaxed in exactly this case.
+  relaxedVerify = true;
   std.fs.writeText("/dev/stderr", "warning: --stdlib-ir is IR/bitcode; library string verification skipped\n");
 };
 if !skipVerify && !sharedMode && stdlibObject != "" && verifyStrings == "" && !explicitStdlibIr {
@@ -192,7 +216,7 @@ if !skipVerify && !sharedMode && stdlibObject != "" && verifyStrings == "" && !e
 };
 if !skipVerify && !sharedMode {
   let checkArgs = [verifyTool, staged, if verifyStrings == "" { "-"; } else { verifyStrings; }, irPath];
-  if ltoMode { checkArgs[checkArgs.length] = "--lto"; };
+  if ltoMode || relaxedVerify { checkArgs[checkArgs.length] = "--lto"; };
   let checked = std.process.run(checkArgs);
   if checked.status != 0 {
     clean([bitcode, object, staged]);
