@@ -461,6 +461,29 @@ if p2.ok {
 probeSuite("library", arrayProbeCases, prefix);
 endGroup(group, "portable Array: stdlib/array.ql free of runtime leaves, t29 + 8 errors @ O0/O2");
 
+// 非内建注解(`T` / `p.positive`)的直调必须回落 __call:否则 `typed(0)` 跳过
+// TypeCheck,`typed(0).type` 变成 UndefinedField,整个 check 调用被 Error 实参
+// 拒绝,计数悄悄少一项。这里用 count 把"调用是否真的发生"钉住。
+let annSource = base + "/annotation-direct.ql";
+writeFile(annSource, "let count = 0;\n"
+  + "let check = (ok, label) -> { count = count + 1; println(label); };\n"
+  + "let p = {positive: std.Type.make((v) -> Number.check(v) && v > 0)};\n"
+  + "let typed = (v: p.positive) -> v;\n"
+  + "check(typed(5) == 5 && typed(0).type == \"TypeCheck\", \"annotation\");\n"
+  + "println(\"count=\" + std.String.toString(count));\n");
+let annExpected = "annotation\ncount=1\n";
+let a0 = build(annSource, base + "/annotation-direct-O0", 0);
+let a2 = build(annSource, base + "/annotation-direct-O2", 2);
+record(a0.ok && a2.ok, "annotation-direct:build");
+if a0.ok {
+  let r = std.process.run([base + "/annotation-direct-O0"]);
+  record(r.status == 0 && r.stdout == annExpected && r.stderr == "", "annotation-direct:O0");
+};
+if a2.ok {
+  let r = std.process.run([base + "/annotation-direct-O2"]);
+  record(r.status == 0 && r.stdout == annExpected && r.stderr == "", "annotation-direct:O2");
+};
+
 println("QLang 值契约驱动:" + num(pass) + " 通过 / " + num(fail) + " 失败");
 if failed != "" { println("失败:" + failed); };
 if fail > 0 { assert(false, "value contracts failed"); 1; };

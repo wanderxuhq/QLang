@@ -1074,6 +1074,10 @@ let inferExpr = (node) -> {
     let rpi = 0;
     while rpi < node.parameters.length {
       if isError(node.parameters[rpi].unboxType) || node.parameters[rpi].unboxType != "Number" { rawAllParams = false; };
+      // 裸 ABI 把参数检查静态证明为真,前提是注解就是字面内建 `Number`。
+      // `(v: T)` / `(v: p.positive)` 即使推成 Number 也必须走 __call 的动态检查。
+      let ann = node.parameters[rpi].annotation;
+      if ann != null && (isError(ann) || isError(ann.type) || ann.type != "Identifier" || ann.name != "Number") { rawAllParams = false; };
       rpi = rpi + 1;
     };
     node.rawAbiAll = rawAllParams;

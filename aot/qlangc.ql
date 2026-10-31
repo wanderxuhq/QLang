@@ -34,6 +34,27 @@ let markModuleBindingsActive = (stmts) -> {
   };
   null;
 };
+// 形参注解在直调点要能证明「分派器那次检查必然通过」:只有内建类型名可以。
+// 其余注解表达式(如 `(v: p.positive)`)记成哨兵,调用点看到非空但不可能相等的
+// 名字就回落 __call —— 语义上绝不能把「有注解」当成「无注解」。
+let directAnnotationSlots = (params) -> {
+  let anns = [];
+  let i = 0;
+  while i < params.length {
+    let ann = params[i].annotation;
+    let nm = "";
+    if ann != null && !isError(ann) {
+      if !isError(ann.type) && ann.type == "Identifier" && !isError(typeBuiltins[ann.name]) {
+        nm = ann.name;
+      } else {
+        nm = "@annotated";
+      };
+    };
+    anns[anns.length] = nm;
+    i = i + 1;
+  };
+  anns;
+};
 // 把「名字 → 预编译对象里的符号」登记成直调目标:与单模块模式下 emitLetStmt 做的事一致
 // (只不过那些函数体根本不会被发射)。
 let registerStdlibSymbols = (stmts) -> {
@@ -46,7 +67,9 @@ let registerStdlibSymbols = (stmts) -> {
       if !isError(sym) && sym != "" {
         runtimeFnIr[st.name] = sym;
         if isError(curScope.directFns) { curScope.directFns = {}; };
-        curScope.directFns[st.name] = { ir: sym, arity: st.value.parameters.length, fast: fastArityBySymbol[sym] };
+        curScope.directFns[st.name] = { ir: sym, arity: st.value.parameters.length,
+                                        fast: fastArityBySymbol[sym],
+                                        anns: directAnnotationSlots(st.value.parameters) };
       };
     };
     i = i + 1;
@@ -1502,6 +1525,10 @@ let collectInlineCandidates = (node, refs, candidates) -> {
         while cok && p < params.length {
           if isError(params[p].unboxType) || params[p].unboxType != "Number" { cok = false; };
           if isError(params[p].bindId) || params[p].bindId < 0 { cok = false; };
+          // 内联参数是裸 double,不经过注解检查。只有字面内建 `Number` 才能证明
+          // 检查必然通过;`T`/`p.positive` 这类动态类型名不能内联,否则会跳过 TypeCheck。
+          let ann = params[p].annotation;
+          if ann != null && (isError(ann) || isError(ann.type) || ann.type != "Identifier" || ann.name != "Number") { cok = false; };
           p = p + 1;
         };
         let call = r.call;
@@ -1928,16 +1955,7 @@ let emitLetStmt = (node) -> {
         // 装箱直调不需要 leaf(那是 raw ABI 的判据)。形参注解不再一票否决:
         // 每个带注解的形参记下注解名,调用点只有当实参静态类型恰好等于它
         // (分派器那次检查必然通过)时才直调,否则回落 __call —— 语义不变。
-        let anns = [];
-        let pi = 0;
-        while pi < node.value.parameters.length {
-          let ann = node.value.parameters[pi].annotation;
-          let nm = "";
-          if ann != null && !isError(ann) && !isError(ann.type) && ann.type == "Identifier"
-             && !isError(typeBuiltins[ann.name]) { nm = ann.name; };
-          anns[anns.length] = nm;
-          pi = pi + 1;
-        };
+        let anns = directAnnotationSlots(node.value.parameters);
         curScope.directFns[node.name] = { ir: node.value.emittedIr, arity: node.value.parameters.length,
                                           fast: node.value.fastArity, anns: anns };
       };
