@@ -1,17 +1,20 @@
 # LLVM AOT backend
 
+> **2026-10-31: the repository no longer contains Python.** Every `python3` /
+> `*.py` command below is historical. Current build/test commands are the QLang
+> drivers listed in [`docs/python-removal.md`](../docs/python-removal.md) §3.
+
 Run commands from the repository root. The current native leaf runtime targets
-AArch64 Linux/Android and needs `clang` with `lld`. The checked native build
-commands also use Python 3 as a build utility.
+AArch64 Linux/Android and needs `clang` with `lld`; the build path is QLang +
+shell only.
 
 ```sh
-cargo build --release --offline
-./target/release/qlang --compile aot/tests/t10_control.ql -o /tmp/control
+aot/bootstrap.sh --self --compiler target/selfhost/stage2
+S=$(dirname "$(target/tools/stdlib --compiler target/selfhost/stage2 | tail -1)")
+target/tools/build aot/tests/t10_control.ql -o /tmp/control --stdlib-object "$S/stdlib.o"
 /tmp/control
-QLANG=./target/release/qlang bash aot/run_v1_tests.sh
-QLANG=./target/release/qlang QLANG_TEST_JOBS=3 python3 difftest.py
-QLANG=./target/release/qlang python3 aot/run_json_numeric_tests.py
-QLANG=./target/release/qlang QLANG_TEST_JOBS=3 python3 aot/run_module_tests.py
+target/tools/build aot/run_tests.ql -o /tmp/run_tests --stdlib-object "$S/stdlib.o"
+/tmp/run_tests "$S"
 cargo test --offline
 ```
 

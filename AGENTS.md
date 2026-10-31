@@ -37,11 +37,11 @@
 | `demo/type_gymnastics.ql` | 419 条类型系统断言;两引擎必须输出一致。 |
 | `aot/tests/` | 原生测试用例(`t*.ql` + `.expected`)、模块/扩展/诊断子目录。 |
 | `bootstrapped/tests/` | 前端/AST/源码位置/诊断测试用例。 |
-| `aot/run_*.py`, `aot/run_v1_tests.sh` | 原生/自举/诊断/模块/赋值/链接等测试驱动。 |
-| `stdlib/run_string_tests.py` | String 专用测试套件 + 独立 Unicode 预言机。 |
-| `difftest.py`, `fuzzexpr.py` | 三方差分与随机表达式模糊测试(本机 difftest 不可裁决,见 §2.7)。 |
+| `aot/run_*.ql`, `aot/run_v1_tests.sh` | 原生/自举/诊断/模块/赋值/链接/扩展/基准等测试驱动(全部 QLang)。 |
+| `aot/tests/data/` | 冻结语料:difftest 291 源、fuzz 390 例、数值 792 行。 |
+| `aot/unicode_oracle.ql` | 独立 UCD Unicode 参照(全平面 simple/full casing、Final_Sigma、trim)。 |
 | `src/` | Rust 保留实现与 bootstrap CLI;`tests/*.rs` 是 Rust 宿主测试。 |
-| `docs/` | 交接、证据、路线图、语言契约。入口见 §8。 |
+| `docs/` | 交接、证据、路线图、语言契约。入口见 §8;Python 移除记录见 `docs/python-removal.md`。 |
 
 ## 2. 构建 / 运行 / 验收
 
@@ -54,19 +54,28 @@ cargo build --release --offline
 ```
 
 - `target/{debug,release}/qlang bootstrapped/run_file.ql ...` **已知会挂起**(2026-10-09 起,
-  见 `docs/retained-rust-issues.md`)。不要拿它跑 boot 侧验收,也不要指望 `difftest.py` 的 boot 腿。
-- Rust `--compile` 不导出扩展宿主符号;扩展必须走 QLang 编译器 + `aot/native_link.py`。
+  见 `docs/retained-rust-issues.md`)。不要拿它跑 boot 侧验收;boot 腿用 native 解释器。
+- Rust `--compile` 不导出扩展宿主符号;扩展必须走 QLang 编译器 + `aot/link.ql`。
 
 ### 2.2 Native 编译器(发布路径)
 
 ```sh
-QLANG=./target/release/qlang python3 aot/run_selfhost_tests.py --self --output-dir target/selfhost
-# 产出 target/selfhost/stage2;stage2/stage3 的 IR 必须逐字节相同
+# 已有 stage2 时(正常路径):重建 4 个工具,再构建标准库对象
+aot/bootstrap.sh --self --compiler target/selfhost/stage2
+target/tools/stdlib --compiler target/selfhost/stage2     # -> target/stdlib/<key>/
+S=target/stdlib/<key>
 
-target/selfhost/stage2 --emit-llvm prog.ql aot/runtime.ql > /tmp/p.ll
-python3 aot/native_link.py /tmp/p.ll -o /tmp/p
+# 一条命令构建 + 链接 + 校验
+target/tools/build prog.ql -o /tmp/p --stdlib-object "$S/stdlib.o"
 /tmp/p
+
+# 自举固定点(57 用例 + stage2/stage3 IR 逐字节 + 新 stage2 跑 t16)
+target/tools/build aot/run_selfhost.ql -o /tmp/run_selfhost --stdlib-object "$S/stdlib.o"
+/tmp/run_selfhost "$S" --compiler target/selfhost/stage2 --jobs 6
 ```
+
+- 冷启动仍需要一份既有的 `target/selfhost/stage2`;Python 已删除,全新 clone
+  需外部提供 stage2(或先修 Rust 宿主的行首 `&&` 解析)。见 `docs/python-removal.md`。
 
 - `--emit-module` 用于单独编译的 native 扩展。
 - **库只编一次(2026-10-29 起的默认快路径)**:
@@ -80,18 +89,17 @@ python3 aot/native_link.py /tmp/p.ll -o /tmp/p
   `--check` 只报诊断、不产出(走完整路径但 `emitLine` 短路,诊断与真编译一致);成功时写
   `<src>.qcheck`(v2:入口 + runtime + 每个 import 模块 + symbols/mod + 选项),再次 check 命中即返回。
   t30:build 4575ms / check 993ms / 命中 176ms。见 probes §106。
-  **两档(debug / release)**:两档语义一致、产物只差优化(`run_debug_diff_tests.py` 是常规门)。
+  **两档(debug / release)**:两档语义一致、产物只差优化(`aot/run_diff.ql` 是常规门)。
   `--debug` 给编译器时走**保守发射** —— 不直调/不内联/不 raw ABI、
   不 unbox 裸槽、不省略"可证不会失败"的检查、不删死函数,所有值走通用路径(闭包/`__call`);
   给 `tools/link` 时跳过 `opt`、让 `llc` 按 `--opt`(默认 2)直接吃 IR。两档**分析照跑**,诊断必须一致;
   release 默认且产物不变。**不做编译期删除**(作者决定,理由与尝试记录见 probes §97–§101)。
-  差分测试套件:`python3 aot/run_debug_diff_tests.py --compiler <c>`
-  (判据是两档输出逐字节相同)。测量见 probes §95/§96。
+  差分测试套件:`aot/run_diff.ql`(判据是两档输出逐字节相同)。测量见 probes §95/§96。
 - **快路径(2026-10 起)**:标准库可以只编一次再链接。
-  `aot/stdlib_split.py <compiler>` 产出 `target/stdlib/<hash>/{stdlib.o,symbols.tsv,mod.ql,interface.txt}`;
+  `target/tools/stdlib --compiler <c>` 产出 `target/stdlib/<hash>/{stdlib.o,symbols.tsv,mod.ql,interface.txt}`;
   `stage2 --emit-llvm-split <源码> <runtime> <symbols.tsv> <mod.ql>` 只发用户模块
   (第 5 个参数按内容分派:JSON 对象字面量走 mod.ql,行式文本走旧路径;传 `-` 则回落到
-  「从源码分析」的对照路径);`native_link.py --stdlib-object`
+  「从源码分析」的对照路径);`target/tools/link --stdlib-object`
   或环境变量 `QLANG_STDLIB_OBJECT` 链接对象。单测试用例构建 ~22s → ~1.7s。
   两套主测试会自动构建并启用它。测量见 `docs/unboxed-values-probes.md` §22-§29。
 - **并行子进程**:`std.process.run(args)` 同步;`std.process.spawn(args)` → 句柄
@@ -101,21 +109,20 @@ python3 aot/native_link.py /tmp/p.ll -o /tmp/p
   `run_extension <tmp-dir> --root <repo>`,先编宿主、再编 4 个 `.so`(`--shared`)与 3 个负例,
   删源码后跑宿主比对 `.expected`(28 契约)。`tmp-dir` 必须在 dlopen 允许的路径下。
 - **不依赖 Python 的测试驱动**:`aot/run_tests.ql`(QLang)——
-  `run_tests <stdlib-dir>` 跑原生用例(按 `aot/tests/manifest.txt`,59 个);
-  `run_tests <stdlib-dir> --interpreter` 跑解释器用例(按 `aot/tests/interpreter.txt`,41 个,
+  `run_tests <stdlib-dir>` 跑原生用例(按 `aot/tests/manifest.txt`,60 个);
+  `run_tests <stdlib-dir> --interpreter` 跑解释器用例(按 `aot/tests/interpreter.txt`,42 个,
   缺解释器时会自己编)。`t37_extensions` 不在此列(要现建 `.so`,归 extension 测试)。
   构建/链接本身也早就有 QLang 版:`aot/build.ql`。清单是显式文件(QLang 没有目录列举原语),
   加用例时要同时加一行。
 - **自举测试也可以 QLang 跑**:`aot/run_selfhost.ql` —— `run_selfhost <stdlib-dir> [--jobs N]`,
-  并行跑 `aot/tests/split.txt`(56 个)并验证 stage2/stage3 的 IR 逐字节相同;
+  并行跑 `aot/tests/split.txt`(57 个)并验证 stage2/stage3 的 IR 逐字节相同;
   `--jobs 6` 约 8 分钟。新增宿主叶子后必须先重建标准库对象,否则新 API 在旧对象里不存在。
 - **基准也可以 QLang 跑**:`aot/run_bench.ql` —— `run_bench <stdlib-dir> [--runs N]`,
   按 `aot/bench/benches.txt` 测单模块/标准库对象两档的构建与运行耗时并比对输出
   (计时靠 `date +%s%N`;本机 `/proc/uptime` 冻结、`/proc/self/stat` 只算本进程 CPU)。
 - **差分测试也可以 QLang 跑**:`aot/run_diff.ql` —— `run_diff <stdlib-dir> [--jobs N]`,
-  每个用例两档各编一次并比对输出,`--jobs 6` 56 通过 / 0 失败(约 1.5 分钟)。
-  Python 版 `run_debug_diff_tests.py` 仍在,两者判据相同(两档逐字节相同)。
-- `native_link.py` 用单线程 LLD,并校验每个静态字符串的 ELF 重定位/字节;不要绕过它直接 clang 链接。
+  每个用例两档各编一次并比对输出,`--jobs 6` 57 通过 / 0 失败。
+- `aot/link.ql` 用单线程 LLD,并校验每个静态字符串的 ELF 重定位/字节;不要绕过它直接 clang 链接。
 - `tools/link --root <repo>`:链接器自己的三处仓库相对路径(`aot/runtime.c`、`aot/toolchain/*.cfg`、
   默认 verify 工具)按 root 解析 ⇒ **从任意 cwd 都能链接**,QLang 驱动不必再 `cd` 到仓库根。
   默认空 = 原行为。
@@ -127,7 +134,8 @@ python3 aot/native_link.py /tmp/p.ll -o /tmp/p
 ### 2.3 Native 解释器
 
 ```sh
-python3 aot/run_interpreter_tests.py --compiler target/selfhost/stage2 --output-dir target/native-interpreter
+target/tools/build aot/run_tests.ql -o /tmp/run_tests --stdlib-object "$S/stdlib.o"
+/tmp/run_tests "$S" --interpreter            # 缺解释器时会用 stage2 + tools/link 现编
 target/native-interpreter/interpreter prog.ql
 ```
 
@@ -137,31 +145,32 @@ target/native-interpreter/interpreter prog.ql
 ### 2.4 测试
 
 ```sh
-python3 aot/run_selfhost_tests.py --compiler target/selfhost/stage2
-python3 aot/run_interpreter_tests.py --compiler target/selfhost/stage2 --interpreter target/native-interpreter/interpreter
-python3 aot/run_assignment_tests.py --compiler target/selfhost/stage2 --interpreter target/native-interpreter/interpreter
-python3 aot/run_semantic_diagnostic_tests.py --compiler target/selfhost/stage2
-cargo test --offline          # 14 tests;钉住 Rust 宿主行为,不等于 QLang 前端行为
+# 全部 QLang:先构建驱动,再跑;stdlib 目录由 tools/stdlib 产出
+target/tools/build aot/run_tests.ql -o /tmp/run_tests --stdlib-object "$S/stdlib.o"
+/tmp/run_tests "$S"                         # 原生 60
+/tmp/run_tests "$S" --interpreter           # 解释器 42
+target/tools/build aot/run_selfhost.ql -o /tmp/run_selfhost --stdlib-object "$S/stdlib.o"
+/tmp/run_selfhost "$S" --jobs 6             # 57 + 固定点
+target/tools/build aot/run_diff.ql -o /tmp/run_diff --stdlib-object "$S/stdlib.o"
+/tmp/run_diff "$S" --jobs 6                 # 57
+cargo test --offline                        # 14 Rust 宿主测试
 ```
 
+- **完整清单/命令**见 `docs/python-removal.md` §3;`run_diagnostics`、`run_modules`、
+  `run_value_contracts`、`run_numeric`、`run_gc`、`run_lifetime`、`run_bundle`、
+  `run_platform`、`run_link`、`run_string`、`run_extension`、`run_extension_bridge`、
+  `run_interpreter_contracts`、`run_fuzz`、`run_semantics_diff`、`run_bench` 各自覆盖原 Python 套件。
 - **Unicode 参照实现(不依赖 Python)**:`aot/unicode_oracle.ql` 读
-  `third_party/ucd/15.1.0/case-common.txt`(从 **UCD 原文**用 awk 派生的 2450 行主流子集),
-  与运行时逐码点比对;当前 **upper 1205 / lower 1249 / White_Space 25 → 0 处不一致**
-  (同一目录还有 `whitespace.txt`,同样由 awk 从 `PropList.txt` 派生)。
-  UCD 原文与派生命令在同目录 README 里记着;冷门项(SpecialCasing 的完整映射、辅助平面、
-  辅助平面)暂未覆盖。见 probes §118–§120。
-- **String 套件是唯一"故意保留 Python"的**:它的第二条腿是**独立 Unicode 预言机**
-  (Python `unicodedata` 15.1.0),价值在于不复用 `stdlib/unicode_data.ql`;改写成 QLang 会变成
-  循环论证。夹具腿(t30)已经在 `aot/run_tests.ql` 与 `--interpreter` 里跑。见 probes §117。
-- 全量基线 = handoff §3.4 列出的测试套件(约 23 个 python runner + `run_v1_tests.sh`)
-  外加 `stdlib/run_string_tests.py`、`cargo test`;清单、耗时、环境缺口以那节为准。
+  `third_party/ucd/15.1.0/case-full.txt` / `case-special.txt` / `cased.txt` / `case-ignorable.txt`
+  (从 **UCD 原文**用 awk 派生),当前 **upper 1423 / lower 1405 / full 206 / changed 2927 /
+  chunks 46 / random 120 / sigma 6 / ws 25 → 0 处不一致**。见 `aot/run_string.ql` 与 probes §118–§120。
+- **String 套件**:`aot/run_string.ql` 四条腿(t30 O0/O2/解释器、独立 UCD oracle、4 个未处理错误、
+  `stdlib/string.ql` 静态边界),不再依赖 Python `unicodedata`。
+- 全量基线 = `docs/python-removal.md` §3 的 QLang 驱动清单 + `cargo test`;清单与耗时以那份为准。
 - **验收 = 全量基线 + 本次改动相关测试套件**。只跑 `interpreter` + `selfhost` 会漏红:
   `probes §11.1` 的两处漂移红恰好被这两套漏掉。
 - 基线必须**同源**:同一 commit 的源码 + 编译器 + boot + 测试用例。混源只会制造假失败。
-- 长测试套件(interpreter ~731s、selfhost ~1573s)用可跟踪的后台任务跑,不要 `&`/`disown`。
-- `run_selfhost_tests.py` / `run_interpreter_tests.py` 支持 `--jobs N` 并行跑独立测试用例
-  (默认 1)。配合标准库对象,selfhost 全套 ~3 min、interpreter ~6 min;内存是上限
-  (单个 `clang -O2` 吃 GB 级),别把 N 开太大。
+- 长测试套件用可跟踪的后台任务跑,不要 `&`/`disown`;内存是上限,别把 `--jobs` 开太大。
 
 ### 2.5 头条指标
 
@@ -186,25 +195,24 @@ grep -cE '^\s+[a-z]' /tmp/ir.s           # AArch64 指令行数(机器指令口�
 ### 2.6 stdlib bundle
 
 ```sh
-./target/release/qlang stdlib/build_bundle.ql > /tmp/qlang-library-bundle.ql
-# 检查/审阅后再发布:
-cp /tmp/qlang-library-bundle.ql stdlib/bundle.ql
-./target/release/qlang stdlib/build_bundle.ql --check
+target/tools/build stdlib/build_bundle.ql -o /tmp/bb --stdlib-object "$S/stdlib.o"
+/tmp/bb > stdlib/bundle.ql
+/tmp/bb --check
 ```
 
 - 改 `stdlib/*.ql` 后**必须**重建 `stdlib/bundle.ql` 并 `--check`;`manifest.json` 管依赖与导出顺序。
 - **不用 Rust 的重建方式**(产物与 Rust 宿主逐字节相同,见 probes §109):
-  `stage2 --emit-llvm stdlib/build_bundle.ql aot/runtime.ql > /tmp/bb.ll && tools/link /tmp/bb.ll -o
-  /tmp/bb && /tmp/bb > stdlib/bundle.ql && /tmp/bb --check`。native 解释器跑这个脚本会超时,
+  `target/tools/build stdlib/build_bundle.ql -o /tmp/bb --stdlib-object "$S/stdlib.o"`
+  `&& /tmp/bb > stdlib/bundle.ql && /tmp/bb --check`。native 解释器跑这个脚本会超时,
   原因是解释执行太慢 —— 要跑就编成原生二进制。
 - 保持 `core.autocrlf=false`;CRLF 工作区会让 `--check` 假报过期,并悄悄改变编译器解析的源文本。
 
 ### 2.7 本机环境
 
-- aarch64 Linux/Android(`aarch64-unknown-linux-android24`),clang 21.1.8 + lld,
-  Python 3.13,cargo/rustc 1.97(以实际机器为准)。
-- 没有 `package.json`。Python 只是测试/链接/数据生成工具,不是语言运行时。
-- `difftest.py` 在本机**不可裁决**(Rust 宿主跑 boot 超时);替代:用 native 编译的 boot 做同样对照。
+- aarch64 Linux/Android(`aarch64-unknown-linux-android24`),clang 21.1.8 + lld,cargo/rustc 1.97
+  (以实际机器为准)。
+- 没有 `package.json`。仓库**不含 Python**;工具链只依赖 shell/clang/lld/llvm 与 QLang 自己。
+- 冷启动需要一个既有 stage2;`docs/python-removal.md` §4 记录了缺口。
 - `clang` 覆盖 target triple 的 warning 是正常的。
 
 ## 3. 语言与语义要点(写代码前必看)
@@ -291,7 +299,7 @@ source.ql
                  ├─ aot/runtime.ql                     (编进产物)
                  ├─ aot/value_abi.ql                   (alwaysinline 热机制)
                  └─ aot/runtime.c                      (13 个 syscall/alloc 叶子)
-                      └─ clang + lld (aot/native_link.py) → ELF
+                      └─ clang + lld (aot/link.ql) → ELF
 ```
 
 - **分析算,发射器只消费**;发射器不做类型推断,不维护与发射顺序耦合的状态。
@@ -302,10 +310,15 @@ source.ql
   2. `aot/value_abi.ql` 的 `alwaysinline` 热叶子;
   3. 编译器自己发的固定名冷助手(先例 `@__cold_located_error`;子片 A 的 `@__panic_exit` 照它);
   4. 程序可见的 `std` 面(`aot/runtime.ql` 的 `std` 字面量 + `__install_library`)。
-- 自举:stage2/stage3 的 IR 逐字节一致;native 编译器能重建自身,不依赖 Rust。
+- 自举:stage2/stage3 的 IR 逐字节一致;native 编译器能重建自身,不依赖 Rust/Python。
 - Rust 只是 bootstrap/嵌入;`src/` 的差异记录在 `docs/retained-rust-issues.md`。
 
-## 5. 当前状态(2026-10-17)
+## 5. 当前状态(2026-10-31)
+
+- **2026-10-31**:仓库移除全部 Python(32 个文件)。工具链、测试驱动、String/Unicode
+  预言机、difftest/fuzz 语料、数学/Unicode 生成器都改为 QLang;全量基线见
+  `docs/python-removal.md`。已知缺口:冷启动、difftest 63 个隔离用例、release 直调注解、
+  `--shared --opt 2` 重定位。
 
 - **2026-10-25 更新**:新分支 `rust-error-model`(从 `5d0f4e8` 切出)开始落地 Rust 式错误模型;
   口径与切片见 **`docs/rust-error-model.md`**。它与 `unboxed-values-handoff.md` 冲突时,以新文件为准。
@@ -413,8 +426,8 @@ source.ql
 13. **`llvm.lifetime` 删除**:IR −10,444 / 机器 +3,861,已否决,不要再谈。
 14. **shell 细节**:`/bin/sh` 无 `PIPESTATUS`;`ls -d /tmp/x* | tail -1` 会选错目录;
    不要 `>/dev/null` 藏链接错误(它会藏掉唯一线索)。
-15. **`native_link.py`** 单线程 LLD + 静态字符串校验;失败会保留旧二进制,别以为链接成功。
-16. **Rust 宿主跑 boot 会挂**;`difftest.py` 本机不可裁决;用 native boot 替代。
+15. **`aot/link.ql`** 单线程 LLD + 静态字符串校验;失败会保留旧二进制,别以为链接成功。
+16. **Rust 宿主跑 boot 会挂**;用 native 解释器做 boot 腿。
 17. **CRLF**:保持 `core.autocrlf=false`;否则 bundle `--check` 假报。
 18. **stdlib 改动必须重建 bundle**,否则运行时用的是旧库。
 
@@ -429,7 +442,7 @@ source.ql
 | 热机制/ABI 叶子 | `aot/value_abi.ql`;`aot/runtime.c` |
 | stdlib 算法 | `stdlib/*.ql` + `manifest.json` + 重建 `bundle.ql` |
 | 测试用例/金文件 | `aot/tests/*.ql` / `.expected`;`bootstrapped/tests/*` |
-| 测试驱动 | `aot/run_*.py`;`stdlib/run_string_tests.py`;`difftest.py`;`fuzzexpr.py` |
+| 测试驱动 | `aot/run_*.ql`;`aot/tests/data/*.ql`;`aot/generate_*.ql` |
 | 语言规范/类型系统 | `README.md`(类型系统在 767–970 行左右) |
 | 模块语义 | `docs/module-semantics.md` |
 | 诊断/源码位置 | `docs/source-diagnostics.md` |
@@ -454,26 +467,26 @@ source.ql
 ## 9. 常用命令速查
 
 ```sh
-# 编译一次(慢;自举 + 固定点)
-QLANG=./target/release/qlang python3 aot/run_selfhost_tests.py --self --output-dir target/selfhost
+# 一次构建 tools + 标准库对象
+aot/bootstrap.sh --self --compiler target/selfhost/stage2
+S=$(dirname "$(target/tools/stdlib --compiler target/selfhost/stage2 | tail -1)")
+# S 是 target/stdlib/<key>
 
-# 快循环:用已有 stage2 编一个程序
-target/selfhost/stage2 --emit-llvm aot/tests/t20_native_bridge.ql aot/runtime.ql > /tmp/x.ll
-python3 aot/native_link.py /tmp/x.ll -o /tmp/x && /tmp/x
+# 快循环:构建并运行一个程序
+target/tools/build aot/tests/t20_native_bridge.ql -o /tmp/x --stdlib-object "$S/stdlib.o"
 diff <(/tmp/x) aot/tests/t20_native_bridge.expected
 
-# 测试
-python3 aot/run_selfhost_tests.py --compiler target/selfhost/stage2
-python3 aot/run_interpreter_tests.py --compiler target/selfhost/stage2 --interpreter target/native-interpreter/interpreter
-python3 aot/run_assignment_tests.py --compiler target/selfhost/stage2 --interpreter target/native-interpreter/interpreter
-python3 aot/run_semantic_diagnostic_tests.py --compiler target/selfhost/stage2
+# 主测试
+target/tools/build aot/run_tests.ql -o /tmp/run_tests --stdlib-object "$S/stdlib.o"
+/tmp/run_tests "$S"
+/tmp/run_tests "$S" --interpreter
+target/tools/build aot/run_selfhost.ql -o /tmp/run_selfhost --stdlib-object "$S/stdlib.o"
+/tmp/run_selfhost "$S" --jobs 6
+target/tools/build aot/run_diff.ql -o /tmp/run_diff --stdlib-object "$S/stdlib.o"
+/tmp/run_diff "$S" --jobs 6
 cargo test --offline
 
-# stdlib bundle
-./target/release/qlang stdlib/build_bundle.ql --check
-
-# 状态
-git status --short; git branch -vv; git worktree list
+# 完整基线见 docs/python-removal.md §3
 ```
 
 ## 10. 维护本文件

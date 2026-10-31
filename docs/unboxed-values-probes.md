@@ -1,5 +1,9 @@
 # Probe facts — measured, not remembered
 
+> **2026-10-31:Python 已全部移除。** 本文中的 `python3` / `*.py` 命令是历史记录;
+> 当前构建、测试、生成器见 [`docs/python-removal.md`](python-removal.md)(同目录文档用相对链接)。
+
+
 **用途**:本文件是**唯一**的事实来源。任何结论(含 roadmap 决策)若要引用行为,
 必须能追到本文件里**带复现命令**的条目;不在本文件里的,一律视为「未验证」。
 目的:消灭「断言 → 下一轮被实测推翻」的循环。

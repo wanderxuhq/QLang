@@ -600,12 +600,12 @@ output + …` per token, so large values pay O(output²). Neither is attempted y
 
 ## Extension suites need a dlopen-permitted TMPDIR (2026-10-08)
 
-`aot/run_extension_tests.py` and `aot/run_extension_bridge_tests.py` build host
+`aot/run_extension.ql` and `aot/run_extension_bridge.ql` build host
 binaries and DSOs inside a temp directory and then `dlopen` them. In this sandbox
 the dynamic-linker namespace permits only `/data` (plus system paths), so with the
 default `TMPDIR` (`/tmp`) every plugin fails to load and the suites report
 extension failures ("library ... is not accessible for the namespace"). Running
-them as `TMPDIR=/data/qltmp python3 ...` makes both pass — `ALL CHECKS PASS` for
+them as `aot/run_extension.ql /data/qltmp --root .` makes both pass — `ALL CHECKS PASS` for
 the extension suite and `Native core extension suite: ALL CHECKS PASS` for the
 bridge suite. This is an environment restriction, not a product defect; the same
 failures appeared with the pre-change compiler and are not related to any
@@ -635,7 +635,7 @@ be a deliberate new-baseline decision, not a fix.
 
 ## Module unhandled-initialization exit status verified (2026-10-08)
 
-`aot/run_module_tests.py` asserted exit status 0 for an unhandled module
+`aot/run_modules.ql` asserted exit status 0 for an unhandled module
 initialization error on the boot path, which contradicted the documented
 contract in `bootstrapped/run_file.ql`: an unhandled error is unwrapped at the
 process boundary so the runtime reports it and returns a failing exit status.
@@ -1086,18 +1086,11 @@ sources, same outputs):
 
 ## Backlog (do last): move the stdlib source generators off Python
 
-The chain that matters is already pure QLang: `stdlib/*.ql` -> `build_bundle.ql` (QLang,
-no exec/spawn anywhere) -> the embedded `standardLibrarySource` string the compiler
-parses. Python only appears at the edges:
-
-  - `stdlib/generate_unicode_tables.py`, `aot/generate_math_constants.py`: source
-    generators whose output (QLang) is committed, so the build never runs them — only a
-    developer refreshing the tables does;
-  - `aot/run_*.py` (test harness) and `aot/native_link.py` (hands the emitted LLVM IR to
-    clang and links a binary).
-
-Rewriting the generators in QLang would make the whole toolchain Python-free. Deferred:
-nothing in a normal build depends on them.
+**Done 2026-10-31:** the whole toolchain is Python-free. `stdlib/*.ql` ->
+`build_bundle.ql` -> the embedded `standardLibrarySource` string is QLang; the
+table generators are `aot/generate_unicode_tables.ql` and
+`aot/generate_math_constants.ql`; test harnesses are `aot/run_*.ql`;
+linking is `aot/link.ql`. See `docs/python-removal.md`.
 
 ## Unboxed values: representation belongs to the value, boxing to the use site
 

@@ -1,5 +1,9 @@
 # 交接:QLang 编译期削减 + 错误模型 —— 从零接手
 
+> **2026-10-31:Python 已全部移除。** 本文中的 `python3` / `*.py` 命令是历史记录;
+> 当前构建、测试、生成器见 [`docs/python-removal.md`](python-removal.md)(同目录文档用相对链接)。
+
+
 **先读这份;它是自包含的。** 证据与实测细节在同目录的 **`docs/unboxed-values-probes.md`**
 (标了 § 编号的引用都指它);本文件是**地图**,那份是**档案**。旧的长篇过程记录在
 `docs/unboxed-values-log.md`(仅作历史,数字多已过时)。
@@ -23,13 +27,13 @@
 
 ```bash
 # 1) 构建被测编译器(自举)
-/tmp/nk --emit-llvm aot/qlangc.ql aot/runtime.ql > /tmp/o.ll && python3 aot/native_link.py /tmp/o.ll -o /tmp/o
+/tmp/nk --emit-llvm aot/qlangc.ql aot/runtime.ql > /tmp/o.ll && target/tools/link /tmp/o.ll -o /tmp/o --root .
 # 2) 头条指标 + 探针
 /tmp/o --emit-llvm /tmp/t20.ql aot/runtime.ql > /tmp/ir.ll
 grep -E '^; (unboxable|located-error elided|rawABI)' /tmp/ir.ll   # 528 / 92 / …
 # 3) 验收(见 §3.4:必须全量 + 同源)
-python3 aot/run_interpreter_tests.py --compiler /tmp/o --interpreter <native 编译出的 boot>
-python3 aot/run_selfhost_tests.py   --compiler /tmp/o
+/tmp/run_tests "$S" --compiler /tmp/o --interpreter   # 解释器 42
+/tmp/run_selfhost "$S" --compiler /tmp/o --jobs 6     # 57 + 固定点
 ```
 
 **同源规则(硬)**:编译器与源码必须**同一版本**;拿 A 版编译器去跑 B 版源码/测试用例,只会得到**假失败**
@@ -108,11 +112,13 @@ runtime 的 174 个顶层 `let` **无符号、不导出**(`export` 语句数 = 0
 ### 3.4 全量基线(必须同源,§11)
 
 跑法:`git worktree add /tmp/wt_head HEAD`,用**同一版本**的编译器与 boot,逐测试套件跑。
-测试套件共 **23 个 python + 1 shell + 12 个 Rust 测试文件 + `verify_bootstrap.ql`**;多数强制 `--compiler`,
-部分还要 `--interpreter`(native 编译出的 boot)。
-
-HEAD 基线(`/tmp/sweep3/`):**17 绿**,含 `interpreter`(731s)、`selfhost`(1573s)、`strings`(217s)、
-`numeric`(226s)、`call`(214s)、`cargo test`(**14 passed**)。
+**2026-10-31 起 Python 已全部删除**;基线是 `docs/python-removal.md` §3 的 QLang 驱动清单:
+`run_tests`(native 60 / interpreter 42)、`run_selfhost`(59)、`run_diff`(57)、
+`run_compiler`(69)、`run_diagnostics`(855)、`run_modules`(78)、`run_value_contracts`(111)、
+`run_numeric`(12)、`run_gc`(5)、`run_lifetime`(12)、`run_bundle`(23)、`run_platform`(15)、
+`run_link`、`run_string`(26)、`run_extension`(4 组合)、`run_extension_bridge`(134)、
+`run_interpreter_contracts`(23)、`run_fuzz`(390)、`run_semantics_diff`(228 + 63 隔离)、
+`run_bench`、`cargo test`(**14 passed**)。多数强制 `--compiler`,部分还要 `--interpreter`。
 
 **HEAD 上真实变红的两处(非环境,修法见 §4-K)**:
 - `assignment`:`CompileError … exits.ql:1:46: reading uninitialized variable: x`(测试套件生成的测试用例仍按
@@ -120,9 +126,9 @@ HEAD 基线(`/tmp/sweep3/`):**17 绿**,含 `interpreter`(731s)、`selfhost`(1573
 - `runtime_diag`:`t38:22:30: type mismatch: value of type String does not match the annotated type Number`
   (测试用例停留在「注解不强制」的时代)。
 
-**环境缺口(不是失败)**:`module` 需 `target/debug/qlang`;`platform` 需 `target/release/qlang`;
-`difftest` 在本机**不可裁决**(它的 boot 侧走 `cargo run`,120 秒超时;`cargo build` 已热只需 0.12s)
-⇒ 替代:用 native 编译的 boot 做同样对照。
+**环境缺口(不是失败)**:扩展/桥接需要 dlopen 允许的 tmp 目录;冷启动需要既有 stage2;
+difftest 的 Rust/V8 腿已退役,291 个源冻结为 native-vs-interpreter 差分(63 个显式隔离)。
+详见 `docs/python-removal.md`。
 
 ### 3.11 遍历合并(2026-10-27)
 
@@ -304,8 +310,8 @@ stage2 --emit-llvm-split aot/tests/t38_runtime_diagnostics.ql aot/runtime.ql \
   <stdlib>/symbols.tsv <stdlib>/mod.ql > /tmp/t38.ll
 tools/link /tmp/t38.ll -o /tmp/t38 --root <repo> --stdlib-object <stdlib>/stdlib.o
 /tmp/t38                                  # → "runtime source checks: 17",exit 0
-python3 aot/run_runtime_diagnostic_tests.py --compiler target/selfhost/stage2
-                                          # → ALL CHECKS PASS
+/tmp/run_diagnostics "$S" --compiler target/selfhost/stage2 --interpreter /tmp/interp
+                                          # → 855 通过 / 0 失败
 ```
 
 `chained.cause.line == 3` 这条断言现在通过。修复应该来自后续的错误模型切片(没有单独一笔),

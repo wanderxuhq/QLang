@@ -22,7 +22,7 @@ https://www.unicode.org/Public/15.1.0/ucd/PropList.txt
 
 获取日期 2026-10-30。校验:`sha256sum third_party/ucd/15.1.0/*.txt`。
 
-更新版本时:换目录名(如 `16.0.0/`)、重算上表、并同步 `stdlib/generate_unicode_tables.py`
+更新版本时:换目录名(如 `16.0.0/`)、重算上表、并同步 `aot/generate_unicode_tables.ql`
 的输入版本 —— 两处版本不一致会让派生表与参照实现打架。
 
 下面所有派生文件都由 **POSIX `awk`** 从上面的原文生成(不用 Python),在**本目录**执行。

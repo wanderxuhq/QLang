@@ -1,5 +1,9 @@
 # Rust 式错误模型:设计口径与落地切片
 
+> **2026-10-31:Python 已全部移除。** 本文中的 `python3` / `*.py` 命令是历史记录;
+> 当前构建、测试、生成器见 [`docs/python-removal.md`](python-removal.md)(同目录文档用相对链接)。
+
+
 状态:方向已确认(2026-10-25),分支 `rust-error-model`(从 `error-carried` @ `5d0f4e8` 切出)。
 本文件是**实现口径**;它覆盖 `docs/unboxed-values-handoff.md` 里与 Rust 模型冲突的旧口径,
 冲突处以本文件为准。

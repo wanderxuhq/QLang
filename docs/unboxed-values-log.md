@@ -1,5 +1,9 @@
 # Unboxed values / compile-time reduction of emitted IR — **session log (evidence)**
 
+> **2026-10-31:Python 已全部移除。** 本文中的 `python3` / `*.py` 命令是历史记录;
+> 当前构建、测试、生成器见 [`docs/python-removal.md`](python-removal.md)(同目录文档用相对链接)。
+
+
 > **This is the historical record, not the handover.** For the current state, the rules, and what to do
 > next, read **`docs/unboxed-values-handoff.md`** first. This file holds every measurement, hit count,
 > dead end and war story in the order it happened, plus the item-by-item reasoning behind the decisions

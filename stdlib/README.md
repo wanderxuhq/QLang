@@ -56,7 +56,8 @@ covered by [its license](unicode-LICENSE.txt). To regenerate, download the four
 source files named in the generator from the pinned Unicode UCD directory:
 
 ```sh
-python3 stdlib/generate_unicode_tables.py --ucd-dir /path/to/ucd-15.1 --check
+target/tools/build aot/generate_unicode_tables.ql -o /tmp/gen_unicode --stdlib-object "$S/stdlib.o"
+/tmp/gen_unicode --check
 ```
 
 The generated header records each source's SHA-256. The casing rules follow
@@ -69,12 +70,11 @@ against Python's independently bundled Unicode 15.1 data, checks sigma contexts
 and whitespace, and verifies unhandled errors at both LLVM optimization levels:
 
 ```sh
-python3 stdlib/run_string_tests.py \
-  --compiler target/array-library-check/bootstrap \
-  --interpreter target/array-library-check/core/interpreter
+target/tools/build aot/run_string.ql -o /tmp/run_string --stdlib-object "$S/stdlib.o"
+/tmp/run_string "$S" --interpreter target/native-interpreter/interpreter
 ```
 
-Python is a test oracle only; the resulting QLang program does not call it.
+The oracle is UCD data (`third_party/ucd/15.1.0/`) plus QLang code; no Python.
 
 Verified in this migration step: all 193 contracts pass on direct LLVM output
 at `-O0`/`-O2`, the native QLang core and the Rust-hosted QLang core. The independent
@@ -120,6 +120,9 @@ scope are recorded in the compiler roadmap. To validate the portable Array
 module explicitly as well as its default installation:
 
 ```sh
-python3 aot/run_array_tests.py --compiler /path/to/compiler \
-  --library stdlib/array.ql --interpreter /path/to/interpreter
+target/tools/build aot/run_value_contracts.ql -o /tmp/run_values --stdlib-object "$S/stdlib.o"
+/tmp/run_values "$S"
 ```
+
+The portable-Array leg (`import stdlib/array.ql`, `ArrayLibrary.` prefix, O0/O2,
+8 error probes) is part of that driver.

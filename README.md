@@ -50,9 +50,9 @@ Compile through the QLang frontend and LLVM backend (see the AOT platform requir
 Build and verify the native compiler's self-compilation pipeline:
 
 ```bash
-QLANG=./target/release/qlang python3 aot/run_selfhost_tests.py --self --output-dir target/selfhost
-./target/selfhost/stage2 --emit-llvm example.ql aot/runtime.ql > /tmp/example.ll
-python3 aot/native_link.py /tmp/example.ll -o /tmp/example
+aot/bootstrap.sh --self --compiler target/selfhost/stage2
+S=$(dirname "$(target/tools/stdlib --compiler target/selfhost/stage2 | tail -1)")
+target/tools/build example.ql -o /tmp/example --stdlib-object "$S/stdlib.o"
 ```
 
 那条命令是**单模块**构建:每次都要把 runtime + 标准库重新解析、分析、发射(小程序的 ~11s 里
@@ -82,7 +82,8 @@ python3 aot/native_link.py /tmp/example.ll -o /tmp/example
 Build the native interpreter using that compiler, then run QLang files:
 
 ```bash
-python3 aot/run_interpreter_tests.py --compiler target/selfhost/stage2 --output-dir target/native-interpreter
+target/tools/build aot/run_tests.ql -o /tmp/run_tests --stdlib-object "$S/stdlib.o"
+/tmp/run_tests "$S" --interpreter
 ./target/native-interpreter/interpreter example.ql
 ```
 
@@ -1055,8 +1056,8 @@ qlang/
 ├── demo/
 │   └── test.ql           # Demo programs
 ├── verify_bootstrap.ql   # Bootstrapped semantics assertions (33 checks)
-├── difftest.py           # Differential test harness (165 cases + 78 V8-referenced)
-├── fuzzexpr.py           # Random expression fuzzing with a Python oracle (390 cases)
+├── aot/run_semantics_diff.ql  # Frozen difftest corpus, native vs interpreter
+├── aot/run_fuzz.ql            # Frozen fuzz corpus (390 cases)
 ├── Cargo.toml
 └── README.md
 ```
@@ -1094,20 +1095,13 @@ Core language contracts are tested directly in QLang, including
 outputs. The following differential suites are supplementary compatibility
 checks. Rust or Node behavior does not override the intended QLang semantics.
 
-`difftest.py` runs the same QLang source through both the Rust host
-interpreter and the bootstrapped interpreter and asserts identical results —
-165 cases: 114 safe cases (batch-run), 26 risky cases (isolated processes,
-capturing exit codes and stderr), and 25 complex multi-feature cases. Safe
-cases include 24 error-value cases (e01-e24) exercising `?`, `??`, `isError`,
-error chains inside functions, and the error kind of a recursion-guard
-`StackOverflow`, plus 36 annotation/type-system cases (t01-t37) covering
-annotation checks (let/params/reassignment), shadowing, the `Array`/`Object`
-constructors, free member mounts on type objects, and the currying ×
-annotation interaction (checks deferred to the completing call). Risky cases
-r22-r25 and r27-r35 (13 cases) cover erroring expressions that escape to the
-top level (division by zero, negative-wrap out-of-bounds, `UndefinedField`,
-`TypeMismatch`, argument rejection, stack overflow, and the `??`-vs-`?`
-interaction of r34); p1/p2 assert that protected members are not writable; r35
+`aot/run_semantics_diff.ql` runs a frozen corpus of 291 sources from the old
+difftest through both QLang backends — the native release compiler and the AST
+interpreter — and requires identical stdout, exit status, and error kind. 228
+cases are adjudicable; 63 are explicitly quarantined in the driver (static
+rejection of literal negative indices, or known `TypeCheck` vs
+`UndefinedField` deltas). The Rust-host and V8 legs are retired. The sources
+live in `aot/tests/data/semantics_corpus.ql`; no Python is involved.
 pins the spec's "no global `Type`" (the boot's former bare-`Type` seeding was
 removed in Task 12). Both sides must produce the same result — or the same
 error.
@@ -1291,23 +1285,22 @@ curated in `NODE_CASES`. The section is skipped automatically if `node` is not
 on `PATH`.
 
 ```bash
-python3 difftest.py
+target/tools/build aot/run_semantics_diff.ql -o /tmp/run_semantics --stdlib-object "$S/stdlib.o"
+/tmp/run_semantics "$S" --interpreter target/native-interpreter/interpreter
 ```
 
 ### Random expression fuzzing
 
-`fuzzexpr.py` generates random expression trees (fully parenthesized, so the
-parse is forced) and computes the expected value independently in Python
-(IEEE-754 f64, matching the host's number semantics) — then runs every
-expression through host, boot, and the oracle and requires all three to agree.
-It also generates unparenthesized operator chains whose expected grouping is
-derived from the language's precedence table (in `CHAIN_CASES`), which catches
-precedence/associativity drift in either parser. Default: 390 cases per seed;
-pass a `--seed` to vary (CI can sweep several).
+`aot/run_fuzz.ql` runs a frozen 390-case corpus generated once by the old
+fuzzexpr.py (seed 1): 300 fully parenthesized expression trees plus 30
+unparenthesized precedence chains ×3, with the Python f64 oracle's expected
+values frozen into `aot/tests/data/fuzz_corpus.ql`. Each case runs through the
+native compiler at `-O0`/`-O2` and the AST interpreter; stdout, exit status,
+and error kind must match. Regeneration is not in-repo.
 
 ```bash
-python3 fuzzexpr.py            # seed 1
-python3 fuzzexpr.py --seed 42  # different random cases
+target/tools/build aot/run_fuzz.ql -o /tmp/run_fuzz --stdlib-object "$S/stdlib.o"
+/tmp/run_fuzz "$S" --interpreter target/native-interpreter/interpreter
 ```
 
 ## Examples
