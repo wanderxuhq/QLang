@@ -17,12 +17,14 @@ let compiler = "target/selfhost/stage2";
 let linkTool = "target/tools/link";
 let stdlibDir = "target/stdlib/" + "";
 let interpreterMode = false;
+let optLevel = "2";
 let rest = [];
 let i = 0;
 while i < args.length {
   let a = args[i];
   if a == "--compiler" { i = i + 1; compiler = args[i]; }
   else if a == "--interpreter" { interpreterMode = true; }
+  else if a == "--opt" { i = i + 1; optLevel = args[i]; }
   else { rest[rest.length] = a; };
   i = i + 1;
 };
@@ -66,6 +68,8 @@ if interpreterMode {
   };
 };
 let pass = 0; let fail = 0; let failed = "";
+let contains = (text, needle) -> std.String.includes(text)(needle);
+let endsWith = (text, suffix) -> std.String.endsWith(text)(suffix);
 let k = 0;
 while k < names.length {
   let name = names[k];
@@ -74,9 +78,13 @@ while k < names.length {
     let ir = base + "/" + name + ".ll";
     let bin = base + "/" + name;
     if interpreterMode {
-      let run0 = std.process.run([interp, src, "aot/runtime.ql"]);
+      // 解释器 CLI 只接收源文件;多传 aot/runtime.ql 会让 args.length 变成 1。
+      let run0 = std.process.run([interp, src]);
       let body = std.String.split(run0.stdout)("Interpreting...\n");
       let out0 = if body.length > 1 { std.String.split(body[1])("Execution complete.")[0]; } else { ""; };
+      let hasMarker = contains(run0.stdout, "Interpreting...\n");
+      let terminated = endsWith(run0.stdout, "Execution complete.\n");
+      let silent = run0.stderr == "";
       let exp0 = std.fs.readFileText("aot/tests/" + name + ".expected");
       // A missing golden file is a broken fixture, not a pass: otherwise deleting
       // the .expected silently removes the check (and the case is never compared).
@@ -84,8 +92,12 @@ while k < names.length {
       // old code skipped execution entirely for the native branch).
       // No golden file = smoke case. 0 or 1 are the language's own exit codes
       // (1 = unhandled top-level error); anything else is a crash.
-      if isError(exp0) { if run0.status == smokeWant(name) { pass = pass + 1; } else { fail = fail + 1; failed = failed + " " + name + "(exit)"; }; }
+      if isError(exp0) {
+        if run0.status == smokeWant(name) && hasMarker && silent && (run0.status != 0 || terminated) { pass = pass + 1; }
+        else { fail = fail + 1; failed = failed + " " + name + "(wrapper)"; };
+      }
       else if run0.status != 0 { fail = fail + 1; failed = failed + " " + name + "(exit)"; }
+      else if !hasMarker || !terminated || !silent { fail = fail + 1; failed = failed + " " + name + "(wrapper)"; }
       else if out0 == exp0 { pass = pass + 1; }
       else { fail = fail + 1; failed = failed + " " + name; };
     }
@@ -95,7 +107,8 @@ while k < names.length {
       if emit.status != 0 { fail = fail + 1; failed = failed + " " + name + "(emit)"; }
       else {
         std.fs.writeText(ir, emit.stdout);
-        let linked = std.process.run([linkTool, ir, "-o", bin, "--stdlib-object", stdlibDir + "/stdlib.o"]);
+        let linked = std.process.run([linkTool, ir, "-o", bin, "--opt", optLevel,
+                                      "--stdlib-object", stdlibDir + "/stdlib.o"]);
         if linked.status != 0 { fail = fail + 1; failed = failed + " " + name + "(link)"; }
         else {
           let expected = std.fs.readFileText("aot/tests/" + name + ".expected");

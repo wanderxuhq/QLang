@@ -2,6 +2,7 @@ t10_control
 t10_objects
 t11_json
 t12_calls
+t14_interpolation
 t16_functions
 t17_bootstrap
 t18_gc

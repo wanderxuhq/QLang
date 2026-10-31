@@ -88,23 +88,51 @@ if fixedPoint {
   let bootstrapIr = base + "/compiler-bootstrap.ll";
   let ir2 = base + "/compiler-s2.ll"; let ir3 = base + "/compiler-s3.ll";
   let s2 = base + "/stage2-copy"; let s3 = base + "/stage3-copy";
-  let e1 = std.process.run([compiler, "--emit-llvm", "aot/qlangc.ql", "aot/runtime.ql"]);
+  // 让 shell 直接把 47MB IR 写进文件;std.process.run 捕获 47MB 再拼接是 O(n²),
+  // 会把固定点从几分钟拖到半小时。
+  let emitTo = (compilerPath, ir, split) -> {
+    let cmd = sq(compilerPath) + " --emit-llvm" + (if split { "-split"; } else { ""; }) +
+              " aot/qlangc.ql aot/runtime.ql";
+    if split { cmd = sq(compilerPath) + " --emit-llvm-split aot/qlangc.ql aot/runtime.ql " +
+              sq(stdlibDir + "/symbols.tsv") + " " + sq(stdlibDir + "/mod.ql"); };
+    std.process.run(["sh", "-c", cmd + " > " + sq(ir)]);
+  };
+  let e1 = emitTo(compiler, bootstrapIr, false);
   if e1.status != 0 { fail = fail + 1; failed = failed + " stage1-emit"; }
   else {
-    std.fs.writeText(bootstrapIr, e1.stdout);
     let l1 = std.process.run([linkTool, bootstrapIr, "-o", s2]);
     if l1.status != 0 { fail = fail + 1; failed = failed + " stage2-link"; }
     else {
-      let e2 = std.process.run([s2, "--emit-llvm", "aot/qlangc.ql", "aot/runtime.ql"]);
+      let e2 = emitTo(s2, ir2, false);
       if e2.status != 0 { fail = fail + 1; failed = failed + " stage2-emit"; }
       else {
-        std.fs.writeText(ir2, e2.stdout);
         let l2 = std.process.run([linkTool, ir2, "-o", s3]);
         if l2.status != 0 { fail = fail + 1; failed = failed + " stage3-link"; }
         else {
-          let e3 = std.process.run([s3, "--emit-llvm", "aot/qlangc.ql", "aot/runtime.ql"]);
+          let e3 = emitTo(s3, ir3, false);
+          let same = std.process.run(["cmp", "-s", ir2, ir3]);
           if e3.status != 0 { fail = fail + 1; failed = failed + " stage3-emit"; }
-          else if e3.stdout == e2.stdout { pass = pass + 1; }
+          else if same.status == 0 {
+            pass = pass + 1;
+            // 新 stage2 不只要发同样的 IR,还要能编出行为正确的程序。
+            let tfIr = base + "/stage2-functions.ll";
+            let tfBin = base + "/stage2-functions";
+            let tf = std.process.run(["sh", "-c",
+              sq(s2) + " --emit-llvm-split aot/tests/t16_functions.ql aot/runtime.ql " +
+              sq(stdlibDir + "/symbols.tsv") + " " + sq(stdlibDir + "/mod.ql") + " > " + sq(tfIr)]);
+            if tf.status != 0 { fail = fail + 1; failed = failed + " stage2-functions-emit"; }
+            else {
+              let tfLink = std.process.run([linkTool, tfIr, "-o", tfBin,
+                                            "--stdlib-object", stdlibDir + "/stdlib.o"]);
+              if tfLink.status != 0 { fail = fail + 1; failed = failed + " stage2-functions-link"; }
+              else {
+                let expected = std.fs.readFileText("aot/tests/t16_functions.expected")?;
+                let run = std.process.run([tfBin]);
+                if run.status == 0 && run.stdout == expected { pass = pass + 1; }
+                else { fail = fail + 1; failed = failed + " stage2-functions"; };
+              };
+            };
+          }
           else { fail = fail + 1; failed = failed + " fixed-point"; };
         };
       };
