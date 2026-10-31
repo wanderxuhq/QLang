@@ -1,4 +1,4 @@
-// Generated Unicode 15.1.0 data. Regenerate with generate_unicode_tables.py.
+// Generated Unicode 15.1.0 data. Regenerate with generate_unicode_tables.ql.
 // Unicode copyright Unicode, Inc.; see unicode-LICENSE.txt.
 // UnicodeData.txt SHA-256 2fc713e6a31a87c4850a37fe2caffa4218180fadb5de86b43a143ddb4581fb86
 // SpecialCasing.txt SHA-256 55a477efd933a52cd27e6a9bf70265bb2d8814af31aab07767abc8eb421f27ef
